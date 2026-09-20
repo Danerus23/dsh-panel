@@ -5,7 +5,7 @@ requirements from [README.md](../README.md).
 
 ## Build
 
-Needs the **.NET 8 SDK**; Node.js is needed only for the translation check.
+Needs the **.NET 8 SDK** and **Node.js**: Node runs the translation check and the local GitHub stub that both update checks rely on.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1

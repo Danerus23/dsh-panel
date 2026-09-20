@@ -115,6 +115,9 @@ Node.js（用于那些要和 GitHub 桩服务打交道的检查）以及 [Inno S
 | `--backup-check [--from 文件] [--out 文件]` | 校验备份（不带 `--from` 就检查最新的那份） |
 | `--pricing-check [--from 文件] [--apply]` | 解析价格页面并显示抓到的内容 |
 | `--restore [--from 文件] [--keys] [--no-engine]` | 从备份还原：数据、面板设置和引擎；`--keys` 连密钥一起还原 |
+| `--hidden` | 与 `--tray` 相同：启动时最小化到托盘（自启动使用） |
+| `--no-safety` | 恢复时不创建当前状态的安全备份 |
+| `--no-settings` | 恢复时不动面板设置 |
 | `--update-check [--out 文件]` | 向 GitHub 查询有没有更新的版本（「更新」标签页显示的是同一结果） |
 | `--update-prepare [--force]` | 下载发行版、核对校验和并解压到更新目录（诊断用） |
 | `--install-node [--out 文件]` | 安装 Node.js LTS（安装程序在首次启动前会调用它） |

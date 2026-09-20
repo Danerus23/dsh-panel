@@ -166,12 +166,17 @@ try {
         # Публиковать выпуск для этого не нужно.
         if (-not $SkipUpdate) {
             Step 'Путь обновления (суммы и отказ при подмене)' {
-# Сама замена файлов: панель ставится в путь с пробелом, и именно на нём обновление
-# однажды откатилось молча. Проверка повторяет весь путь и падает, если robocopy не справился.
-Step 'Замена файлов при обновлении' { & (Join-Path $PSScriptRoot 'check-update-apply.ps1') -Exe (Join-Path $Dist 'panel\DshTray.exe') }
                 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\check-update.ps1') -Exe (Join-Path $panel 'DshTray.exe')
             }
+
+            # Сама замена файлов: панель ставится в путь с пробелом, и именно на нём обновление
+            # однажды откатилось молча. Проверка повторяет весь путь целиком и падает, если
+            # robocopy не справился.
+            Step 'Замена файлов при обновлении' {
+                & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\check-update-apply.ps1') -Exe (Join-Path $panel 'DshTray.exe')
+            }
         }
+
     }
 
     if (-not $SkipInstaller) {
@@ -223,24 +228,17 @@ catch {
 
 if (-not $failed) {
     Write-Host ''
-    Write-Host '=== Что осталось сделать руками (публикация — решение владельца)' -ForegroundColor Yellow
-    Write-Host '  1. Создать ПУСТОЙ репозиторий на github.com (без README, .gitignore и лицензии).'
-    Write-Host '  2. В папке проекта:'
-    Write-Host '       git init'
-    Write-Host '       git add -A'
-    Write-Host ('       git commit -m "DSH Panel ' + $version + '"')
-    Write-Host '       git branch -M main'
-    Write-Host '       git remote add origin git@github.com:<аккаунт>/<репозиторий>.git'
-    Write-Host '       git push -u origin main'
-    Write-Host '  3. Выпуск — тегом:'
-    Write-Host ('       git tag v' + $version)
-    Write-Host '       git push origin main --tags'
+    Write-Host '=== Что осталось сделать руками' -ForegroundColor Yellow
+    Write-Host ('  1. Поднять версию: DshTray.csproj (<Version>) и раздел в CHANGELOG.md — сейчас ' + $version + '.')
+    Write-Host '  2. Закоммитить и отправить:'
+    Write-Host '       git add -A; git commit -m "..."; git push origin main'
+    Write-Host '  3. Выпуск — тегом (тег обязан совпасть с версией проекта):'
+    Write-Host ('       git tag -a v' + $version + ' -m "DSH Panel ' + $version + '"; git push origin v' + $version)
     Write-Host '     Тег запускает сборку в GitHub Actions: она сама соберёт установщик, сверит тег'
-    Write-Host '     с версией проекта и приложит к выпуску dsh-panel-setup.exe, DshPanel.zip'
-    Write-Host '     и DshPanel-selfcontained.zip. Заметки к выпуску берутся из CHANGELOG.md —'
+    Write-Host '     с версией проекта и приложит к выпуску dsh-panel-setup.exe, DshPanel.zip,'
+    Write-Host '     DshPanel-selfcontained.zip и SHA256SUMS.txt. Заметки берутся из CHANGELOG.md —'
     Write-Host '     их показывает окно обновлений в панели.'
-    Write-Host '     Если выпуск уже создан руками, доложите файлы в него:'
-    Write-Host ('       gh release upload v' + $version + ' dist\dsh-panel-setup.exe dist\DshPanel.zip dist\DshPanel-selfcontained.zip --clobber')
+    Write-Host '     Проверить уже опубликованный выпуск: tools\verify-release.ps1 -Tag v' + $version
 }
 
 exit $(if ($failed) { 1 } else { 0 })

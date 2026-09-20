@@ -125,6 +125,9 @@ against Microsoft's signature. Step by step details are in [docs/DEVELOPMENT.md]
 | `--backup [--full]` | make a backup without the window (`--full` adds the engine and Node) |
 | `--backup-check [--from file] [--out file]` | verify a backup: without `--from` the newest one is used |
 | `--restore [--from file] [--keys] [--no-engine]` | restore from a backup: data, panel settings and the engine; `--keys` brings keys back too |
+| `--hidden` | same as `--tray`: start minimized to the tray (used by autostart) |
+| `--no-safety` | on restore, skip the safety copy of the current state |
+| `--no-settings` | on restore, leave the panel settings alone |
 | `--update-check [--out file]` | ask GitHub whether a newer version exists (the Updates tab shows the same) |
 | `--update-prepare [--force]` | download the release, verify the sums and unpack it into the update folder (diagnostics) |
 | `--install-node [--out file]` | install Node.js LTS (what the setup program calls before the first run) |
