@@ -136,8 +136,8 @@ against the inventory. When keys are packed, the archive is a secret — never s
 
 Before a restore the panel writes `dsh-before-restore-<date>.zip` next to your backups (the newest
 three are kept), stops its own server — DSH files must not be busy — and puts files with the same
-names back, leaving everything else in place. Folders restored from `keys/` are closed to the owner
-and SYSTEM only.
+names back, leaving everything else in place. Folders restored from `keys/` are restricted to the owner
+and SYSTEM.
 
 > **Not affiliated with DeepSeek.** DSH Panel is a community-made tray app for the DeepSeek
 > Harness agent: it runs the official `dsh` command line and does not modify it. DeepSeek and
