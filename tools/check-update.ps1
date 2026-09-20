@@ -64,7 +64,9 @@ $panelDir = Split-Path -Parent $Exe
 & (Join-Path $PSScriptRoot 'pack-panel.ps1') -Source $panelDir -Destination (Join-Path $files 'DshPanel.zip') | Out-Null
 Copy-Item -LiteralPath $Exe -Destination (Join-Path $files 'dsh-panel-setup.exe') -Force
 
-$version = (Get-Item -LiteralPath $Exe).VersionInfo.ProductVersion
+# После git init .NET вписывает в ProductVersion «+хеш коммита»: «1.20.0+2c1156d…». Панель
+# сравнивает версии по числовой части (UpdateService.Clean), поэтому и проверка должна.
+$version = ((Get-Item -LiteralPath $Exe).VersionInfo.ProductVersion -split '\+')[0].Trim()
 & (Join-Path $PSScriptRoot 'write-checksums.ps1') -Dist $files -Files @('DshPanel.zip', 'dsh-panel-setup.exe') | Out-Null
 
 $goodSums = Join-Path $work 'SHA256SUMS-good.txt'

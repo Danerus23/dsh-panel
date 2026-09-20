@@ -50,6 +50,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\make-release.ps1
 
 ## Грабли, на которые уже наступали
 
+- **После `git init` версия exe становится `1.20.0+хеш`.** .NET вписывает в `ProductVersion` хеш
+  коммита, поэтому любые сравнения версий (инструменты и сам апдейтер) обязаны брать только
+  числовую часть: `(... -split '\+')[0]`. Панель это уже делает (`UpdateService.Clean`), а вот
+  `tools\check-update.ps1` из-за этого падал на «новая панель распакована в папку обновления».
 - **`.ps1` и `.iss` требуют BOM.** Инструменты правки (`edit`, `write`) BOM снимают, и PowerShell 5.1
   после этого ломает кириллицу. После правки прогоняй `tools\check-encoding.ps1 -Fix`.
 - **Не перезаписывай ISO, на который смотрит виртуальная машина.** Hyper-V выдаёт права на файл в
@@ -85,6 +89,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\make-release.ps1
 - Языки: русский, английский, китайский. Новая строка интерфейса обязана появиться во всех трёх
   словарях — иначе `check-lang.mjs` не пропустит.
 - Комментарии и документация — по-русски, потому что владелец читает их сам.
-- Версия живёт в `DshTray.csproj` и `AppVersion.cs`, история изменений — в `CHANGELOG.md`.
+- Версия живёт в одном месте — `<Version>` в `DshTray.csproj` (панель читает её из сборки),
+  история изменений — в `CHANGELOG.md`.
   `installer\build-installer.ps1` пишет `appversion.iss` из версии проекта.
 - Лицензия — MIT, автор — `Danerus23`.

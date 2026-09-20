@@ -1,8 +1,8 @@
 # DSH Panel
 
 A small Windows tray app for the local **DeepSeek Harness** (DSH) server: it starts and stops the
-server, opens the signed-in web interface, keeps an eye on peak-hour pricing and your account
-balance, and backs up your DSH data.
+server, opens the web interface with the sign-in link, keeps an eye on peak-hour pricing and your
+account balance, and backs up your DSH data.
 
 [Русская версия →](README.ru.md)
 
@@ -19,8 +19,8 @@ balance, and backs up your DSH data.
 - **Peak hours and prices.** Peak or off-peak **in your own time zone**, when the next switch
   happens, the peak windows in local time, and the official price table as a reference. The pricing
   page is re-checked on schedule and applied **only after you confirm it**.
-- **Balance.** Your account balance by the key from `~/.dsh/.credentials.yaml`, refreshed on a
-  schedule, with a warning when it drops below the threshold you set.
+- **Balance.** Your account balance, read with the key from `~/.dsh/.credentials.yaml` and refreshed
+  on a schedule, with a warning when it drops below the threshold you set.
 - **Backups and restore.** One zip with your DSH data and the panel settings, plus a manifest with
   SHA-256 sums and a rotation policy. Optionally it carries the DSH engine and Node (a few hundred
   megabytes), so it can be restored without the internet. **Restore from a backup** is in the same

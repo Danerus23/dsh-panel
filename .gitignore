@@ -35,3 +35,9 @@ preview/status.txt
 
 # Среда .NET для установщика: ~55 МБ, скачивается при сборке и проверяется по подписи
 installer/redist/
+
+# Архивы копий: в них лежат данные DSH и, если так настроено, ключи.
+dsh-backup-*.zip
+dsh-before-restore-*.zip
+.tmp-dsh-backup-*
+*.zip.tmp

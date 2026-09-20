@@ -82,6 +82,11 @@ if (-not $NoPublish) {
     Write-Host ('Готово: {0}' -f $exe)
 
     $exeInfo = Get-Item -LiteralPath $exe
+    # Версия сборки — только числовая часть: после инициализации репозитория .NET вписывает
+    # в ProductVersion хеш коммита («1.20.0+2c1156d…»). Это значение уезжало в штамп build.txt,
+    # и сверка версий комплекта (tools\check-versions.ps1) вместе с выпуском в CI падали.
+    $buildVersion = ($exeInfo.VersionInfo.ProductVersion -split '\+')[0].Trim()
+    if ($buildVersion.StartsWith('v', [StringComparison]::OrdinalIgnoreCase)) { $buildVersion = $buildVersion.Substring(1) }
 
     # Штамп сборки: по нему панель («Резервные копии», --status) и сборка установщика
     # понимают, какая именно сборка лежит в папке и что вложено в установщик.
@@ -89,14 +94,14 @@ if (-not $NoPublish) {
     $stamp = @(
         '# Штамп сборки панели. Читается панелью и сборкой установщика. Формат: ключ=значение.',
         ('built=' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')),
-        ('version=' + $exeInfo.VersionInfo.ProductVersion),
+        ('version=' + $buildVersion),
         ('source=' + $root)
     )
     [IO.File]::WriteAllLines($stampPath, $stamp, (New-Object Text.UTF8Encoding($true)))
     Write-Host ('Штамп сборки — {0}' -f $stampPath)
 
     # Сторожок истории версий: напоминаем, если для текущей версии нет записи в CHANGELOG.md.
-    $version = $exeInfo.VersionInfo.ProductVersion
+    $version = $buildVersion
     $changelog = Join-Path $root 'CHANGELOG.md'
     if (Test-Path -LiteralPath $changelog) {
         $hasEntry = Select-String -LiteralPath $changelog -Pattern ('^##\s+' + [regex]::Escape($version) + '(\s|$)') -Quiet -ErrorAction SilentlyContinue

@@ -62,7 +62,8 @@ Say ('Версия в проекте: ' + $version)
 $panelExe = Join-Path $Dist 'panel\DshTray.exe'
 if (Test-Path -LiteralPath $panelExe) {
     $info = (Get-Item -LiteralPath $panelExe).VersionInfo
-    Assert-Same 'панель (ProductVersion)' $info.ProductVersion $version
+    # ProductVersion несёт «+хеш коммита» после git init — сравниваем числовую часть.
+    Assert-Same 'панель (ProductVersion)' ($info.ProductVersion -split '\+')[0].Trim() $version
     Assert-Same 'панель (FileVersion)' ($info.FileVersion -replace '\.0$', '') $version
     $dll = Join-Path $Dist 'panel\DshTray.dll'
     if (Test-Path -LiteralPath $dll) {

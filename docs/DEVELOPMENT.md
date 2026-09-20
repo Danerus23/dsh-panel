@@ -62,10 +62,10 @@ It builds the panel, takes the version from `DshTray.csproj`, writes `installer\
 `-SkipBuild` (use the existing `app` folder), `-AppDir <path>` (publish taken from elsewhere — handy
 when the running panel locks `app\`), `-Iscc <path>`.
 
-**Inno Setup 7 is required.** The wizard includes `Languages\ChineseSimplified.isl`, and that file
-only exists in version 7 (6.7.3 stops with `Couldn't open include file`, which says nothing about the
-real cause); `CreateInputOptionPage` with six parameters is also a version 7 signature. The script
-asks the compiler for its version before building and reports what it found:
+**Inno Setup 7 is required.** What actually decides it: the wizard includes
+`Languages\ChineseSimplified.isl`, and that file only exists in version 7 (6.7.3 stops with
+`Couldn't open include file`, which says nothing about the real cause). The script asks the compiler
+for its version before building and reports what it found:
 
 ```powershell
 winget install --id JRSoftware.InnoSetup.7 -e -s winget
