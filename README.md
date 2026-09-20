@@ -24,7 +24,8 @@
   <a href="#screenshots">Screenshots</a> ·
   <a href="#build-from-source">Build from source</a> ·
   <a href="#support-the-project">Support</a> ·
-  <a href="README.ru.md">Русская версия</a>
+  <a href="README.ru.md">Русская версия</a> ·
+  <a href="README.zh.md">中文</a>
 </p>
 
 ![The panel, English](docs/screenshots/en/panel.png)

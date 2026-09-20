@@ -24,7 +24,8 @@
   <a href="#снимки-окон">Снимки</a> ·
   <a href="#сборка-из-исходников">Сборка из исходников</a> ·
   <a href="#поддержать-проект">Поддержать</a> ·
-  <a href="README.md">English version</a>
+  <a href="README.md">English version</a> ·
+  <a href="README.zh.md">中文</a>
 </p>
 
 ![Панель, русский](docs/screenshots/ru/panel.png)
