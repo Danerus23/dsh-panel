@@ -11,7 +11,7 @@ namespace DshTray;
 internal static class AppLinks
 {
     /// <summary>Ссылка на страницу поддержки. Пусто — возможности нет.</summary>
-    public const string DonateUrl = "";
+    public const string DonateUrl = "https://app.lava.top/3686297587";
 
     public static string Donate
     {

@@ -139,6 +139,12 @@ three are kept), stops its own server — DSH files must not be busy — and put
 names back, leaving everything else in place. Folders restored from `keys/` are restricted to the owner
 and SYSTEM.
 
+## Support the project
+
+DSH Panel is free and open source, and it will stay that way. If it saves you time and you feel like
+saying thanks, donations go through [lava.top](https://app.lava.top/3686297587): cards of any bank or
+SBP, and the money reaches the author in rubles.
+
 > **Not affiliated with DeepSeek.** DSH Panel is a community-made tray app for the DeepSeek
 > Harness agent: it runs the official `dsh` command line and does not modify it. DeepSeek and
 > DeepSeek Harness are trademarks of their respective owner.
