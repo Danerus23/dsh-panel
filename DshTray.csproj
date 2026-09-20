@@ -24,7 +24,7 @@
     <!-- Номер версии задаётся один раз здесь; FileVersion выводим из него, чтобы две
          строки не разъехались при подъёме версии. Порядок важен: $(Version) должен
          быть объявлен раньше, иначе MSBuild подставит пустоту. -->
-    <Version>1.20.0</Version>
+    <Version>1.20.1</Version>
     <FileVersion>$(Version).0</FileVersion>
     <NeutralLanguage>ru-RU</NeutralLanguage>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
