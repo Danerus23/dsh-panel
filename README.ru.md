@@ -1,10 +1,31 @@
-# DSH Panel
+<p align="center">
+  <img src="docs/logo.png" alt="DSH Panel" width="128">
+</p>
 
-Небольшое приложение в трее Windows для локального сервера **DeepSeek Harness** (DSH): поднимает
-и останавливает сервер, открывает веб-интерфейс со ссылкой для входа, следит за тарифом пик-часов
-и балансом счёта и делает резервные копии данных DSH.
+<h1 align="center">DSH Panel</h1>
 
-[English version →](README.md)
+<p align="center">
+  Панель управления агентом <b>DeepSeek Harness</b> для Windows:<br>
+  запускает и останавливает сервер, следит за тарифом и балансом, делает и накатывает копии.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Danerus23/dsh-panel/releases/latest"><img src="https://img.shields.io/github/v/release/Danerus23/dsh-panel?label=release&color=2f855a" alt="Release"></a>
+  <a href="https://github.com/Danerus23/dsh-panel/actions/workflows/build.yml"><img src="https://github.com/Danerus23/dsh-panel/actions/workflows/build.yml/badge.svg" alt="Build"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Danerus23/dsh-panel?color=blue" alt="MIT"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078d4" alt="Windows 10 / 11">
+  <img src="https://img.shields.io/badge/languages-%D1%80%D1%83%D1%81%20%7C%20en%20%7C%20%E4%B8%AD%E6%96%87-6b46c1" alt="ru / en / zh">
+  <a href="https://github.com/Danerus23/dsh-panel/releases"><img src="https://img.shields.io/github/downloads/Danerus23/dsh-panel/total?color=orange" alt="Downloads"></a>
+</p>
+
+<p align="center">
+  <a href="#установка">Установка</a> ·
+  <a href="#что-умеет">Возможности</a> ·
+  <a href="#снимки-окон">Снимки</a> ·
+  <a href="#сборка-из-исходников">Сборка из исходников</a> ·
+  <a href="#поддержать-проект">Поддержать</a> ·
+  <a href="README.md">English version</a>
+</p>
 
 ![Панель, русский](docs/screenshots/ru/panel.png)
 
