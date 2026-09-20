@@ -1,0 +1,37 @@
+# Build output and publishing staging (never commit binaries)
+bin/
+obj/
+app/
+app-staging/
+dist/
+
+# Генерируется installer\build-installer.ps1 из версии проекта
+installer/appversion.iss
+
+# Folders the build redirects into the project
+.dotnet-home/
+.appdata/
+.nuget/
+
+# Runtime state: logs here carry the session URL with its token
+logs/
+*.log
+server.pid
+web-url.txt
+status.txt
+build.txt
+
+# Settings that live next to the .exe in old versions
+settings.json
+
+# Old window shots contain personal paths and balance; public ones are taken
+# on a clean profile and live in docs/
+preview/*.png
+preview/status.txt
+
+# Editor and tooling leftovers
+.vs/
+*.user
+
+# Среда .NET для установщика: ~55 МБ, скачивается при сборке и проверяется по подписи
+installer/redist/

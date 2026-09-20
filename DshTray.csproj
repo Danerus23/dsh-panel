@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>DshTray</AssemblyName>
+    <RootNamespace>DshTray</RootNamespace>
+    <ApplicationIcon>dsh-tray.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <ApplicationDefaultFont>Segoe UI, 9pt</ApplicationDefaultFont>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Имя продукта одно на всё: ярлыки, установщик, «Программы и компоненты» и свойства
+         самого exe. Прежнее «DeepSeek Harness» — имя движка, который панель обслуживает. -->
+    <Product>DSH Panel</Product>
+    <AssemblyTitle>DSH Panel</AssemblyTitle>
+    <Description>DSH Panel — панель управления локальным сервером DeepSeek Harness</Description>
+    <Company>Danerus23</Company>
+    <!-- Номер версии задаётся один раз здесь; FileVersion выводим из него, чтобы две
+         строки не разъехались при подъёме версии. Порядок важен: $(Version) должен
+         быть объявлен раньше, иначе MSBuild подставит пустоту. -->
+    <Version>1.20.0</Version>
+    <FileVersion>$(Version).0</FileVersion>
+    <NeutralLanguage>ru-RU</NeutralLanguage>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Словари интерфейса: лежат внутри .exe, чтобы панель оставалась одним файлом
+         без папок ru\, zh\ рядом с приложением. -->
+    <EmbeddedResource Include="lang\ru.json" />
+    <EmbeddedResource Include="lang\en.json" />
+    <EmbeddedResource Include="lang\zh.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Окна тарифа и запасной скрипт баланса должны лежать рядом с .exe. -->
+    <None Update="pricing.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="tools\balance.mjs">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="README.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="README.ru.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- История версий едет вместе с панелью: её открывает пункт меню в трее. -->
+    <None Update="CHANGELOG.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="dsh-tray.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,171 @@
+# Сборка и выпуск панели. Запускается на каждый push в main и на pull request;
+# выпуск создаётся только по тегу вида v1.20.0.
+#
+# Важно: сборка идёт теми же скриптами, что и на машине разработчика (build.ps1,
+# tools\pack-panel.ps1, installer\build-installer.ps1, tools\check-versions.ps1,
+# tools\write-checksums.ps1) — иначе артефакт из CI отличается от проверенного локально
+# и от того, что скачает апдейтер панели.
+#
+# Экшены закреплены по SHA коммита, а не по мажорному тегу: тег `@v4` владелец репозитория
+# экшена может переставить в любой момент, и тогда изменится код, который выполняется
+# в этом workflow. Чтобы обновить экшен осознанно — узнайте новый SHA и подставьте его:
+#   gh api repos/actions/checkout/git/ref/tags/v4 --jq .object.sha
+# (у аннотированных тегов нужен ещё один шаг: git/tags/<sha> → .object.sha).
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Права только на чтение: их хватает сборке и pull request.
+# Право на запись выдаётся отдельно — job'у выпуска.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # actions/setup-dotnet v4.3.1
+      - name: Установить .NET 8
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Проверить словари интерфейса
+        run: node tools/check-lang.mjs
+
+      # Тег новее версии проекта — это не «мелочь»: апдейтер сравнивает версию
+      # распакованной панели с тегом и падает у всех с update.versionMismatch.
+      - name: Сверить тег с версией проекта
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $match = Select-String -LiteralPath DshTray.csproj -Pattern '<Version>([^<]+)</Version>'
+          if (-not $match) { throw 'В DshTray.csproj нет <Version>' }
+          $version = $match.Matches[0].Groups[1].Value
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          if ($tag -ne $version) { throw "тег $tag не совпадает с версией проекта $version — поднимите <Version> или переставьте тег" }
+          Write-Host "тег и версия совпадают: $version"
+
+      # build.ps1 сам пишет штамп build.txt, проверяет запись в CHANGELOG.md и запускает
+      # самопроверку панели в изолированном профиле.
+      - name: Собрать панель
+        shell: pwsh
+        run: ./build.ps1 -OutDir dist/panel
+
+      - name: Собрать сборку «без .NET» (один exe, не требует установленного runtime)
+        shell: pwsh
+        run: ./build.ps1 -OutDir dist/panel-selfcontained -SelfContained -SingleFile
+
+      # Тот же упаковщик, что и локально: он убирает из раздачи status.txt, *.pdb,
+      # settings.json и путь сборщика из build.txt, а потом проверяет готовый архив.
+      - name: Упаковать панель
+        shell: pwsh
+        run: |
+          ./tools/pack-panel.ps1 -Source dist/panel -Destination dist/DshPanel.zip
+          ./tools/pack-panel.ps1 -Source dist/panel-selfcontained -Destination dist/DshPanel-selfcontained.zip
+
+      # Установщик нужен в выпуске: апдейтер панели качает dsh-panel-setup.exe
+      # как часть «полного комплекта переезда».
+      - name: Установить Inno Setup 7
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 7\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe"
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if ($iscc) { Write-Host "Inno Setup 7 уже есть: $iscc"; exit 0 }
+
+          # Ссылка версионная и постоянная: файл на GitHub Releases не меняется.
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe'
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup7.exe'
+          Invoke-WebRequest -Uri $url -OutFile $setup
+          Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait
+          if (-not (Test-Path -LiteralPath "$env:LOCALAPPDATA\Programs\Inno Setup 7\ISCC.exe")) {
+            throw 'Inno Setup 7 не установился'
+          }
+
+      - name: Собрать установщик
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: ./installer/build-installer.ps1 -SkipBuild -AppDir dist/panel
+
+      # Проверяет, что версия совпадает у проекта, панели, штампа, скрипта установщика,
+      # самого установщика и архива: иначе в выпуск легко попадёт установщик прошлой сборки.
+      - name: Сверить версии комплекта
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: ./tools/check-versions.ps1 -Dist dist
+
+      # Без SHA256SUMS.txt в выпуске панель откажется обновлять себя: сертификата у проекта
+      # нет, и сверка с опубликованной суммой — единственная проверка скачанного архива.
+      - name: Контрольные суммы выпуска
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: ./tools/write-checksums.ps1 -Dist dist
+
+      - name: Заметки к выпуску (раздел CHANGELOG.md)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: ./tools/release-notes.ps1 -Out dist/release-notes.md
+
+      # actions/upload-artifact v4.6.2
+      - name: Сохранить сборку
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: DshPanel
+          path: |
+            dist/DshPanel.zip
+            dist/DshPanel-selfcontained.zip
+            dist/dsh-panel-setup.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+  release:
+    # Выпуск — только по тегу и только после успешной сборки.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      # actions/checkout v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # actions/download-artifact v4.3.0
+      - name: Забрать собранное
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: DshPanel
+          path: dist
+
+      - name: Заметки к выпуску (раздел CHANGELOG.md)
+        shell: pwsh
+        run: ./tools/release-notes.ps1 -Out dist/release-notes.md
+
+      # Если выпуск для этого тега уже создан (например, руками) — файлы в него доложатся,
+      # одноимённые будут перезаписаны. Заголовок и текст существующего выпуска не меняются,
+      # поэтому заметки берём из CHANGELOG.md явно.
+      # softprops/action-gh-release v2.6.2
+      - name: Выпуск
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          body_path: dist/release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            dist/dsh-panel-setup.exe
+            dist/DshPanel.zip
+            dist/DshPanel-selfcontained.zip
+            dist/SHA256SUMS.txt
