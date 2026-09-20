@@ -544,6 +544,14 @@ internal static class Program
                 ? Loc.T("cli.updatePrepared", prepared.Version, prepared.StagedFolder)
                 : Loc.T("cli.updatePrepareFailed", prepared.Error));
 
+            // Печатаем готовую команду замены: по ней видно, что именно выполнит панель, и её
+            // можно запустить руками — так проверяют путь обновления там, где он сорвался.
+            if (prepared.Ok && prepared.CommandLine.Length > 0)
+            {
+                report.AppendLine("  " + Loc.T("cli.updateCommand") + ":");
+                report.AppendLine("  " + prepared.CommandLine);
+            }
+
             WriteReport(report.ToString(), options.OutPath);
             return prepared.Ok ? 0 : 1;
         }

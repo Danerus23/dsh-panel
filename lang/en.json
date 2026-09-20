@@ -522,6 +522,7 @@
 "cli.help.nodeCheck": "check where the panel would download Node from and whether those addresses answer",
   "cli.updateRepo": "Release repository: {0}",
   "cli.updateNoSumsAsset": "the release has no SHA256SUMS.txt, nothing to verify integrity with",
+  "cli.updateCommand": "the prepared file-replacement command",
   "cli.updatePrepared": "update prepared: version {0}, folder {1}",
   "cli.updatePrepareFailed": "update was not prepared: {0}",
   "cli.updateCurrent": "Panel version: {0}",

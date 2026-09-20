@@ -521,6 +521,7 @@
 "cli.help.nodeCheck": "检查面板将从哪里下载 Node，以及这些地址是否可用",
   "cli.updateRepo": "发布仓库：{0}",
   "cli.updateNoSumsAsset": "发布中没有 SHA256SUMS.txt，无法校验完整性",
+  "cli.updateCommand": "准备好的文件替换命令",
   "cli.updatePrepared": "更新已准备：版本 {0}，目录 {1}",
   "cli.updatePrepareFailed": "更新未准备好：{0}",
   "cli.updateCurrent": "面板版本：{0}",

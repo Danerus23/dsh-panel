@@ -166,6 +166,9 @@ try {
         # Публиковать выпуск для этого не нужно.
         if (-not $SkipUpdate) {
             Step 'Путь обновления (суммы и отказ при подмене)' {
+# Сама замена файлов: панель ставится в путь с пробелом, и именно на нём обновление
+# однажды откатилось молча. Проверка повторяет весь путь и падает, если robocopy не справился.
+Step 'Замена файлов при обновлении' { & (Join-Path $PSScriptRoot 'check-update-apply.ps1') -Exe (Join-Path $Dist 'panel\DshTray.exe') }
                 & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\check-update.ps1') -Exe (Join-Path $panel 'DshTray.exe')
             }
         }

@@ -230,9 +230,18 @@ public static class UpdateService
 
             progress?.Invoke(Loc.T("update.staging"));
             result.BackupFolder = CopyCurrent(paths.BaseDir, backup);
-            result.ScriptPath = WriteScript(paths.BaseDir, staged, backup, updateRoot, out var log);
+            // Пути уходят в командный файл и в командную строку: хвостовой «\» там ломает
+            // кавычки ("C:\...\DSH Panel\" — cmd съедает закрывающую), поэтому срезаем его.
+            var target = SafePath(paths.BaseDir);
+            var stagedSafe = SafePath(staged);
+            var backupSafe = SafePath(backup);
+
+            // Путь к журналу выбирает сам сценарий, поэтому сначала пишем его, потом нормализуем.
+            result.ScriptPath = WriteScript(target, stagedSafe, backupSafe, updateRoot, out var logPath);
+            var logSafe = SafePath(logPath);
+
             result.CommandLine = "\"\"" + result.ScriptPath + "\" \"" + Environment.ProcessId + "\" \"" +
-                                  paths.BaseDir + "\" \"" + staged + "\" \"" + backup + "\" \"" + log + "\"\"";
+                  target + "\" \"" + stagedSafe + "\" \"" + backupSafe + "\" \"" + logSafe + "\"\"";
             result.StagedFolder = staged;
             result.Version = version;
             result.Ok = true;
@@ -285,6 +294,18 @@ public static class UpdateService
     /// 8 и больше — ошибка), при ошибке вернуть файлы из копии и в любом случае запустить
     /// панель заново: человек не должен остаться без окна и значка.
     /// </summary>
+    /// <summary>
+    /// Путь без хвостового разделителя. Нужен там, где путь подставляется в командный файл
+    /// в кавычках: «C:\…\DSH Panel\» ломает разбор — cmd считает «\"» экранированной
+    /// кавычкой и передаёт robocopy остаток строки вместе с путём. Корень диска («C:\»)
+    /// оставляем как есть.
+    /// </summary>
+    private static string SafePath(string path)
+    {
+        var trimmed = (path ?? "").TrimEnd('\\', '/');
+        return trimmed.EndsWith(":") ? trimmed + "\\" : trimmed;
+    }
+
     private static string WriteScript(string appDir, string staged, string backup, string updateRoot, out string logPath)
     {
         var script = Path.Combine(updateRoot, "update.cmd");

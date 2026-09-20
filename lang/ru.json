@@ -522,6 +522,7 @@
 "cli.help.nodeCheck": "проверить, откуда панель скачает Node, и отвечают ли эти адреса",
   "cli.updateRepo": "Репозиторий выпусков: {0}",
   "cli.updateNoSumsAsset": "в выпуске нет SHA256SUMS.txt — проверять целостность нечем",
+  "cli.updateCommand": "готовая команда замены файлов",
   "cli.updatePrepared": "обновление подготовлено: версия {0}, папка {1}",
   "cli.updatePrepareFailed": "обновление не подготовлено: {0}",
   "cli.updateCurrent": "Версия панели: {0}",
