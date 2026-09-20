@@ -104,7 +104,9 @@ against Microsoft's signature. Step by step details are in [docs/DEVELOPMENT.md]
 | `--backup-check [--from file] [--out file]` | verify a backup: without `--from` the newest one is used |
 | `--restore [--from file] [--keys] [--no-engine]` | restore from a backup: data, panel settings and the engine; `--keys` brings keys back too |
 | `--update-check [--out file]` | ask GitHub whether a newer version exists (the Updates tab shows the same) |
+| `--update-prepare [--force]` | download the release, verify the sums and unpack it into the update folder (diagnostics) |
 | `--install-node [--out file]` | install Node.js LTS (what the setup program calls before the first run) |
+| `--node-check [--out file]` | check that the Node.js download links answer |
 | `--pricing-check [--from file] [--apply]` | parse the pricing page and show what was found |
 | `--selftest [--out file]` | self-check: state, icons, window |
 | `--shot [file]` | save PNG pictures of the windows (used to check the UI on all languages) |
@@ -154,6 +156,8 @@ no personal paths or data are in them.
 | --- | --- | --- | --- |
 | Panel | [panel](docs/screenshots/en/panel.png) | [панель](docs/screenshots/ru/panel.png) | [面板](docs/screenshots/zh/panel.png) |
 | Settings | [settings](docs/screenshots/en/settings.png) | [настройки](docs/screenshots/ru/settings.png) | [设置](docs/screenshots/zh/settings.png) |
+| Settings (wide) | [settings](docs/screenshots/en/settings-big.png) | [настройки](docs/screenshots/ru/settings-big.png) | [设置](docs/screenshots/zh/settings-big.png) |
+| Wizard: environment | [wizard](docs/screenshots/en/onboarding-env.png) | [мастер](docs/screenshots/ru/onboarding-env.png) | [向导](docs/screenshots/zh/onboarding-env.png) |
 | Backups | [backups](docs/screenshots/en/backups.png) | [копии](docs/screenshots/ru/backups.png) | [备份](docs/screenshots/zh/backups.png) |
 | Restore from a backup | [restore](docs/screenshots/en/restore.png) | [восстановление](docs/screenshots/ru/restore.png) | [恢复](docs/screenshots/zh/restore.png) |
 | First-run wizard | [wizard](docs/screenshots/en/onboarding.png) | [мастер](docs/screenshots/ru/onboarding.png) | [向导](docs/screenshots/zh/onboarding.png) |

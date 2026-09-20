@@ -105,7 +105,9 @@ GitHub) и [Inno Setup 7](https://jrsoftware.org/isdl.php) — им собира
 | `--pricing-check [--from файл] [--apply]` | разобрать страницу цен и показать, что нашлось |
 | `--restore [--from файл] [--keys] [--no-engine]` | вернуть данные из копии: данные, настройки панели и движок; `--keys` возвращает ещё и ключи |
 | `--update-check [--out файл]` | спросить GitHub, есть ли версия новее (то же показывает вкладка «Обновления») |
+| `--update-prepare [--force]` | скачать выпуск, сверить суммы и распаковать его в папку обновления (диагностика) |
 | `--install-node [--out файл]` | поставить Node.js LTS (этим пользуется установщик перед первым запуском) |
+| `--node-check [--out файл]` | проверить, что ссылки на скачивание Node.js отвечают |
 | `--selftest [--out файл]` | самопроверка: состояние, значки, окно |
 | `--shot [файл]` | сохранить PNG-снимки окон (проверка вида на всех языках) |
 | `--icons [файл]` | сохранить картинку со всеми вариантами значка трея |
@@ -149,6 +151,8 @@ MIT — см. [LICENSE](LICENSE).
 | --- | --- | --- | --- |
 | Панель | [panel](docs/screenshots/en/panel.png) | [панель](docs/screenshots/ru/panel.png) | [面板](docs/screenshots/zh/panel.png) |
 | Настройки | [settings](docs/screenshots/en/settings.png) | [настройки](docs/screenshots/ru/settings.png) | [设置](docs/screenshots/zh/settings.png) |
+| Настройки (широкие) | [settings](docs/screenshots/en/settings-big.png) | [настройки](docs/screenshots/ru/settings-big.png) | [设置](docs/screenshots/zh/settings-big.png) |
+| Мастер: окружение | [wizard](docs/screenshots/en/onboarding-env.png) | [мастер](docs/screenshots/ru/onboarding-env.png) | [向导](docs/screenshots/zh/onboarding-env.png) |
 | Копии | [backups](docs/screenshots/en/backups.png) | [копии](docs/screenshots/ru/backups.png) | [备份](docs/screenshots/zh/backups.png) |
 | Восстановление из копии | [restore](docs/screenshots/en/restore.png) | [восстановление](docs/screenshots/ru/restore.png) | [恢复](docs/screenshots/zh/restore.png) |
 | Мастер | [wizard](docs/screenshots/en/onboarding.png) | [мастер](docs/screenshots/ru/onboarding.png) | [向导](docs/screenshots/zh/onboarding.png) |
