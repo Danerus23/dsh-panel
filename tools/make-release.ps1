@@ -47,66 +47,6 @@ function Step([string]$title, [scriptblock]$action) {
 
 # Личные ключи и данные владельца не уходят в раздачу — это красная линия проекта,
 # поэтому проверка шагом, а не подсказкой: пропустить её нельзя.
-function Assert-PersonalContent {
-    <#
-      Проверка содержимого. Имя пользователя и имя машины, на которой идёт сборка, не должны
-      встречаться в файлах, которые уедут в публичный репозиторий: старая проверка смотрела
-      только имена файлов и пропустила снимки окон с путями вида C:\Users\<имя>.
-
-      Читаем только текстовые расширения: PNG и ZIP как текст разбирать бессмысленно.
-    #>
-    $textExtensions = @('.cs', '.md', '.json', '.ps1', '.psm1', '.iss', '.yml', '.yaml', '.csproj',
-        '.config', '.txt', '.mjs', '.js', '.cmd', '.bat', '.gitignore', '.gitattributes')
-    $skip = @('app', 'app-staging', 'dist', 'bin', 'obj', '.git', '.nuget', '.appdata', '.dotnet-home', 'logs')
-
-    # Имя автора (Danerus23) в репозитории нужно: копирайт, владелец репозитория, издатель.
-    # Личным считается ПУТЬ к папке пользователя и имя машины — их в файлах быть не должно.
-    $markers = @()
-    if ($env:USERNAME) { $markers += ('C:\Users\' + $env:USERNAME) }
-    if ($env:COMPUTERNAME) { $markers += $env:COMPUTERNAME }
-
-    # Файлы берём из индекса git, если репозиторий уже есть: именно они попадут в публикацию.
-    $list = @()
-    if ((Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $root '.git'))) {
-        $list = @(& git -C $root ls-files 2>$null) | ForEach-Object { Join-Path $root $_ }
-    }
-    else {
-        $list = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue |
-            Where-Object { $skip -notcontains ($_.FullName.Substring($root.Length).TrimStart('\') -split '\\')[0] } |
-            Select-Object -ExpandProperty FullName)
-    }
-
-    $found = @()
-    foreach ($file in $list) {
-        if (-not (Test-Path -LiteralPath $file)) { continue }
-        if ($textExtensions -notcontains ([IO.Path]::GetExtension($file).ToLowerInvariant())) { continue }
-
-        $relative = $file.Substring($root.Length).TrimStart('\')
-        $number = 0
-        foreach ($line in @(Get-Content -LiteralPath $file -Encoding UTF8 -ErrorAction SilentlyContinue)) {
-            $number++
-            foreach ($marker in $markers) {
-                if ($line -match [regex]::Escape($marker)) {
-                    $found += ($relative + ':' + $number + ' — встречается «' + $marker + '»')
-                }
-            }
-
-            if ($line -match 'gh[opusr]_[A-Za-z0-9]{20,}' -or $line -match 'sk-[A-Za-z0-9]{20,}') {
-                $found += ($relative + ':' + $number + ' — похоже на токен')
-            }
-        }
-    }
-
-    if ($found.Count -gt 0) {
-        Write-Host ''
-        Write-Host 'БЕДА  в файлы репозитория попали личные данные:' -ForegroundColor Red
-        $found | Select-Object -Unique | ForEach-Object { Write-Host ('      ' + $_) -ForegroundColor Red }
-        throw 'личные данные в репозитории — публиковать нельзя'
-    }
-
-    Write-Host ('Проверка содержимого: личных данных нет (искали: ' + ($markers -join ', ') + ')')
-}
-
 function Assert-NoSecrets {
     $patterns = @(
         'keystore', '\.jks$', '\.keystore$', 'id_rsa', 'id_ed25519', 'id_ecdsa',
@@ -162,7 +102,11 @@ try {
         & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\check-encoding.ps1')
     }
 
-    Step 'Личные данные не уезжают' { Assert-NoSecrets; Assert-PersonalContent }
+    Step 'Личные данные не уезжают' {
+    Assert-NoSecrets
+    & (Join-Path $PSScriptRoot 'check-personal.ps1') -Root $root
+    if ($LASTEXITCODE -ne 0) { throw 'личные данные в репозитории — публиковать нельзя' }
+}
 
     Step 'Словари интерфейса' { node (Join-Path $root 'tools\check-lang.mjs') }
 
