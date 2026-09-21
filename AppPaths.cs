@@ -365,6 +365,14 @@ public sealed class AppSettings
     [JsonPropertyName("language")]
     public string Language { get; set; } = "auto";
 
+    /// <summary>
+    /// Тема оформления окон: «auto» — как в Windows, «light» — всегда светлая,
+    /// «dark» — всегда тёмная. Меняется в «Настройках»; разбирает значение
+    /// <see cref="Theme.ModeFrom"/> (пустое или неизвестное — «как в Windows»).
+    /// </summary>
+    [JsonPropertyName("theme")]
+    public string ThemeMode { get; set; } = "auto";
+
     /// <summary>Мастер первой настройки пройден — второй раз его не показываем.</summary>
     [JsonPropertyName("onboarded")]
     public bool Onboarded { get; set; }
@@ -589,6 +597,7 @@ public sealed class AppSettings
         OpenBrowserOnStart = loaded.OpenBrowserOnStart;
         ServerPort = loaded.ServerPort;
         Language = loaded.Language;
+        ThemeMode = loaded.ThemeMode;
         Onboarded = loaded.Onboarded;
         NodePath = loaded.NodePath;
         DshBinPath = loaded.DshBinPath;

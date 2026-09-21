@@ -697,6 +697,11 @@ public sealed class TrayHost : ApplicationContext
             Settings.Save(_paths.SettingsPath);
             Loc.Init(Settings.Language);
 
+            // Тему пересчитываем и здесь: у китайского своё семейство шрифта, а «auto» зависит от
+            // системной настройки Windows — окна всё равно пересобираются ниже, и вид обязан
+            // остаться прежним, а не вернуться к системным цветам.
+            Theme.Use(Theme.ModeFrom(Settings.ThemeMode));
+
             _form.Retext();
             UpdateMenu();
             _tray.Text = BuildTooltip();
@@ -705,6 +710,31 @@ public sealed class TrayHost : ApplicationContext
         catch (Exception error)
         {
             AppLog.Write(_paths, "не удалось сменить язык: " + error.Message);
+        }
+    }
+
+    /// <summary>
+    /// Смена темы из «Настроек»: применяется сразу, как и язык, — владелец должен увидеть
+    /// новую тему в открытых окнах, а не после перезапуска панели. Пересобирается окно панели
+    /// (<c>Retext</c> заново применяет тему ко всему дереву), а своё окно настроек вызывающий
+    /// пересобирает сам. Тема сохраняется, поэтому переживает перезапуск.
+    /// </summary>
+    public void ApplyTheme(string mode)
+    {
+        try
+        {
+            Settings.ThemeMode = Theme.ModeTo(Theme.ModeFrom(mode));
+            Settings.Save(_paths.SettingsPath);
+            Theme.Use(Theme.ModeFrom(Settings.ThemeMode));
+
+            _form.Retext();
+            UpdateMenu();
+            _tray.Text = BuildTooltip();
+            AppLog.Write(_paths, "тема оформления: " + Settings.ThemeMode);
+        }
+        catch (Exception error)
+        {
+            AppLog.Write(_paths, "не удалось сменить тему: " + error.Message);
         }
     }
 
@@ -945,7 +975,7 @@ public sealed class TrayHost : ApplicationContext
     {
         try
         {            var pending = _pendingPricing;
-            using var dialog = new SettingsForm(Settings, _paths, _pricing, () => Loc.T("main.windows", _peak.GetState().ScheduleText, _peak.GetState().Checked), pending, ApplyLanguage, OnUpdateReady);
+            using var dialog = new SettingsForm(Settings, _paths, _pricing, () => Loc.T("main.windows", _peak.GetState().ScheduleText, _peak.GetState().Checked), pending, ApplyLanguage, OnUpdateReady, ApplyTheme);
 
             var result = _form.Visible ? dialog.ShowDialog(_form) : dialog.ShowDialog();
 

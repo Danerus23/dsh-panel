@@ -284,7 +284,7 @@ internal static class Theme
                 break;
 
             case ComboBox combo:
-                Field(combo);
+                Combo(combo);
                 break;
 
             case NumericUpDown numeric:
@@ -403,6 +403,45 @@ internal static class Theme
         field.ForeColor = field.Enabled ? Colors.Text : Colors.Disabled;
         field.Font = Body;
         if (field.Height != 0) field.Height = FieldHeight;
+        if (field is TextBoxBase text) text.BorderStyle = BorderStyle.FixedSingle;
+    }
+
+    /// <summary>Выпадающий список: рисуем сами. Системный <c>ComboBox</c> со стилем
+    /// <c>DropDownList</c> рисует белое поле даже при заданном <c>BackColor</c> — в тёмной теме это
+    /// самая заметная светлая заплата. Простой список (<c>Simple</c>) оставляем системе: он и так
+    /// слушает цвета.</summary>
+    public static void Combo(ComboBox combo)
+    {
+        combo.BackColor = Colors.Surface;
+        combo.ForeColor = Colors.Text;
+        combo.Font = Body;
+        combo.FlatStyle = FlatStyle.Flat;
+
+        if (combo.DropDownStyle == ComboBoxStyle.Simple) return;
+
+        combo.DrawMode = DrawMode.OwnerDrawFixed;
+        combo.ItemHeight = 20;
+        // Обработчик вешаем один раз: Retext пересобирает окно и зовёт нас снова.
+        combo.DrawItem -= DrawComboItem;
+        combo.DrawItem += DrawComboItem;
+    }
+
+    /// <summary>Отрисовка строки выпадающего списка: выбранная — акцент, остальные — поверхность.</summary>
+    private static void DrawComboItem(object sender, DrawItemEventArgs e)
+    {
+        if (sender is not ComboBox combo) return;
+
+        var palette = Colors;
+        var selected = (e.State & DrawItemState.Selected) != 0;
+        using (var fill = new SolidBrush(selected ? palette.Accent : palette.Surface))
+            e.Graphics.FillRectangle(fill, e.Bounds);
+
+        var text = e.Index >= 0 && e.Index < combo.Items.Count
+            ? combo.Items[e.Index]?.ToString() ?? ""
+            : "";
+        TextRenderer.DrawText(e.Graphics, text, Body, e.Bounds,
+            selected ? palette.OnAccent : palette.Text,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
     }
 
     /// <summary>Список: поверхность темы и своя отрисовка строки, чтобы выделение не выпадало из
@@ -536,8 +575,35 @@ internal static class Theme
         // Обработчик вешаем один раз: Retext пересобирает окно и может позвать нас снова.
         tabs.DrawItem -= DrawTab;
         tabs.DrawItem += DrawTab;
+        tabs.Paint -= PaintTabsChrome;
+        tabs.Paint += PaintTabsChrome;
 
         foreach (TabPage page in tabs.TabPages) Style(page);
+    }
+
+    /// <summary>Фон вокруг страниц и рамка вокруг них. Сам <c>TabControl</c> оставляет там системные
+    /// светлые края — в тёмной теме они видны как линии под полосой вкладок и по низу окна.
+    /// Страницы — дочерние контролы, они рисуются после нас и закрывают внутреннюю область.</summary>
+    private static void PaintTabsChrome(object sender, PaintEventArgs e)
+    {
+        if (sender is not TabControl tabs || tabs.TabCount == 0) return;
+
+        var palette = Colors;
+        var display = tabs.DisplayRectangle;
+        if (display.Width <= 0 || display.Height <= 0) return;
+
+        using (var fill = new SolidBrush(palette.Window))
+        {
+            e.Graphics.FillRectangle(fill, new Rectangle(0, 0, tabs.Width, display.Top));
+            e.Graphics.FillRectangle(fill, new Rectangle(0, display.Top, display.Left, tabs.Height - display.Top));
+            e.Graphics.FillRectangle(fill, new Rectangle(display.Right, display.Top,
+                tabs.Width - display.Right, tabs.Height - display.Top));
+            e.Graphics.FillRectangle(fill, new Rectangle(display.Left, display.Bottom,
+                display.Width, tabs.Height - display.Bottom));
+        }
+
+        using var pen = new Pen(palette.Border);
+        e.Graphics.DrawRectangle(pen, new Rectangle(display.X - 1, display.Y - 1, display.Width + 1, display.Height + 1));
     }
 
     /// <summary>Отрисовка одной вкладки: выбранная — поверхность и акцентная полоса снизу,

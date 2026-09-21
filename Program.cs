@@ -254,6 +254,12 @@ internal static class Program
         NodeLocator.ApplyOverrides(settings.NodePath, settings.DshBinPath);
         Loc.Init(string.IsNullOrWhiteSpace(options.Language) ? settings.Language : options.Language);
 
+        // Тема — до первого окна и до хоста трея: палитра и роли шрифтов читаются из Theme
+        // в момент построения окна, и решать это после значило бы показать человеку светлое
+        // окно при тёмной настройке. Источник один — настройка «theme» (ключ «auto» читает
+        // системную тему Windows внутри Theme.Use).
+        Theme.Use(Theme.ModeFrom(settings.ThemeMode));
+
         if (options.Mode == RunMode.Help)
         {
             WriteReport(HelpText(), options.OutPath);
@@ -1421,6 +1427,127 @@ internal static class Program
                                   (failed.Count > 0 ? ", мало контраста: " + string.Join("; ", failed) : ""));
             }
 
+            // Тема оформления (1.22.0): строка настройки и состояние окна обязаны сходиться в обе
+            // стороны. Пустое, пробельное и неизвестное значение — это «как в Windows»: так
+            // выглядят settings.json прежних версий, где поля theme нет вовсе, и человек не должен
+            // получить из-за этого тёмное окно. Сверяем и обратный перевод (ModeTo): именно им
+            // панель пишет настройку, и разошедшаяся пара «light» ↔ dark пережила бы перезапуск.
+            var themeCases = new (string Value, Theme.Mode Mode, string Text)[]
+            {
+                ("auto", Theme.Mode.Auto, "auto"),
+                ("light", Theme.Mode.Light, "light"),
+                ("dark", Theme.Mode.Dark, "dark"),
+                ("", Theme.Mode.Auto, "auto"),
+                ("   ", Theme.Mode.Auto, "auto"),
+                ("DARK", Theme.Mode.Dark, "dark"),
+                ("тёмная", Theme.Mode.Auto, "auto"),
+            };
+
+            var themeWrong = new List<string>();
+            foreach (var item in themeCases)
+            {
+                var mode = Theme.ModeFrom(item.Value);
+                var text = Theme.ModeTo(mode);
+                if (mode != item.Mode || text != item.Text)
+                {
+                    themeWrong.Add($"«{item.Value}» → {mode}/{text}, ждали {item.Mode}/{item.Text}");
+                }
+            }
+
+            // И то же самое до состояния окна: Use обязан переключить палитру, а не только
+            // запомнить строку. Светлую и тёмную проверяем по очереди, а в конце возвращаем
+            // состояние каким оно было: самопроверка строит окна дальше (TrayHost ниже), и
+            // оставленная тёмная тема поменяла бы их вид — то есть проверила бы не то.
+            var wasDark = Theme.IsDark;
+            Theme.Use(Theme.Mode.Light);
+            var themeLightOk = !Theme.IsDark;
+
+            // Значок трея рисуется своей тёмной плиткой (TrayIconFactory) и от палитры окна не
+            // зависит: сверяем кадры по пикселям в обеих темах. Если значок когда-нибудь начнёт
+            // брать цвет из темы, кадры разойдутся — а человек получит выцветший значок.
+            using var iconLight = TrayIconFactory.Render(ServerVisual.Running, false, 32);
+
+            Theme.Use(Theme.Mode.Dark);
+            var themeDarkOk = Theme.IsDark;
+            using var iconDark = TrayIconFactory.Render(ServerVisual.Running, false, 32);
+            var themeIconOk = SameBitmap(iconLight, iconDark);
+
+            Theme.Use(wasDark ? Theme.Mode.Dark : Theme.Mode.Light);
+            var themeRestoredOk = Theme.IsDark == wasDark;
+
+            var themeOk = themeWrong.Count == 0 && themeLightOk && themeDarkOk
+                          && themeRestoredOk && themeIconOk;
+            if (!themeOk) problems++;
+            report.AppendLine($"Тема {(themeOk ? "ок" : "БЕДА")}: режим из настройки и состояние окна " +
+                              $"(светлая {themeLightOk}, тёмная {themeDarkOk}, состояние возвращено {themeRestoredOk}, " +
+                              $"значок трея один в обеих темах {themeIconOk}; " +
+                              string.Join(", ", themeCases.Select(item =>
+                                  $"«{item.Value}»→{Theme.ModeTo(Theme.ModeFrom(item.Value))}")) + ")" +
+                              (themeWrong.Count > 0 ? " — неверно: " + string.Join("; ", themeWrong) : ""));
+
+            // Тема обязана не только переключаться, но и доходить до ОТКРЫТЫХ окон: Retext
+            // пересобирает контролы, и без Theme.Apply внутри него вид после смены языка вернулся
+            // бы к системным цветам — это отдельный пункт приёмки 1.22.0. Смотрим IL, а не
+            // намерение: так ловится и снятый вызов, и забытая пересборка окна панели при смене
+            // темы. Пары «кто — что обязан звать»: оба Retext применяют тему, а обе двери смены
+            // (язык и тема) решают палитру через Theme.Use и пересобирают окно панели.
+            var themeSites = new (string Method, string Need)[]
+            {
+                ("MainForm.Retext", "Theme.Apply"),
+                ("SettingsForm.Retext", "Theme.Apply"),
+                ("TrayHost.ApplyLanguage", "Theme.Use"),
+                ("TrayHost.ApplyLanguage", "MainForm.Retext"),
+                ("TrayHost.ApplyTheme", "Theme.Use"),
+                ("TrayHost.ApplyTheme", "MainForm.Retext"),
+            };
+
+            var themeMissing = new List<string>();
+            foreach (var site in themeSites)
+            {
+                var method = typeof(TrayHost).Assembly.GetTypes()
+                    .SelectMany(type => DeclaredMethods(type).Select(item => (type, method: item)))
+                    .FirstOrDefault(item => item.type.Name + "." + item.method.Name == site.Method).method;
+
+                if (method == null) themeMissing.Add(site.Method + ": метода нет");
+                else if (!MethodReferences(method).Contains(site.Need))
+                    themeMissing.Add(site.Method + " не зовёт " + site.Need);
+            }
+
+            var themeWiredOk = themeMissing.Count == 0;
+            if (!themeWiredOk) problems++;
+            report.AppendLine($"Тема в окнах {(themeWiredOk ? "ок" : "БЕДА")}: " +
+                              $"проверок {themeSites.Length} — окно пересобирается с темой, смена доходит до панели" +
+                              (themeWiredOk ? "" : " — " + string.Join("; ", themeMissing)));
+
+            // Смена языка и темы пересобирает окно настроек целиком (Retext). Окно обязано
+            // остаться ТЕМ ЖЕ окном: подписи внутри карточек живут не в странице вкладки, а в
+            // самой карточке, и без её очистки каждая смена оставляла бы в карточке ещё один
+            // слой тех же подписей — глазом это не видно (слои совпадают), но вид и вес окна
+            // портит, а смена темы теперь идёт через тот же путь. Считаем контролы дерева до и
+            // после двух лишних пересборок: число обязано совпасть. Окно не показываем — только
+            // строим: на рабочем столе владельца не должно появиться ничего.
+            var retextCounts = "";
+            try
+            {
+                using var settingsWindow = new SettingsForm(settings, paths, new PricingUpdateService(paths), () => "");
+                settingsWindow.Retext();
+                var retextOnce = ControlCount(settingsWindow);
+                settingsWindow.Retext();
+                settingsWindow.Retext();
+                var retextMany = ControlCount(settingsWindow);
+
+                var retextOk = retextOnce > 0 && retextOnce == retextMany;
+                if (!retextOk) problems++;
+                retextCounts = $"{retextOnce} контролов после пересборки, {retextMany} после трёх";
+                report.AppendLine($"Пересборка окна {(retextOk ? "ок" : "БЕДА")}: Retext не накапливает " +
+                                  $"контролы ({retextCounts})");
+            }
+            catch (Exception error)
+            {
+                problems++;
+                report.AppendLine("Пересборка окна БЕДА: окно настроек не построилось — " + error.Message);
+            }
+
             using var showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
             using var host = new TrayHost(startHidden: true, showEvent: showEvent, port: options.Port, autoStart: false);
             report.AppendLine(host.SelfTestReport());
@@ -1432,6 +1559,41 @@ internal static class Program
 
         WriteReport(report.ToString(), options.OutPath);
         return 0;
+    }
+
+    /// <summary>
+    /// Сколько контролов в дереве окна. Нужно самопроверке: пересборка окна (<c>Retext</c>)
+    /// не должна накапливать контролы — лишний слой подписей не виден глазом, но вид портит.
+    /// </summary>
+    private static int ControlCount(Control root)
+    {
+        var count = 0;
+        foreach (Control control in root.Controls)
+        {
+            count += 1 + ControlCount(control);
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Одинаковы ли два кадра по пикселям. Нужно самопроверке: значок трея рисуется своей
+    /// тёмной плиткой и обязан быть одним и тем же в светлой и тёмной теме — если он начнёт
+    /// брать цвет из палитры окна, кадры разойдутся.
+    /// </summary>
+    private static bool SameBitmap(Bitmap first, Bitmap second)
+    {
+        if (first.Width != second.Width || first.Height != second.Height) return false;
+
+        for (var y = 0; y < first.Height; y++)
+        {
+            for (var x = 0; x < first.Width; x++)
+            {
+                if (first.GetPixel(x, y) != second.GetPixel(x, y)) return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

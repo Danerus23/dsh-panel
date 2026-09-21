@@ -19,19 +19,20 @@ namespace DshTray;
 /// </summary>
 public sealed class SettingsForm : Form
 {
-    private static readonly Color Muted = Color.FromArgb(110, 110, 110);
-    private static readonly Color Faint = Color.FromArgb(130, 130, 130);
-    private static readonly Color GreenText = Color.FromArgb(21, 128, 61);
-    private static readonly Color AmberText = Color.FromArgb(161, 98, 7);
-
     /// <summary>Коды языков в том же порядке, что и пункты списка.</summary>
     private static readonly string[] LanguageCodes = { "auto", "ru", "en", "zh" };
+
+    /// <summary>Режимы темы в том же порядке, что и пункты списка (три положения).</summary>
+    private static readonly string[] ThemeCodes = { "auto", "light", "dark" };
 
     private readonly AppSettings _settings;
     private readonly AppPaths _paths;
     private readonly PricingUpdateService _pricing;
     private readonly Func<string> _currentWindows;
     private readonly Action<string> _onLanguageChanged;
+
+    /// <summary>Смена темы: панель применяет её к своим окнам и сохраняет настройку.</summary>
+    private readonly Action<string> _onThemeChanged;
 
     /// <summary>Что сделать, когда обновление подготовлено: панель запустит сценарий и закроется.</summary>
     private readonly Action<UpdateDownload> _onUpdateReady;
@@ -67,6 +68,8 @@ public sealed class SettingsForm : Form
     private readonly Label _lblLanguage = new();
     private readonly ComboBox _cmbLanguage = new();
     private readonly Label _lblLanguageHint = new();
+    private readonly Label _lblTheme = new();
+    private readonly ComboBox _cmbTheme = new();
     private readonly Label _lblWorkDir = new();
     private readonly TextBox _txtWorkDir = new();
     private readonly Button _btnWorkDir = new();
@@ -87,7 +90,7 @@ public sealed class SettingsForm : Form
     private readonly ToolTip _envTips = new() { AutoPopDelay = 20000, InitialDelay = 400, ShowAlways = true };
 
     // --- баланс и тариф -----------------------------------------------------
-    private readonly GroupBox _account = new();
+    private readonly Theme.CardPanel _account = new();
     private readonly CheckBox _chkAuto = new();
     private readonly NumericUpDown _numMinutes = new();
     private readonly CheckBox _chkWarn = new();
@@ -95,7 +98,7 @@ public sealed class SettingsForm : Form
     private readonly Label _lblMinutes = new();
     private readonly Label _lblThreshold = new();
 
-    private readonly GroupBox _tariff = new();
+    private readonly Theme.CardPanel _tariff = new();
     private readonly Label _lblWindows = new();
     private readonly CheckBox _chkPeakAuto = new();
     private readonly NumericUpDown _numPeakHours = new();
@@ -120,10 +123,11 @@ public sealed class SettingsForm : Form
     private PricingCheckResult _result;
     private bool _busy;
     private bool _suppressLanguage;
+    private bool _suppressTheme;
 
     public SettingsForm(AppSettings settings, AppPaths paths, PricingUpdateService pricing,
         Func<string> currentWindows, PricingCheckResult pending = null, Action<string> onLanguageChanged = null,
-        Action<UpdateDownload> onUpdateReady = null)
+        Action<UpdateDownload> onUpdateReady = null, Action<string> onThemeChanged = null)
     {
         _settings = settings;
         _paths = paths;
@@ -131,6 +135,7 @@ public sealed class SettingsForm : Form
         _currentWindows = currentWindows;
         _onLanguageChanged = onLanguageChanged;
         _onUpdateReady = onUpdateReady;
+        _onThemeChanged = onThemeChanged;
 
         Text = Loc.T("settings.title");
         FormBorderStyle = FormBorderStyle.Sizable;
@@ -143,13 +148,18 @@ public sealed class SettingsForm : Form
         // обрезала бы у него нижнюю рамку.
         ClientSize = new Size(620, 592);
         MinimumSize = new Size(636, 632);
-        Font = Loc.UiFont(9F);
-        BackColor = Color.White;
+        // Шрифт и цвета — только из темы: своих литералов в этом окне не осталось.
+        Font = Theme.Body;
+        BackColor = Theme.Colors.Window;
         AutoScaleMode = AutoScaleMode.Font;
 
         BuildLayout();
         WireEvents();
         LoadValues(pending);
+
+        // Тема — последней: BuildLayout расставляет роли шрифта и отступы, а Theme.Apply
+        // обходит дерево целиком и приводит цвета, рамки и вид кнопок к одной палитре.
+        Theme.Apply(this);
     }
 
     /// <summary>Пользователь применил новые окна пика.</summary>
@@ -158,7 +168,6 @@ public sealed class SettingsForm : Form
     private void BuildLayout()
     {
         _tabs.Dock = DockStyle.Fill;
-        _tabs.Padding = new Point(12, 6);
         Controls.Add(_tabs);
 
         foreach (var (page, key) in new[]
@@ -170,24 +179,33 @@ public sealed class SettingsForm : Form
                  })
         {
             page.Text = Loc.T(key);
-            page.BackColor = Color.White;
             page.UseVisualStyleBackColor = false;
+            page.BackColor = Theme.Colors.Surface;
+            page.ForeColor = Theme.Colors.Text;
             _tabs.TabPages.Add(page);
         }
+
+        // Вкладки рисуем сами (Theme.Tabs): выбранная — поверхность с акцентной полосой снизу.
+        // Остаётся именно TabControl: от этого зависит обход страниц в --layout-check.
+        Theme.Tabs(_tabs);
 
         // Кнопки окна добавляем до заполнения страниц: панель кнопок отнимает у вкладок
         // высоту, и страницы должны получить уже окончательный размер.
         // --- кнопки окна ---------------------------------------------------
         var buttons = new Panel { Dock = DockStyle.Bottom, Height = 46 };
 
-        var ok = new Button
+        // «Сохранить» — единственное главное действие окна: акцентная заливка и на два пикселя
+        // больше остальных кнопок. Тип PrimaryButton нужен, чтобы Theme.Apply, обходя дерево,
+        // не оформил её как вторичную.
+        var ok = new Theme.PrimaryButton
         {
             Text = Loc.T("settings.save"),
             DialogResult = DialogResult.OK,
             Location = new Point(500, 8),
-            Size = new Size(104, 30),
+            Size = new Size(104, Theme.PrimaryButtonHeight),
             Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
+        Theme.Button(ok, Theme.ButtonKind.Primary);
         ok.Click += (_, _) => ApplyTo(_settings);
         buttons.Controls.Add(ok);
 
@@ -196,9 +214,10 @@ public sealed class SettingsForm : Form
             Text = Loc.T("settings.close"),
             DialogResult = DialogResult.Cancel,
             Location = new Point(390, 8),
-            Size = new Size(100, 30),
+            Size = new Size(100, Theme.ButtonHeight),
             Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
+        Theme.Button(cancel, Theme.ButtonKind.Secondary);
         buttons.Controls.Add(cancel);
 
         buttons.Resize += (_, _) =>
@@ -253,35 +272,55 @@ public sealed class SettingsForm : Form
         _lblLanguage.Size = new Size(220, 20);
         page.Controls.Add(_lblLanguage);
 
+        // Список языков — тот же вид, что и у переключателя темы: оба оформляет Theme.Combo.
         _cmbLanguage.DropDownStyle = ComboBoxStyle.DropDownList;
         _cmbLanguage.Location = new Point(240, 16);
-        _cmbLanguage.Size = new Size(220, 24);
+        _cmbLanguage.Size = new Size(220, Theme.FieldHeight);
         page.Controls.Add(_cmbLanguage);
 
         _lblLanguageHint.Text = Loc.T("settings.language.applies");
-        _lblLanguageHint.ForeColor = Faint;
-        _lblLanguageHint.Location = new Point(240, 44);
-        _lblLanguageHint.Size = new Size(340, 20);
+        _lblLanguageHint.ForeColor = Theme.Colors.Faint;
+        _lblLanguageHint.Font = Theme.Hint;
+        // Подсказка переехала под подпись языка (левая колонка): правая половина этой строки
+        // отдана переключателю темы — обе настройки меняют окно сразу, не дожидаясь «Сохранить»,
+        // и стоят рядом. Так ни одна координата ниже не сдвинулась.
+        _lblLanguageHint.Location = new Point(16, 44);
+        _lblLanguageHint.Size = new Size(220, 20);
         page.Controls.Add(_lblLanguageHint);
+
+        _lblTheme.Text = Loc.T("settings.theme");
+        _lblTheme.Location = new Point(240, 46);
+        _lblTheme.Size = new Size(130, 20);
+        page.Controls.Add(_lblTheme);
+
+        _cmbTheme.DropDownStyle = ComboBoxStyle.DropDownList;
+        _cmbTheme.Location = new Point(378, 42);
+        _cmbTheme.Size = new Size(200, Theme.FieldHeight);
+        page.Controls.Add(_cmbTheme);
 
         _lblWorkDir.Text = Loc.T("settings.workDir");
         _lblWorkDir.Location = new Point(16, 82);
         _lblWorkDir.Size = new Size(220, 20);
         page.Controls.Add(_lblWorkDir);
 
+        _txtWorkDir.BorderStyle = BorderStyle.FixedSingle;
         _txtWorkDir.Location = new Point(240, 78);
-        _txtWorkDir.Size = new Size(230, 24);
+        _txtWorkDir.Size = new Size(230, Theme.FieldHeight);
         page.Controls.Add(_txtWorkDir);
 
+        // Кнопка поднята на 3px: она выросла до высоты кнопки темы (32px) и в прежней строке
+        // задевала подпись под полем.
         _btnWorkDir.Text = Loc.T("settings.browse");
-        _btnWorkDir.Location = new Point(478, 77);
-        _btnWorkDir.Size = new Size(100, 26);
+        _btnWorkDir.Location = new Point(478, 74);
+        _btnWorkDir.Size = new Size(100, Theme.ButtonHeight);
         _btnWorkDir.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        Theme.Button(_btnWorkDir, Theme.ButtonKind.Secondary);
         page.Controls.Add(_btnWorkDir);
 
         _lblWorkDirHint.Text = Loc.T("settings.workDirHint");
-        _lblWorkDirHint.ForeColor = Faint;
-        _lblWorkDirHint.Location = new Point(16, 106);
+        _lblWorkDirHint.ForeColor = Theme.Colors.Faint;
+        _lblWorkDirHint.Font = Theme.Hint;
+        _lblWorkDirHint.Location = new Point(16, 108);
         _lblWorkDirHint.Size = new Size(562, 20);
         _lblWorkDirHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         page.Controls.Add(_lblWorkDirHint);
@@ -295,7 +334,7 @@ public sealed class SettingsForm : Form
         _numPort.Maximum = 65535;
         _numPort.Value = 3080;
         _numPort.Location = new Point(240, 136);
-        _numPort.Size = new Size(90, 24);
+        _numPort.Size = new Size(90, Theme.FieldHeight);
         page.Controls.Add(_numPort);
 
         _lblPortState.Location = new Point(340, 140);
@@ -305,7 +344,8 @@ public sealed class SettingsForm : Form
         page.Controls.Add(new Label
         {
             Text = Loc.T("settings.portChanged"),
-            ForeColor = Faint,
+            ForeColor = Theme.Colors.Faint,
+            Font = Theme.Hint,
             Location = new Point(16, 162),
             Size = new Size(562, 20),
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
@@ -316,8 +356,9 @@ public sealed class SettingsForm : Form
         _lblNodePath.Size = new Size(220, 20);
         page.Controls.Add(_lblNodePath);
 
+        _txtNodePath.BorderStyle = BorderStyle.FixedSingle;
         _txtNodePath.Location = new Point(240, 186);
-        _txtNodePath.Size = new Size(338, 24);
+        _txtNodePath.Size = new Size(338, Theme.FieldHeight);
         _txtNodePath.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         page.Controls.Add(_txtNodePath);
 
@@ -326,13 +367,15 @@ public sealed class SettingsForm : Form
         _lblDshPath.Size = new Size(220, 20);
         page.Controls.Add(_lblDshPath);
 
+        _txtDshPath.BorderStyle = BorderStyle.FixedSingle;
         _txtDshPath.Location = new Point(240, 218);
-        _txtDshPath.Size = new Size(338, 24);
+        _txtDshPath.Size = new Size(338, Theme.FieldHeight);
         _txtDshPath.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         page.Controls.Add(_txtDshPath);
 
         _lblEnvHint.Text = Loc.T("settings.envHint");
-        _lblEnvHint.ForeColor = Faint;
+        _lblEnvHint.ForeColor = Theme.Colors.Faint;
+        _lblEnvHint.Font = Theme.Hint;
         _lblEnvHint.Location = new Point(16, 252);
         _lblEnvHint.Size = new Size(562, 34);
         _lblEnvHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
@@ -340,7 +383,8 @@ public sealed class SettingsForm : Form
 
         _btnCheckEnv.Text = Loc.T("settings.checkEnv");
         _btnCheckEnv.Location = new Point(16, 292);
-        _btnCheckEnv.Size = new Size(180, 30);
+        _btnCheckEnv.Size = new Size(180, Theme.ButtonHeight);
+        Theme.Button(_btnCheckEnv, Theme.ButtonKind.Secondary);
         page.Controls.Add(_btnCheckEnv);
 
         // Строки проверки окружения — по метке на строку: у каждой свой цвет (зелёный — нашлось,
@@ -355,43 +399,51 @@ public sealed class SettingsForm : Form
             line.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             page.Controls.Add(line);
         }
+
+        FillThemes();
     }
 
     private void BuildBalancePage()
     {
         var page = _pageBalance;
 
+        // Карточка вместо серой рамки GroupBox: заголовок рисует сама панель (Theme.CardPanel.Title)
+        // внутри рамки, поэтому содержимое опущено на CardHead — иначе подпись легла бы на
+        // первый флажок. Заголовок — свойство панели, а не метка в y=0: так верхний отступ
+        // карточки остаётся отступом из темы, а не нулём.
+        const int CardHead = 6;
+
         // --- баланс --------------------------------------------------------
-        _account.Text = Loc.T("settings.groupBalance");
+        _account.Title = Loc.T("settings.groupBalance");
         _account.Location = new Point(12, 10);
         _account.Size = new Size(576, 190);
         _account.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         page.Controls.Add(_account);
 
         _chkAuto.Text = Loc.T("settings.autoRefresh");
-        _chkAuto.Location = new Point(16, 26);
+        _chkAuto.Location = new Point(16, 26 + CardHead);
         _chkAuto.Size = new Size(370, 22);
         _account.Controls.Add(_chkAuto);
 
         _lblMinutes.Text = Loc.T("settings.refreshEvery");
-        _lblMinutes.Location = new Point(34, 56);
+        _lblMinutes.Location = new Point(34, 56 + CardHead);
         _lblMinutes.Size = new Size(260, 20);
         _account.Controls.Add(_lblMinutes);
 
         _numMinutes.Minimum = 1;
         _numMinutes.Maximum = 1440;
         _numMinutes.Value = 5;
-        _numMinutes.Location = new Point(300, 52);
-        _numMinutes.Size = new Size(80, 24);
+        _numMinutes.Location = new Point(300, 52 + CardHead);
+        _numMinutes.Size = new Size(80, Theme.FieldHeight);
         _account.Controls.Add(_numMinutes);
 
         _chkWarn.Text = Loc.T("settings.warnLow");
-        _chkWarn.Location = new Point(16, 92);
+        _chkWarn.Location = new Point(16, 92 + CardHead);
         _chkWarn.Size = new Size(370, 22);
         _account.Controls.Add(_chkWarn);
 
         _lblThreshold.Text = Loc.T("settings.threshold");
-        _lblThreshold.Location = new Point(34, 122);
+        _lblThreshold.Location = new Point(34, 122 + CardHead);
         _lblThreshold.Size = new Size(260, 20);
         _account.Controls.Add(_lblThreshold);
 
@@ -400,109 +452,115 @@ public sealed class SettingsForm : Form
         _numThreshold.Maximum = 1_000_000;
         _numThreshold.Increment = 0.5m;
         _numThreshold.Value = 5m;
-        _numThreshold.Location = new Point(300, 118);
-        _numThreshold.Size = new Size(80, 24);
+        _numThreshold.Location = new Point(300, 118 + CardHead);
+        _numThreshold.Size = new Size(80, Theme.FieldHeight);
         _account.Controls.Add(_numThreshold);
 
         _account.Controls.Add(new Label
         {
             Text = Loc.T("settings.thresholdHint"),
-            ForeColor = Faint,
-            Location = new Point(18, 150),
+            ForeColor = Theme.Colors.Faint,
+            Font = Theme.Hint,
+            Location = new Point(18, 150 + CardHead),
             Size = new Size(544, 34),
             Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
         });
 
         // --- тариф и цены --------------------------------------------------
-        _tariff.Text = Loc.T("settings.groupTariff");
+        _tariff.Title = Loc.T("settings.groupTariff");
         _tariff.Location = new Point(12, 206);
         _tariff.Size = new Size(576, 300);
         _tariff.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         page.Controls.Add(_tariff);
 
         _lblWindows.Text = Loc.T("common.dash");
-        _lblWindows.Location = new Point(16, 22);
+        _lblWindows.Location = new Point(16, 22 + CardHead);
         _lblWindows.Size = new Size(544, 34);
         _lblWindows.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         _tariff.Controls.Add(_lblWindows);
 
         _chkPeakAuto.Text = Loc.T("settings.peakAuto");
-        _chkPeakAuto.Location = new Point(16, 60);
+        _chkPeakAuto.Location = new Point(16, 60 + CardHead);
         _chkPeakAuto.Size = new Size(330, 22);
         _tariff.Controls.Add(_chkPeakAuto);
 
         _lblPeakHours.Text = Loc.T("settings.every");
-        _lblPeakHours.ForeColor = Muted;
-        _lblPeakHours.Location = new Point(352, 62);
+        _lblPeakHours.ForeColor = Theme.Colors.Muted;
+        _lblPeakHours.Location = new Point(352, 62 + CardHead);
         _lblPeakHours.Size = new Size(48, 20);
         _tariff.Controls.Add(_lblPeakHours);
 
         _numPeakHours.Minimum = 1;
         _numPeakHours.Maximum = 720;
         _numPeakHours.Value = 24;
-        _numPeakHours.Location = new Point(404, 60);
-        _numPeakHours.Size = new Size(60, 24);
+        _numPeakHours.Location = new Point(404, 60 + CardHead);
+        _numPeakHours.Size = new Size(60, Theme.FieldHeight);
         _tariff.Controls.Add(_numPeakHours);
 
         _lblHoursSuffix.Text = Loc.T("settings.hours");
-        _lblHoursSuffix.ForeColor = Muted;
-        _lblHoursSuffix.Location = new Point(470, 62);
+        _lblHoursSuffix.ForeColor = Theme.Colors.Muted;
+        _lblHoursSuffix.Location = new Point(470, 62 + CardHead);
         _lblHoursSuffix.Size = new Size(40, 20);
         _tariff.Controls.Add(_lblHoursSuffix);
 
         _btnCheck.Text = Loc.T("settings.check");
-        _btnCheck.Location = new Point(16, 90);
-        _btnCheck.Size = new Size(200, 30);
+        _btnCheck.Location = new Point(16, 90 + CardHead);
+        _btnCheck.Size = new Size(200, Theme.ButtonHeight);
+        Theme.Button(_btnCheck, Theme.ButtonKind.Secondary);
         _tariff.Controls.Add(_btnCheck);
 
         _lblChecked.Text = "";
-        _lblChecked.ForeColor = Faint;
+        _lblChecked.ForeColor = Theme.Colors.Faint;
         _lblChecked.TextAlign = ContentAlignment.MiddleRight;
-        _lblChecked.Location = new Point(340, 94);
+        _lblChecked.Location = new Point(340, 96 + CardHead);
         _lblChecked.Size = new Size(220, 22);
         _lblChecked.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _tariff.Controls.Add(_lblChecked);
 
         _lblStatus.Text = Loc.T("settings.status.idle");
-        _lblStatus.Location = new Point(16, 126);
+        _lblStatus.Location = new Point(16, 130 + CardHead);
         _lblStatus.Size = new Size(544, 46);
         _lblStatus.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         _tariff.Controls.Add(_lblStatus);
 
         _btnApply.Text = Loc.T("settings.apply");
-        _btnApply.Location = new Point(16, 176);
-        _btnApply.Size = new Size(140, 30);
+        _btnApply.Location = new Point(16, 180 + CardHead);
+        _btnApply.Size = new Size(140, Theme.ButtonHeight);
         _btnApply.Enabled = false;
+        Theme.Button(_btnApply, Theme.ButtonKind.Secondary);
         _tariff.Controls.Add(_btnApply);
 
         _btnKeep.Text = Loc.T("settings.keep");
-        _btnKeep.Location = new Point(166, 176);
-        _btnKeep.Size = new Size(160, 30);
+        _btnKeep.Location = new Point(166, 180 + CardHead);
+        _btnKeep.Size = new Size(160, Theme.ButtonHeight);
         _btnKeep.Enabled = false;
+        Theme.Button(_btnKeep, Theme.ButtonKind.Secondary);
         _tariff.Controls.Add(_btnKeep);
 
         _tariff.Controls.Add(new Label
         {
             Text = Loc.T("settings.pricesHint"),
-            ForeColor = Muted,
-            Location = new Point(16, 214),
+            ForeColor = Theme.Colors.Muted,
+            Font = Theme.Hint,
+            Location = new Point(16, 220 + CardHead),
             Size = new Size(300, 18),
         });
 
         _btnPricesBig.Text = Loc.T("settings.pricesBig");
-        _btnPricesBig.Location = new Point(420, 208);
-        _btnPricesBig.Size = new Size(140, 26);
+        _btnPricesBig.Location = new Point(420, 208 + CardHead);
+        _btnPricesBig.Size = new Size(140, Theme.ButtonHeight);
         _btnPricesBig.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        Theme.Button(_btnPricesBig, Theme.ButtonKind.Secondary);
         _tariff.Controls.Add(_btnPricesBig);
 
         _txtPrices.Multiline = true;
         _txtPrices.ReadOnly = true;
         _txtPrices.ScrollBars = ScrollBars.Vertical;
-        _txtPrices.BackColor = Color.White;
         _txtPrices.BorderStyle = BorderStyle.FixedSingle;
-        _txtPrices.Font = Loc.UiFont(10F);
-        _txtPrices.Location = new Point(16, 240);
-        _txtPrices.Size = new Size(544, 48);
+        // Колонки прайса читаются только моноширинным шрифтом — это роль Mono из темы.
+        _txtPrices.Font = Theme.Mono9;
+        _txtPrices.Location = new Point(16, 240 + CardHead);
+        _txtPrices.Size = new Size(544, 42);
         _txtPrices.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         _txtPrices.Text = Loc.T("settings.pricesPlaceholder");
         _tariff.Controls.Add(_txtPrices);
@@ -533,7 +591,8 @@ public sealed class SettingsForm : Form
         _lblAboutCopyright.Size = new Size(560, 20);
         page.Controls.Add(_lblAboutCopyright);
 
-        _lblAboutHint.ForeColor = Faint;
+        _lblAboutHint.ForeColor = Theme.Colors.Faint;
+        _lblAboutHint.Font = Theme.Hint;
         _lblAboutHint.Text = Loc.T("about.hint");
         _lblAboutHint.Location = new Point(16, 160);
         _lblAboutHint.Size = new Size(560, 80);
@@ -560,7 +619,8 @@ public sealed class SettingsForm : Form
             // задана (AutoSize = false) — так строка переносится, а проверка вёрстки умеет
             // сверить, хватает ли высоты и не шире ли метки самое длинное слово.
             _lblAboutDonateNote.AutoSize = false;
-            _lblAboutDonateNote.ForeColor = Faint;
+            _lblAboutDonateNote.ForeColor = Theme.Colors.Faint;
+            _lblAboutDonateNote.Font = Theme.Hint;
             _lblAboutDonateNote.Text = Loc.T("about.donateNote");
             _lblAboutDonateNote.Location = new Point(16, 302);
             _lblAboutDonateNote.Size = new Size(560, 60);
@@ -594,7 +654,8 @@ public sealed class SettingsForm : Form
         _lblUpdateGithub.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         page.Controls.Add(_lblUpdateGithub);
 
-        _lblUpdateChecked.ForeColor = Faint;
+        _lblUpdateChecked.ForeColor = Theme.Colors.Faint;
+        _lblUpdateChecked.Font = Theme.Hint;
         _lblUpdateChecked.Location = new Point(16, 72);
         _lblUpdateChecked.Size = new Size(560, 20);
         _lblUpdateChecked.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
@@ -602,22 +663,25 @@ public sealed class SettingsForm : Form
 
         _btnUpdateCheck.Text = Loc.T("update.check");
         _btnUpdateCheck.Location = new Point(16, 102);
-        _btnUpdateCheck.Size = new Size(160, 30);
+        _btnUpdateCheck.Size = new Size(160, Theme.ButtonHeight);
         _btnUpdateCheck.Click += async (_, _) => await CheckUpdatesAsync();
+        Theme.Button(_btnUpdateCheck, Theme.ButtonKind.Secondary);
         page.Controls.Add(_btnUpdateCheck);
 
         _btnUpdateInstall.Text = Loc.T("update.install");
         _btnUpdateInstall.Location = new Point(186, 102);
-        _btnUpdateInstall.Size = new Size(200, 30);
+        _btnUpdateInstall.Size = new Size(200, Theme.ButtonHeight);
         _btnUpdateInstall.Enabled = false;
         _btnUpdateInstall.Click += async (_, _) => await InstallUpdateAsync();
+        Theme.Button(_btnUpdateInstall, Theme.ButtonKind.Secondary);
         page.Controls.Add(_btnUpdateInstall);
 
         _btnUpdatePage.Text = Loc.T("update.openPage");
         _btnUpdatePage.Location = new Point(396, 102);
-        _btnUpdatePage.Size = new Size(180, 30);
+        _btnUpdatePage.Size = new Size(180, Theme.ButtonHeight);
         _btnUpdatePage.Enabled = false;
         _btnUpdatePage.Click += (_, _) => ShowLink(_lastUpdate?.PageUrl ?? _settings.UpdatePageUrl);
+        Theme.Button(_btnUpdatePage, Theme.ButtonKind.Secondary);
         page.Controls.Add(_btnUpdatePage);
 
         _lblUpdateNotes.Text = Loc.T("update.notes");
@@ -628,8 +692,10 @@ public sealed class SettingsForm : Form
         _txtUpdateNotes.Multiline = true;
         _txtUpdateNotes.ReadOnly = true;
         _txtUpdateNotes.ScrollBars = ScrollBars.Vertical;
-        _txtUpdateNotes.BackColor = Color.White;
         _txtUpdateNotes.BorderStyle = BorderStyle.FixedSingle;
+        // Заметки выпуска — текст с разметкой и колонками: роль Mono (оформленный рендер
+        // Markdown — следующая волна, сейчас поле только приведено к палитре и роли).
+        _txtUpdateNotes.Font = Theme.Mono9;
         _txtUpdateNotes.Location = new Point(16, 168);
         // Высота задана числом, а Anchor у неё только верхний: низ поля не тянется вниз.
         // Так подсказка и полоса прогресса под ним не могут оказаться поверх текста ни при
@@ -644,7 +710,8 @@ public sealed class SettingsForm : Form
         // метки и полоса привязаны к низу, поэтому запас не меняется при растягивании окна.
         // Проверяет это --layout-check: подсказка видима, значит её текст измеряется, и
         // CheckOverlaps видит её рядом с полем заметок.
-        _lblUpdateNotesHint.ForeColor = Muted;
+        _lblUpdateNotesHint.ForeColor = Theme.Colors.Muted;
+        _lblUpdateNotesHint.Font = Theme.Hint;
         _lblUpdateNotesHint.Text = Loc.T("update.notesHint");
         _lblUpdateNotesHint.Location = new Point(16, 340);
         _lblUpdateNotesHint.Size = new Size(560, 18);
@@ -659,7 +726,8 @@ public sealed class SettingsForm : Form
         _barUpdate.Visible = false;
         page.Controls.Add(_barUpdate);
 
-        _lblUpdateState.ForeColor = Muted;
+        _lblUpdateState.ForeColor = Theme.Colors.Muted;
+        _lblUpdateState.Font = Theme.Hint;
         _lblUpdateState.Location = new Point(16, 388);
         _lblUpdateState.Size = new Size(560, 60);
         _lblUpdateState.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
@@ -727,12 +795,12 @@ public sealed class SettingsForm : Form
             }
 
             FillUpdates();
-            _lblUpdateState.ForeColor = check.Ok && check.Newer ? AmberText : Muted;
+            _lblUpdateState.ForeColor = check.Ok && check.Newer ? Theme.Colors.Warning : Theme.Colors.Muted;
             _lblUpdateState.Text = check.Summary();
         }
         catch (Exception error)
         {
-            _lblUpdateState.ForeColor = AmberText;
+            _lblUpdateState.ForeColor = Theme.Colors.Warning;
             _lblUpdateState.Text = Loc.T("update.failed", error.Message);
         }
         finally
@@ -764,14 +832,14 @@ public sealed class SettingsForm : Form
 
         if (check == null || !check.Ok)
         {
-            _lblUpdateState.ForeColor = AmberText;
+            _lblUpdateState.ForeColor = Theme.Colors.Warning;
             _lblUpdateState.Text = check?.Summary() ?? Loc.T("update.notChecked");
             return;
         }
 
         if (!check.Newer)
         {
-            _lblUpdateState.ForeColor = Muted;
+            _lblUpdateState.ForeColor = Theme.Colors.Muted;
             _lblUpdateState.Text = Loc.T("update.alreadyLatest");
             return;
         }
@@ -788,12 +856,12 @@ public sealed class SettingsForm : Form
             var download = await Task.Run(() => UpdateService.Prepare(check, _paths, step => BeginInvoke((Action)(() => _lblUpdateState.Text = step))));
             if (!download.Ok)
             {
-                _lblUpdateState.ForeColor = AmberText;
+                _lblUpdateState.ForeColor = Theme.Colors.Warning;
                 _lblUpdateState.Text = Loc.T("update.failed", download.Error);
                 return;
             }
 
-            _lblUpdateState.ForeColor = GreenText;
+            _lblUpdateState.ForeColor = Theme.Colors.Success;
             _lblUpdateState.Text = Loc.T("update.ready", download.Version, download.BackupFolder);
 
             // Панель закрывает и запускает заново уже сценарий обновления.
@@ -801,7 +869,7 @@ public sealed class SettingsForm : Form
         }
         catch (Exception error)
         {
-            _lblUpdateState.ForeColor = AmberText;
+            _lblUpdateState.ForeColor = Theme.Colors.Warning;
             _lblUpdateState.Text = Loc.T("update.failed", error.Message);
         }
         finally
@@ -819,7 +887,7 @@ public sealed class SettingsForm : Form
         UseWaitCursor = busy;
         if (state != null)
         {
-            _lblUpdateState.ForeColor = Muted;
+            _lblUpdateState.ForeColor = Theme.Colors.Muted;
             _lblUpdateState.Text = state;
         }
     }
@@ -842,6 +910,31 @@ public sealed class SettingsForm : Form
         finally
         {
             _suppressLanguage = false;
+        }
+    }
+
+    /// <summary>
+    /// Три положения темы в том же порядке, что и ThemeCodes. Выбор берём из настройки, а не из
+    /// текущей палитры: «как в Windows» и «светлая» в светлой системе дают одинаковый вид, и по
+    /// палитре их не различить — а после смены языка окно пересобирается и обязано показать то,
+    /// что человек выбрал.
+    /// </summary>
+    private void FillThemes()
+    {
+        _suppressTheme = true;
+        try
+        {
+            _cmbTheme.Items.Clear();
+            _cmbTheme.Items.Add(Loc.T("settings.theme.auto"));
+            _cmbTheme.Items.Add(Loc.T("settings.theme.light"));
+            _cmbTheme.Items.Add(Loc.T("settings.theme.dark"));
+
+            var index = Array.IndexOf(ThemeCodes, Theme.ModeTo(Theme.ModeFrom(_settings.ThemeMode)));
+            _cmbTheme.SelectedIndex = index >= 0 ? index : 0;
+        }
+        finally
+        {
+            _suppressTheme = false;
         }
     }
 
@@ -869,9 +962,21 @@ public sealed class SettingsForm : Form
             // который человек уже сделал в полях.
             Retext();
         };
+
+        _cmbTheme.SelectedIndexChanged += (_, _) =>
+        {
+            if (_suppressTheme) return;
+
+            var code = ThemeCodes[Math.Max(0, _cmbTheme.SelectedIndex)];
+
+            // Тема применяется сразу, как и язык: панель переключает палитру и пересобирает своё
+            // окно, а это окно пересобирает себя ниже — иначе о смене узнало бы только оно.
+            _onThemeChanged?.Invoke(code);
+            Retext();
+        };
     }
 
-    /// <summary>Пересобирает окно на новом языке, не теряя выставленные значения.</summary>
+    /// <summary>Пересобирает окно на новом языке или в новой теме, не теряя выставленные значения.</summary>
     public void Retext()
     {
         var auto = _chkAuto.Checked;
@@ -891,11 +996,16 @@ public sealed class SettingsForm : Form
         try
         {
             Text = Loc.T("settings.title");
-            Font = Loc.UiFont(9F);
+            Font = Theme.Body;
             Controls.Clear();
             _pageGeneral.Controls.Clear();
             _pageBalance.Controls.Clear();
             _pageAbout.Controls.Clear();
+            // Карточки чистим вместе со страницами: их содержимое добавляет BuildBalancePage,
+            // и без этого каждая пересборка (смена языка, а теперь и темы) оставляла бы в
+            // карточке ещё один слой тех же подписей — по одной на каждую смену.
+            _account.Controls.Clear();
+            _tariff.Controls.Clear();
             _tabs.TabPages.Clear();
             BuildLayout();
 
@@ -922,6 +1032,10 @@ public sealed class SettingsForm : Form
             }
 
             if (tab >= 0 && tab < _tabs.TabPages.Count) _tabs.SelectedIndex = tab;
+
+            // Тема применяется внутри сборки окна: Retext собирает контролы заново, и без этого
+            // после смены языка вид вернулся бы к системным цветам (отдельный пункт приёмки).
+            Theme.Apply(this);
         }
         finally
         {
@@ -977,17 +1091,17 @@ public sealed class SettingsForm : Form
         if (ours)
         {
             // Держит наша же панель: это не помеха, предупреждать не о чем.
-            _lblPortState.ForeColor = GreenText;
+            _lblPortState.ForeColor = Theme.Colors.Success;
             _lblPortState.Text = Loc.T("settings.portOurs", owner);
         }
         else if (owner > 0)
         {
-            _lblPortState.ForeColor = AmberText;
+            _lblPortState.ForeColor = Theme.Colors.Warning;
             _lblPortState.Text = Loc.T("settings.portBusy", name, owner);
         }
         else
         {
-            _lblPortState.ForeColor = GreenText;
+            _lblPortState.ForeColor = Theme.Colors.Success;
             _lblPortState.Text = Loc.T("settings.portFree");
         }
     }
@@ -1011,12 +1125,12 @@ public sealed class SettingsForm : Form
         {
             var node = AppPaths.Display(NodeLocator.ResolveNode());
             var version = NodeVersion(node);
-            lines.Add(("✓ " + Loc.T(version.Length > 0 ? "env.short.nodeOk" : "env.short.nodeOkNoVersion", version), GreenText));
+            lines.Add(("✓ " + Loc.T(version.Length > 0 ? "env.short.nodeOk" : "env.short.nodeOkNoVersion", version), Theme.Colors.Success));
             details.AppendLine(Loc.T("onboard.env.nodeFound", node));
         }
         catch
         {
-            lines.Add(("• " + Loc.T("env.short.nodeMissing"), AmberText));
+            lines.Add(("• " + Loc.T("env.short.nodeMissing"), Theme.Colors.Warning));
             details.AppendLine(Loc.T("onboard.env.nodeMissing"));
         }
 
@@ -1024,12 +1138,12 @@ public sealed class SettingsForm : Form
         {
             var bin = AppPaths.Display(NodeLocator.ResolveDshBin());
             var version = DshVersion(bin);
-            lines.Add(("✓ " + Loc.T(version.Length > 0 ? "env.short.dshOk" : "env.short.dshOkNoVersion", version), GreenText));
+            lines.Add(("✓ " + Loc.T(version.Length > 0 ? "env.short.dshOk" : "env.short.dshOkNoVersion", version), Theme.Colors.Success));
             details.AppendLine(Loc.T("onboard.env.dshFound", bin));
         }
         catch
         {
-            lines.Add(("• " + Loc.T("env.short.dshMissing"), AmberText));
+            lines.Add(("• " + Loc.T("env.short.dshMissing"), Theme.Colors.Warning));
             details.AppendLine(Loc.T("onboard.env.dshMissing"));
         }
 
@@ -1063,12 +1177,12 @@ public sealed class SettingsForm : Form
           lines.Add((keyFound
                   ? "✓ " + Loc.T("env.short.keyFound")
                   : "• " + Loc.T(filePresent ? "env.short.keyEmpty" : "env.short.keyMissing"),
-              keyFound ? GreenText : Faint));
+              keyFound ? Theme.Colors.Success : Theme.Colors.Faint));
           details.AppendLine(keyFound
               ? Loc.T("env.credentialsFound", credentials)
               : Loc.T(filePresent ? "env.credentialsEmpty" : "balance.keyNotSet") + " (" + credentials + ")");
 
-        lines.Add((Loc.T("env.short.done", DateTime.Now.ToString("HH:mm:ss")), Faint));
+        lines.Add((Loc.T("env.short.done", DateTime.Now.ToString("HH:mm:ss")), Theme.Colors.Faint));
 
         for (var index = 0; index < _envLines.Length; index++)
         {
@@ -1202,7 +1316,7 @@ public sealed class SettingsForm : Form
         _btnCheck.Enabled = false;
         _btnApply.Enabled = false;
         _btnKeep.Enabled = false;
-        _lblStatus.ForeColor = Muted;
+        _lblStatus.ForeColor = Theme.Colors.Muted;
         _lblStatus.Text = Loc.T("settings.checking");
         Refresh();
 
@@ -1215,7 +1329,7 @@ public sealed class SettingsForm : Form
 
         if (!result.Ok)
         {
-            _lblStatus.ForeColor = AmberText;
+            _lblStatus.ForeColor = Theme.Colors.Warning;
             _lblStatus.Text = Loc.T("settings.failed", result.Error)
                               + Environment.NewLine + Loc.T("settings.failedTail");
             return;
@@ -1227,7 +1341,7 @@ public sealed class SettingsForm : Form
         }
         else
         {
-            _lblStatus.ForeColor = GreenText;
+            _lblStatus.ForeColor = Theme.Colors.Success;
             _lblStatus.Text = Loc.T("settings.same", result.FoundText);
             _btnApply.Enabled = false;
             _btnKeep.Enabled = false;
@@ -1238,7 +1352,7 @@ public sealed class SettingsForm : Form
 
     private void ShowPending(PricingCheckResult result)
     {
-        _lblStatus.ForeColor = AmberText;
+        _lblStatus.ForeColor = Theme.Colors.Warning;
         _lblStatus.Text = Loc.T("settings.otherWindows") + Environment.NewLine
                           + Loc.T("settings.nowText", result.CurrentText) + Environment.NewLine
                           + Loc.T("settings.proposed", result.FoundText);
@@ -1254,7 +1368,7 @@ public sealed class SettingsForm : Form
         Applied = true;
         AppLog.Write(_paths, "тариф: " + message);
 
-        _lblStatus.ForeColor = GreenText;
+        _lblStatus.ForeColor = Theme.Colors.Success;
         _lblStatus.Text = message + Environment.NewLine + Loc.T("settings.appliedTail");
         _btnApply.Enabled = false;
         _btnKeep.Enabled = false;
@@ -1265,7 +1379,7 @@ public sealed class SettingsForm : Form
     {
         _btnApply.Enabled = false;
         _btnKeep.Enabled = false;
-        _lblStatus.ForeColor = Muted;
+        _lblStatus.ForeColor = Theme.Colors.Muted;
         _lblStatus.Text = text;
     }
 
@@ -1302,6 +1416,7 @@ public sealed class SettingsForm : Form
     public AppSettings ApplyTo(AppSettings settings)
     {
         settings.Language = LanguageCodes[Math.Max(0, _cmbLanguage.SelectedIndex)];
+        settings.ThemeMode = ThemeCodes[Math.Max(0, _cmbTheme.SelectedIndex)];
         settings.ServerWorkingDir = _txtWorkDir.Text.Trim();
         settings.ServerPort = (int)_numPort.Value;
         settings.NodePath = _txtNodePath.Text.Trim();
