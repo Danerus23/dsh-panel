@@ -261,10 +261,36 @@ public sealed class TrayHost : ApplicationContext
     internal static bool ShouldShowWindowOnStart(bool onboarded, bool isolated) => onboarded && !isolated;
 
     /// <summary>
+    /// Поднимать ли сервер САМОМУ при старте панели. В изолированном прогоне — нет: прогон
+    /// проверки не имеет права занять порт владельца (и уж тем более живой 3080), а если его
+    /// снимут силой, осиротевший <c>node</c> останется держать порт. Явный путь этим предикатом
+    /// не закрыт: <c>--server-start</c> просит сервер прямо, и на нём стоит приёмка
+    /// (<c>tools\acceptance.ps1</c>) — она считает поднятый на своём порту сервер и ссылку входа.
+    /// </summary>
+    internal static bool ShouldAutoStartServer(bool isolated) => !isolated;
+
+    /// <summary>
+    /// Показывать ли окно панели по запросу «покажи окно». Запрос шлёт второй запуск ярлыка
+    /// (тот же <c>DSH_PANEL_INSTANCE</c>), и в изолированном прогоне это не человек, а проверка:
+    /// окна владельцу она не показывает, а пишет строку в журнал. Клик по значку трея остаётся —
+    /// это осознанное действие человека, а не автоматика.
+    /// </summary>
+    internal static bool ShouldShowPanelOnSignal(bool isolated) => !isolated;
+
+    /// <summary>
+    /// Решение двери: показывать ли автоматическое сообщение ЭТОГО вида. Отдельным методом —
+    /// не для красоты: структурный кейс умеет проверить только ссылки, а смысл двери («в
+    /// изолированном прогоне молчит каждый вид») проверяется её ЗНАЧЕНИЕМ, и значение берётся
+    /// отсюда. Ссылок на предикат в двери для этого мало: дверь вида
+    /// <c>ShouldNotify(kind, Autostart.IsIsolatedRun &amp;&amp; NeverTrue())</c> их имеет, а показывает всё.
+    /// </summary>
+    internal static bool DoorDecision(NoticeKind kind) => ShouldNotify(kind, Autostart.IsIsolatedRun);
+
+    /// <summary>
     /// Единственная дверь автоматических сообщений: всё, что панель говорит человеку по своей
-    /// инициативе, идёт через неё, и правило изоляции живёт здесь, а не в семи местах. В
-    /// изолированном прогоне сообщение не показывается, но остаётся в журнале — иначе проверка
-    /// не сможет объяснить, почему панель молчала.
+    /// инициативе, идёт через неё, и правило изоляции живёт в <see cref="DoorDecision"/>, а не в
+    /// семи местах. В изолированном прогоне сообщение не показывается, но остаётся в журнале —
+    /// иначе проверка не сможет объяснить, почему панель молчала.
     ///
     /// Шарики в ответ на действие человека (окно свёрнуто в трей, окна пика только что применены)
     /// через эту дверь не идут: они показываются в ответ на то, что человек сам сделал в этом же
@@ -272,7 +298,7 @@ public sealed class TrayHost : ApplicationContext
     /// </summary>
     private void NotifyBalloon(NoticeKind kind, string title, string text, ToolTipIcon icon, int milliseconds)
     {
-        if (!ShouldNotify(kind, Autostart.IsIsolatedRun))
+        if (!DoorDecision(kind))
         {
             AppLog.Write(_paths, $"сообщение «{title}» не показано (изолированный прогон): {text}");
             return;
@@ -404,7 +430,7 @@ public sealed class TrayHost : ApplicationContext
                 if (!_showEvent.WaitOne()) continue;
                 try
                 {
-                    _form.BeginInvoke(new Action(ShowPanel));
+                    _form.BeginInvoke(new Action(OnShowEventRequested));
                 }
                 catch
                 {
@@ -417,6 +443,24 @@ public sealed class TrayHost : ApplicationContext
             Name = "dsh-tray-show-panel",
         };
         thread.Start();
+    }
+
+    /// <summary>
+    /// Запрос «покажи окно» от второго запуска ярлыка. Отдельным методом — чтобы структурный кейс
+    /// «Гейты ок» видел сам гейт: тело лямбды компилятор переносит в сгенерированный метод, и
+    /// правило на <see cref="StartShowEventThread"/> до предиката бы не добралось. В изолированном
+    /// прогоне запрос не показывается, а пишется строкой в журнал: человек окна не просил.
+    /// </summary>
+    private void OnShowEventRequested()
+    {
+        if (!ShouldShowPanelOnSignal(Autostart.IsIsolatedRun))
+        {
+            AppLog.Write(_paths,
+                "окно панели не показано (изолированный прогон): запрос «покажи окно» от второго запуска");
+            return;
+        }
+
+        ShowPanel();
     }
 
     // --- состояние ---------------------------------------------------------
@@ -715,14 +759,24 @@ public sealed class TrayHost : ApplicationContext
     /// </summary>
     private void MaybeShowOnboarding()
     {
-        if (!ShouldAutoShowOnboarding(Settings.Onboarded, _onboardRequested, Autostart.IsIsolatedRun))
+        var isolated = Autostart.IsIsolatedRun;
+        if (!ShouldAutoShowOnboarding(Settings.Onboarded, _onboardRequested, isolated))
         {
-            // Мастер не показываем ТОЛЬКО тогда, когда его и не просили, и профиль изолирован:
-            // если профиль настоящий, его покажет ветка ниже, а если мастер просили — тоже она.
+            // Подавленное решение обязано оставить след: без строки «панель молчала» неотличимо
+            // от «панель не дошла до мастера». Причина называется честно: в изолированном прогоне
+            // это изоляция, в своём прогоне мастер просто уже пройден.
             if (!Settings.Onboarded && !_onboardRequested)
             {
                 AppLog.Write(_paths, "мастер первой настройки не показан (изолированный прогон): "
                                      + "профиль не пройден, ключа --onboard нет");
+            }
+            else if (isolated)
+            {
+                AppLog.Write(_paths, "мастер первой настройки не показан (изолированный прогон)");
+            }
+            else
+            {
+                AppLog.Write(_paths, "мастер первой настройки не показан: профиль уже пройден");
             }
 
             return;
@@ -742,13 +796,15 @@ public sealed class TrayHost : ApplicationContext
     /// </summary>
     private void ShowPanelOnStart()
     {
-        if (!ShouldShowWindowOnStart(Settings.Onboarded, Autostart.IsIsolatedRun))
+        var isolated = Autostart.IsIsolatedRun;
+        if (!ShouldShowWindowOnStart(Settings.Onboarded, isolated))
         {
-            if (Settings.Onboarded)
-            {
-                AppLog.Write(_paths, "окно панели при старте не показано (изолированный прогон)");
-            }
-
+            // Строка пишется на ЛЮБОЕ подавление, а не только когда мастер уже пройден: прежде
+            // на первом запуске окно не показывалось молча, и «подавленное решение видно в
+            // журнале» было верно лишь для половины случаев.
+            AppLog.Write(_paths, isolated
+                ? "окно панели при старте не показано (изолированный прогон)"
+                : "окно панели при старте не показано: профиль не пройден, откроется мастер");
             return;
         }
 
@@ -1334,15 +1390,24 @@ public sealed class TrayHost : ApplicationContext
         // Как и прежняя панель: если сервера нет — поднимаем его сами.
         // Значения снимаем на потоке интерфейса, работаем — в фоне.
         //
-        // Браузер при этом — единственное, что человек УВИДЕЛ БЫ, не сделав ничего, поэтому он
-        // и глушится в изолированном прогоне. Сам сервер глушить нельзя: приёмка
-        // (tools\acceptance.ps1) считает именно поднятый на её порту сервер и ссылку входа,
-        // а не окно браузера. Граница простая: проверяемое — работает, видимое — молчит.
+        // Автоматический запуск глушится в изолированном прогоне: прогон проверки не имеет права
+        // занять порт владельца (тем более живой 3080) и оставить осиротевший node, если проверка
+        // снимет панель силой. Явный путь — ключ --server-start — не глушится: на нём стоит
+        // приёмка, которая считает поднятый на своём песочном порту сервер и ссылку входа.
+        // Браузер — второе, что человек УВИДЕЛ БЫ, не сделав ничего: он глушится тем же признаком.
+        var isolated = Autostart.IsIsolatedRun;
         var wantsBrowser = !_startHidden && Settings.OpenBrowserOnStart;
-        var openBrowser = wantsBrowser && ShouldAutoOpenBrowser(Autostart.IsIsolatedRun);
+        var openBrowser = wantsBrowser && ShouldAutoOpenBrowser(isolated);
         if (wantsBrowser && !openBrowser)
         {
             AppLog.Write(_paths, "браузер при старте не открыт (изолированный прогон)");
+        }
+
+        if (!ShouldAutoStartServer(isolated))
+        {
+            AppLog.Write(_paths, "сервер при старте не поднят (изолированный прогон): "
+                                 + "автоматический запуск в прогоне проверки запрещён, порт владельца не трогаем");
+            return;
         }
 
         Task.Run(() =>
@@ -1401,6 +1466,10 @@ public sealed class TrayHost : ApplicationContext
         _form.StartPosition = FormStartPosition.Manual;
         _form.Location = new Point(-4000, -4000);
         _form.ShowInTaskbar = false;
+        // Прозрачность, а не одни отрицательные координаты: на конфигурации с монитором слева от
+        // основного виртуальный рабочий стол уходит в минус, и окно в (-4000,-4000) оказалось бы
+        // на экране. Ровно поэтому Opacity = 0 ставит и LayoutCheck.Show.
+        _form.Opacity = 0;
         _form.Show();
         Application.DoEvents();
         Thread.Sleep(250);
@@ -1422,6 +1491,7 @@ public sealed class TrayHost : ApplicationContext
         }
 
         _form.Hide();
+        _form.Opacity = 1;
         _form.StartPosition = previousStart;
         _form.ShowInTaskbar = previousTaskbar;
     }
@@ -1485,6 +1555,10 @@ public sealed class TrayHost : ApplicationContext
         try
         {
             UpdateMenu();
+            // Меню — тоже окно, и на конфигурации с монитором слева оно могло мелькнуть на экране.
+            // У ContextMenuStrip прозрачность включается отдельным признаком AllowTransparency.
+            _menu.AllowTransparency = true;
+            _menu.Opacity = 0;
             _menu.Show(new Point(-4000, -4000));
             Application.DoEvents();
             Thread.Sleep(150);
@@ -1505,6 +1579,8 @@ public sealed class TrayHost : ApplicationContext
         }
         finally
         {
+            _menu.Opacity = 1;
+            _menu.AllowTransparency = false;
             _menu.Close();
         }
     }
@@ -1608,6 +1684,9 @@ public sealed class TrayHost : ApplicationContext
 
     private static void RenderShot(Form dialog, string path)
     {
+        // Прозрачность — по той же причине, что и у снимка панели: одних отрицательных координат
+        // мало на конфигурации с монитором слева от основного (LayoutCheck.Show делает так же).
+        dialog.Opacity = 0;
         dialog.Show();
         Application.DoEvents();
         Thread.Sleep(250);
@@ -1627,6 +1706,7 @@ public sealed class TrayHost : ApplicationContext
         }
 
         dialog.Hide();
+        dialog.Opacity = 1;
     }
 
     private static void Guard(Action action)

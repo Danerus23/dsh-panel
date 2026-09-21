@@ -26,13 +26,23 @@ param([switch]$Fix)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
-$files = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.Extension -in '.ps1', '.iss' -and
-        $_.FullName -notmatch '\\(app|dist|bin|obj|_build|\.git|\.appdata|\.dotnet-home|\.nuget)\\'
+$excluded = '\\(app|dist|bin|obj|_build|\.git|\.appdata|\.dotnet-home|\.nuget)\\'
+$candidates = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in '.ps1', '.iss' }
+
+$files = $candidates | Where-Object { $_.FullName -notmatch $excluded }
+
+# «Нечего проверять» и «всё исключено» — разные беды, и путать их нельзя: под корнем, лежащим
+# внутри _build (клон для независимой проверки), файлы есть, но все они в исключённой папке.
+# Прежнее сообщение «не нашёл ни одного .ps1 или .iss» отправляло искать пропавшие файлы.
+if ($files.Count -eq 0) {
+    if ($candidates.Count -gt 0) {
+        throw ('все файлы исключены: под корнем «' + $root + '» нашлось ' + $candidates.Count +
+               ' файлов .ps1/.iss, но каждый лежит в исключённой папке (app, dist, bin, obj, _build, .git, …) — проверять нечего')
     }
 
-if ($files.Count -eq 0) { throw 'не нашёл ни одного .ps1 или .iss — проверять нечего' }
+    throw ('не нашёл ни одного .ps1 или .iss под корнем «' + $root + '» — проверять нечего')
+}
 
 $utf8Bom = New-Object Text.UTF8Encoding($true)
 $utf8NoBom = New-Object Text.UTF8Encoding($false)
@@ -90,5 +100,7 @@ if ($bad.Count -gt 0) {
     exit 1
 }
 
-Write-Host ('кодировка в порядке: UTF-8 с BOM, CRLF — {0} файлов' -f $files.Count)
+$skipped = $candidates.Count - $files.Count
+Write-Host ('кодировка в порядке: UTF-8 с BOM, CRLF — {0} файлов{1}' -f $files.Count,
+    $(if ($skipped -gt 0) { ' (исключено папок сборки: ' + $skipped + ')' } else { '' }))
 exit 0

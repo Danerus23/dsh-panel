@@ -1092,19 +1092,46 @@ internal static class Program
                               $"(видов {noticeKinds.Length}: молчат {noticeQuiet}, говорят в своём прогоне {noticeLoud})");
 
             // И то же правило — про сам код, а не про намерение: читаем IL собранной панели и
-            // смотрим, из каких методов вызывается ShowBalloonTip. Мимо двери имеют право ходить
-            // только два шарика в ответ на действие человека (свёртывание окна в трей и только что
-            // применённые в «Настройках» окна пика) — без человека они не появляются. Новый
-            // фоновый вызов в обход двери, в каком бы файле он ни появился, провалит этот кейс,
-            // а не тихо дойдёт до владельца.
-            var balloonDoor = new[] { "TrayHost.NotifyBalloon", "TrayHost.HideToTray", "TrayHost.OpenSettings" };
+            // смотрим, из каких методов вызывается ShowBalloonTip.
+            //
+            // Дверь определяется НАМЕРЕНИЕМ, а не именем: дверью считается любой метод, который
+            // зовёт шарик и при этом спрашивает решение двери (TrayHost.DoorDecision). Так перенос
+            // и переименование двери — улучшение, а не поломка, — кейс не валит, а шарик в обход
+            // решения валит всегда. Кроме двери право звать ShowBalloonTip есть только у шариков
+            // в ответ на действие человека (свёртывание окна в трей и только что применённые окна
+            // пика): без человека они не появляются, поэтому это allow-list, который разрешено
+            // сокращать (провести такой шарик через дверь — улучшение, и кейс молчит).
+            var interactiveBalloons = new[] { "TrayHost.HideToTray", "TrayHost.OpenSettings" };
             var balloonSites = BalloonCallSites();
-            var balloonStray = balloonSites.Where(name => !balloonDoor.Contains(name)).Distinct().ToList();
-            var balloonsOk = balloonDoor.All(name => balloonSites.Contains(name)) && balloonStray.Count == 0;
+            var balloonDoors = balloonSites
+                .Where(name => name == "TrayHost.NotifyBalloon" || CallsDoorDecision(name))
+                .Distinct().ToList();
+            var balloonStray = balloonSites
+                .Where(name => !balloonDoors.Contains(name) && !interactiveBalloons.Contains(name))
+                .Distinct().ToList();
+            var balloonsOk = balloonDoors.Count > 0 && balloonStray.Count == 0;
             if (!balloonsOk) problems++;
-            report.AppendLine($"Шарики {(balloonsOk ? "ок" : "БЕДА")}: дверь одна — " +
-                              $"ShowBalloonTip зовут {string.Join(", ", balloonSites.Distinct())}" +
-                              (balloonStray.Count > 0 ? $"; мимо двери: {string.Join(", ", balloonStray)}" : ""));
+            report.AppendLine($"Шарики {(balloonsOk ? "ок" : "БЕДА")}: дверь — " +
+                              $"{string.Join(", ", balloonDoors)}" +
+                              $"; ShowBalloonTip зовут {string.Join(", ", balloonSites.Distinct())}" +
+                              (balloonStray.Count > 0 ? $"; мимо двери: {string.Join(", ", balloonStray)}" : "") +
+                              (balloonDoors.Count == 0
+                                  ? "; дверь не найдена: ни один шарик не идёт через TrayHost.DoorDecision"
+                                  : ""));
+
+            // Сервер при старте и окно по запросу второго запуска — две автоматические дороги к
+            // владельцу, которые изолированный прогон обязан закрыть: прогон проверки не занимает
+            // порт владельца и не кладёт окно на его рабочий стол. Явный путь к серверу
+            // (--server-start) этими предикатами не закрыт — на нём стоит приёмка.
+            var serverOwn = TrayHost.ShouldAutoStartServer(isolated: false);
+            var serverIsolated = TrayHost.ShouldAutoStartServer(isolated: true);
+            var signalOwn = TrayHost.ShouldShowPanelOnSignal(isolated: false);
+            var signalIsolated = TrayHost.ShouldShowPanelOnSignal(isolated: true);
+            var startupOk = serverOwn && !serverIsolated && signalOwn && !signalIsolated;
+            if (!startupOk) problems++;
+            report.AppendLine($"Автоматика старта {(startupOk ? "ок" : "БЕДА")}: " +
+                              $"сервер — своему прогону {serverOwn}, изолированному {serverIsolated}; " +
+                              $"окно по запросу второго запуска — своему {signalOwn}, изолированному {signalIsolated}");
 
             // Мастер первой настройки: четыре сочетания «прошёл / просили / изоляция» разворачиваются
             // в восемь проверок, и у каждого своё решение. Модальное окно мастера в изолированном
@@ -1157,47 +1184,104 @@ internal static class Program
                               $"изолированному {windowIsolated}, первому запуску в изоляции {windowFirstRunIsolated}");
 
             // Признак изоляции проверяется НА САМОМ ДЕЛЕ, а не литералом: кейс сам выставляет и
-            // снимает четыре переменные и смотрит, что Autostart.IsIsolatedRun это видит, а правило
-            // двери спрашивает именно его. Без этого зелёными проходили две поломки: сужение
-            // признака (выброшена ветка DSH_PANEL_RUN_KEY — ровно то, что чинила партия) и дверь,
-            // переставшая спрашивать изоляцию.
-            var isolateNames = new[]
+            // снимает КАЖДУЮ переменную признака и смотрит, что Autostart.IsIsolatedRun это видит, а
+            // ДВЕРЬ молчит. Дверь проверяется значением (TrayHost.DoorDecision), а не ссылкой на
+            // предикат: дверь вида ShouldNotify(kind, IsIsolatedRun && NeverTrue()) ссылки имеет,
+            // а показывает всё — ровно такая поломка проходила зелёной.
+            //
+            // Перечень держится ЛИТЕРАЛОМ — это документированный набор (красная линия №2 в
+            // AGENTS.md и таблица подмен в docs\DEVELOPMENT.md) — и сверяется с признаком. Перебор
+            // по самому признаку этого не поймал бы: сузят признак (выбросят DSH_HOME — ровно то,
+            // что чинила эта партия) — сузится и перебор, и кейс останется зелёным. Появилась новая
+            // подмена — сверка покраснеет и заставит дописать её сюда и в документацию.
+            var documentedIsolation = new[]
             {
-                "DSH_PANEL_DATA", "DSH_PANEL_STATE", "DSH_PANEL_INSTANCE", "DSH_PANEL_RUN_KEY",
+                "DSH_PANEL_DATA", "DSH_PANEL_STATE", "DSH_PANEL_SSH_DIR", "DSH_TRAY_BACKUP",
+                "DSH_HOME", "DSH_PANEL_LEGACY_DATA", "DSH_PANEL_INSTANCE", "DSH_PANEL_RUN_KEY",
+                "DSH_PANEL_NO_MIGRATE",
             };
-            var isolateSaved = isolateNames
+            var isolateNames = documentedIsolation;
+            // Подмены «на один прогон», которые изоляцией НЕ считаются: ими пользуется человек
+            // (свой Node, свой язык, своя страница цен), их называет README, и по ним глушить окна
+            // и шарики нельзя. Проверяем и это — иначе предохранитель однажды расширят «на всякий
+            // случай» и панель замолчит у человека с переносимым Node.
+            var notIsolation = new[]
+            {
+                "DSH_PANEL_LANG", "DSH_TRAY_PRICING", "DSH_PANEL_API", "DSH_PANEL_REPO",
+                "DSH_TRAY_NODE", "DSH_TRAY_BIN",
+            };
+            var isolateAll = isolateNames.Concat(notIsolation).ToArray();
+            var isolateSaved = isolateAll
                 .Select(name => (Name: name, Value: Environment.GetEnvironmentVariable(name)))
                 .ToList();
             var isolateNotes = new List<string>();
             var isolateOk = true;
 
+            // Признак обязан считать ровно документированный набор — ни больше, ни меньше.
+            var markerExtra = Autostart.IsolationOverrideNames.Except(isolateNames).ToList();
+            var markerMissing = isolateNames.Except(Autostart.IsolationOverrideNames).ToList();
+            var markerMatchesDocs = markerExtra.Count == 0 && markerMissing.Count == 0;
+            isolateOk &= markerMatchesDocs;
+            isolateNotes.Add(markerMatchesDocs
+                ? "набор признака совпадает с документированным"
+                : "набор признака разошёлся с документированным: лишние " +
+                  string.Join(", ", markerExtra) + "; пропали " + string.Join(", ", markerMissing));
+
+            void ClearIsolation()
+            {
+                foreach (var name in isolateAll) Environment.SetEnvironmentVariable(name, null);
+            }
+
             try
             {
                 foreach (var name in isolateNames)
                 {
-                    foreach (var other in isolateNames) Environment.SetEnvironmentVariable(other, null);
+                    ClearIsolation();
                     Environment.SetEnvironmentVariable(name, "1");
 
                     var seen = Autostart.IsIsolatedRun;
-                    // То же правило — через саму дверь, и с признаком, посчитанным из окружения:
-                    // это и ловит дверь, переставшую спрашивать изоляцию.
-                    var quiet = noticeKinds.All(kind => !TrayHost.ShouldNotify(kind, Autostart.IsIsolatedRun));
-                    isolateOk &= seen && quiet;
-                    isolateNotes.Add($"{name}: {seen}");
+                    // Дверь — тем же признаком, посчитанным из окружения: кейс ловит и признак,
+                    // переставший видеть переменную, и дверь, переставшую эту переменную слушать.
+                    // Про молчание двери пишем только когда оно нарушено: иначе строка отчёта
+                    // распухает так, что причину «БЕДА» в ней не найти.
+                    var quiet = noticeKinds.All(kind => !TrayHost.DoorDecision(kind));
+                    // Заодно признак «прогон проверки»: по нему панель вообще не пишет в настоящий
+                    // HKCU\...\Run. Единственное исключение — уведённая ветка реестра: с ней починку
+                    // упражняет check-autostart, и там запись править как раз можно.
+                    var checkRun = Autostart.IsCheckRun;
+                    var checkRunOk = checkRun == (name != "DSH_PANEL_RUN_KEY");
+                    isolateOk &= seen && quiet && checkRunOk;
+                    isolateNotes.Add($"{name}: признак {seen}" + (quiet ? "" : ", дверь ГОВОРИТ")
+                                     + (checkRunOk ? "" : $", прогон проверки {checkRun}"));
                 }
 
-                foreach (var name in isolateNames) Environment.SetEnvironmentVariable(name, null);
+                ClearIsolation();
                 var none = Autostart.IsIsolatedRun;
-                var loud = noticeKinds.All(kind => TrayHost.ShouldNotify(kind, Autostart.IsIsolatedRun));
+                var loud = noticeKinds.All(kind => TrayHost.DoorDecision(kind));
+
+                // Подмены на один прогон: признак их не видит, и панель у такого человека говорит.
+                var declared = new List<string>();
+                foreach (var name in notIsolation)
+                {
+                    ClearIsolation();
+                    Environment.SetEnvironmentVariable(name, "1");
+
+                    var counted = Autostart.IsIsolatedRun;
+                    var speaks = noticeKinds.All(kind => TrayHost.DoorDecision(kind));
+                    isolateOk &= !counted && speaks;
+                    declared.Add($"{name}: {counted}" + (speaks ? "" : ", дверь МОЛЧИТ"));
+                }
 
                 // Значение из пробелов признаком не считается: пустую строку в окружении получить
                 // легко, и она не должна глушить панель у человека.
+                ClearIsolation();
                 Environment.SetEnvironmentVariable("DSH_PANEL_DATA", "   ");
                 var spaces = Autostart.IsIsolatedRun;
 
                 isolateOk &= !none && loud && !spaces;
-                isolateNotes.Add($"нет переменных: {none}");
+                isolateNotes.Add($"нет переменных: {none}" + (loud ? "" : ", дверь МОЛЧИТ"));
                 isolateNotes.Add($"пробелы: {spaces}");
+                isolateNotes.Add("на один прогон не считаются: " + string.Join(", ", declared));
             }
             finally
             {
@@ -1207,20 +1291,27 @@ internal static class Program
             }
 
             if (!isolateOk) problems++;
-            report.AppendLine($"Изоляция {(isolateOk ? "ок" : "БЕДА")}: признак виден по каждой переменной, " +
-                              $"дверь спрашивает его ({string.Join(", ", isolateNotes)})");
+            report.AppendLine($"Изоляция {(isolateOk ? "ок" : "БЕДА")}: признак виден по каждой из " +
+                              $"{isolateNames.Length} переменных, дверь молчит по значению " +
+                              $"({string.Join(", ", isolateNotes)})");
 
             // Предикат бесполезен, если решение его не спрашивает. Кейс читает IL самих решающих
             // методов и требует, чтобы каждый звал СВОЙ предикат и общий признак изоляции. Так
             // ловится то, что до сих пор проходило зелёным на одних литералах: дверь шариков,
             // переставшая спрашивать изоляцию (ShouldNotify(kind, false)), снятый гейт мастера,
-            // браузер без проверки.
-            var gateRules = new (string Owner, string Predicate)[]
+            // браузер без проверки, а теперь и самозапуск сервера.
+            //
+            // Дверь изоляцию сама не читает: её читает решение двери (OwnIsolation = false у двери,
+            // true у DoorDecision) — правило одно, и живёт оно в одном месте.
+            var gateRules = new (string Owner, string Predicate, bool OwnIsolation)[]
             {
-                ("NotifyBalloon", "TrayHost.ShouldNotify"),
-                ("MaybeShowOnboarding", "TrayHost.ShouldAutoShowOnboarding"),
-                ("ShowPanelOnStart", "TrayHost.ShouldShowWindowOnStart"),
-                ("StartInitialServer", "TrayHost.ShouldAutoOpenBrowser"),
+                ("NotifyBalloon", "TrayHost.DoorDecision", false),
+                ("DoorDecision", "TrayHost.ShouldNotify", true),
+                ("MaybeShowOnboarding", "TrayHost.ShouldAutoShowOnboarding", true),
+                ("ShowPanelOnStart", "TrayHost.ShouldShowWindowOnStart", true),
+                ("OnShowEventRequested", "TrayHost.ShouldShowPanelOnSignal", true),
+                ("StartInitialServer", "TrayHost.ShouldAutoOpenBrowser", true),
+                ("StartInitialServer", "TrayHost.ShouldAutoStartServer", true),
             };
 
             var gateProblems = new List<string>();
@@ -1239,7 +1330,7 @@ internal static class Program
                     gateProblems.Add(rule.Owner + " не спрашивает " + rule.Predicate);
                 }
 
-                if (!references.Contains("Autostart.IsIsolatedRun"))
+                if (rule.OwnIsolation && !references.Contains("Autostart.IsIsolatedRun"))
                 {
                     gateProblems.Add(rule.Owner + " не спрашивает изоляцию");
                 }
@@ -1252,10 +1343,18 @@ internal static class Program
                                && MethodReferences(method).Contains("TrayHost.MaybeShowOnboarding"));
             if (!onboardingReachable) gateProblems.Add("MaybeShowOnboarding: никто не зовёт — мастер недостижим");
 
+            // Дверь обязана быть достижима ровно так же: решение, которое никто не зовёт, молчит
+            // «само по себе», а не потому, что изоляция.
+            var doorReachable = typeof(TrayHost).Assembly.GetTypes()
+                .SelectMany(DeclaredMethods)
+                .Any(method => method.Name != "DoorDecision"
+                               && MethodReferences(method).Contains("TrayHost.DoorDecision"));
+            if (!doorReachable) gateProblems.Add("DoorDecision: никто не зовёт — дверь недостижима");
+
             var gatesOk = gateProblems.Count == 0;
             if (!gatesOk) problems++;
             report.AppendLine($"Гейты {(gatesOk ? "ок" : "БЕДА")}: решение спрашивают " +
-                              $"({string.Join(", ", gateRules.Select(rule => rule.Owner))})" +
+                              $"({string.Join(", ", gateRules.Select(rule => rule.Owner).Distinct())})" +
                               (gatesOk ? "" : " — " + string.Join("; ", gateProblems)));
 
             var icons = new[] { ServerVisual.Running, ServerVisual.Stopped, ServerVisual.BusyOther };
@@ -1264,6 +1363,62 @@ internal static class Program
                 using var icon = TrayIconFactory.Create(visual, true, 32);
                 using var offPeak = TrayIconFactory.Create(visual, false, 32);
                 report.AppendLine($"Иконка {visual}: {icon.Size.Width}px (пик) и {offPeak.Size.Width}px (вне пика) — ок");
+            }
+
+            // Оформление (1.22.0): палитра обязана быть полной, а контраст — достаточным
+            // в обеих темах. Порог 4,5 (WCAG AA) — для текста, 1,2 — для рамки: она должна
+            // быть видна, а не читаться. Перебираем обе палитры через Theme.PaletteFor, а не
+            // текущую тему: тёмную включает настройка, и без перебора она осталась бы
+            // непроверенной. Пары цветов взяты там, где они действительно встречаются: текст
+            // и подписи на окне, на карточке и на полосе, текст главной кнопки на акценте,
+            // цвета состояния на карточке, рамка на карточке.
+            string Number(double value) =>
+                value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+
+            foreach (var dark in new[] { false, true })
+            {
+                var palette = Theme.PaletteFor(dark);
+                var theme = dark ? "тёмная" : "светлая";
+
+                // Роль без цвета — это дырка в палитре: окно, которое её попросит, нарисует
+                // чёрное или прозрачное пятно вместо цвета темы.
+                var undefined = typeof(Theme.Palette).GetProperties()
+                    .Where(role => role.GetValue(palette) is Color color && (color.IsEmpty || color.A != 255))
+                    .Select(role => role.Name)
+                    .ToList();
+
+                // Надпись главной кнопки: Theme.Button берёт в тёмной теме цвет окна вместо
+                // белого — сверяем ровно тот цвет, который она и нарисует.
+                var onAccent = dark ? palette.Window : Color.White;
+
+                var checks = new (string What, double Ratio, double Need)[]
+                {
+                    ("текст на окне", Theme.Contrast(palette.Text, palette.Window), 4.5),
+                    ("текст на карточке", Theme.Contrast(palette.Text, palette.Surface), 4.5),
+                    ("текст на полосе", Theme.Contrast(palette.Text, palette.SurfaceAlt), 4.5),
+                    ("подпись на карточке", Theme.Contrast(palette.Muted, palette.Surface), 4.5),
+                    ("текст главной кнопки на акценте", Theme.Contrast(onAccent, palette.Accent), 4.5),
+                    ("«работает» на карточке", Theme.Contrast(palette.Success, palette.Surface), 4.5),
+                    ("предупреждение на карточке", Theme.Contrast(palette.Warning, palette.Surface), 4.5),
+                    ("ошибка на карточке", Theme.Contrast(palette.Danger, palette.Surface), 4.5),
+                    ("рамка на карточке", Theme.Contrast(palette.Border, palette.Surface), 1.2),
+                };
+
+                var failed = checks.Where(check => check.Ratio < check.Need)
+                    .Select(check => $"«{check.What}» {Number(check.Ratio)} (нужно {Number(check.Need)})")
+                    .ToList();
+
+                // «Хуже всего» — по запасу до порога (отношение к порогу), а не по самому
+                // маленькому числу: у рамки порог свой, и 1,24 несравнимо с 4,5.
+                var worst = checks.OrderBy(check => check.Ratio / check.Need).First();
+                var contrastOk = undefined.Count == 0 && failed.Count == 0;
+                if (!contrastOk) problems++;
+
+                report.AppendLine($"Оформление {(contrastOk ? "ок" : "БЕДА")}: палитра {theme} — " +
+                                  $"ролей {typeof(Theme.Palette).GetProperties().Length}, проверок {checks.Length}, " +
+                                  $"хуже всего «{worst.What}» {Number(worst.Ratio)} (порог {Number(worst.Need)})" +
+                                  (undefined.Count > 0 ? ", роли без цвета: " + string.Join(", ", undefined) : "") +
+                                  (failed.Count > 0 ? ", мало контраста: " + string.Join("; ", failed) : ""));
             }
 
             using var showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
@@ -1328,6 +1483,25 @@ internal static class Program
     /// в этом случае имя метода обычная строка, а не ссылка; что кейс гарантирует, а что нет,
     /// сказано в docs\DEVELOPMENT.md.
     /// </summary>
+    /// <summary>
+    /// Спрашивает ли метод панели с именем «Тип.Метод» решение двери (<c>TrayHost.DoorDecision</c>).
+    /// Так дверь узнаётся по намерению, а не по имени: правило «все автоматические шарики идут
+    /// через дверь» остаётся верным и после переноса или переименования двери.
+    /// </summary>
+    private static bool CallsDoorDecision(string name)
+    {
+        foreach (var type in typeof(TrayHost).Assembly.GetTypes())
+        {
+            foreach (var method in DeclaredMethods(type))
+            {
+                if (type.Name + "." + method.Name != name) continue;
+                return MethodReferences(method).Contains("TrayHost.DoorDecision");
+            }
+        }
+
+        return false;
+    }
+
     private static List<string> BalloonCallSites()
     {
         const string balloon = "NotifyIcon.ShowBalloonTip";

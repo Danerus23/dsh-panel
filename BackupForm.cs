@@ -11,12 +11,6 @@ namespace DshTray;
 /// </summary>
 public sealed class BackupForm : Form
 {
-    private static readonly Color Muted = Color.FromArgb(110, 110, 110);
-    private static readonly Color Faint = Color.FromArgb(130, 130, 130);
-    private static readonly Color GreenText = Color.FromArgb(21, 128, 61);
-    private static readonly Color AmberText = Color.FromArgb(161, 98, 7);
-    private static readonly Color RedText = Color.FromArgb(185, 28, 28);
-
     private readonly AppSettings _settings;
     private readonly AppPaths _paths;
     private readonly BackupService _backups;
@@ -74,38 +68,64 @@ public sealed class BackupForm : Form
 
         // Окно нарочно просторное: в прежнем размере кнопки внизу налезали друг на друга,
         // а подписи в группах стояли вплотную.
-        ClientSize = new Size(640, 700);
-        MinimumSize = new Size(656, 740);
-        Font = Loc.UiFont(9F);
-        BackColor = Color.White;
+        ClientSize = new Size(640, 750);
+        MinimumSize = new Size(656, 790);
+        Font = Theme.Body;
+        BackColor = Theme.Colors.Window;
         AutoScaleMode = AutoScaleMode.Font;
 
         BuildLayout();
+        Theme.Apply(this);
         LoadValues();
     }
 
     // --- вид ---------------------------------------------------------------
 
+    /// <summary>
+    /// Карточка раздела: вместо серой рамки <c>GroupBox</c> — <see cref="Theme.CardPanel"/>
+    /// с заголовком ролью <c>Heading</c>. Заголовок внутри карточки, поэтому все её элементы
+    /// опускаются на <c>CardHead</c>.
+    /// </summary>
+    private const int CardHead = 26;
+
+    private Theme.CardPanel Card(string caption, Point location, Size size, AnchorStyles anchor)
+    {
+        var card = new Theme.CardPanel
+        {
+            Location = location,
+            Size = size,
+            Anchor = anchor,
+        };
+
+        card.Controls.Add(new Label
+        {
+            Text = caption,
+            Font = Theme.Heading,
+            ForeColor = Theme.Colors.Text,
+            Location = new Point(12, 12),
+            Size = new Size(size.Width - 24, 20),
+        });
+
+        Controls.Add(card);
+        return card;
+    }
+
     private void BuildLayout()
     {
+        var stretch = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        var stretchDown = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+
         // --- когда и что ---------------------------------------------------
-        var when = new GroupBox
-        {
-            Text = Loc.T("backup.groupWhen"),
-            Location = new Point(12, 10),
-            Size = new Size(616, 178),
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-        };
-        Controls.Add(when);
+        var when = Card(Loc.T("backup.groupWhen"), new Point(12, 12), new Size(616, 186), stretch);
 
         _chkAuto.Text = Loc.T("backup.auto");
-        _chkAuto.Location = new Point(16, 26);
+        _chkAuto.Location = new Point(12, CardHead + 12);
         _chkAuto.Size = new Size(300, 22);
         when.Controls.Add(_chkAuto);
 
         _lblEvery.Text = Loc.T("settings.every");
-        _lblEvery.ForeColor = Muted;
-        _lblEvery.Location = new Point(322, 28);
+        _lblEvery.ForeColor = Theme.Colors.Muted;
+        _lblEvery.Location = new Point(322, CardHead + 14);
         _lblEvery.Size = new Size(42, 20);
         _lblEvery.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         when.Controls.Add(_lblEvery);
@@ -113,171 +133,158 @@ public sealed class BackupForm : Form
         _numHours.Minimum = 1;
         _numHours.Maximum = 720;
         _numHours.Value = 24;
-        _numHours.Location = new Point(366, 26);
-        _numHours.Size = new Size(60, 24);
+        _numHours.Location = new Point(366, CardHead + 12);
+        _numHours.Size = new Size(60, 26);
         _numHours.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         when.Controls.Add(_numHours);
 
         _lblHours.Text = Loc.T("settings.hours");
-        _lblHours.ForeColor = Muted;
-        _lblHours.Location = new Point(432, 28);
+        _lblHours.ForeColor = Theme.Colors.Muted;
+        _lblHours.Location = new Point(432, CardHead + 14);
         _lblHours.Size = new Size(48, 20);
         _lblHours.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         when.Controls.Add(_lblHours);
 
         _chkEngine.Text = Loc.T("backup.withEngine");
-        _chkEngine.Location = new Point(16, 56);
-        _chkEngine.Size = new Size(540, 22);
-        _chkEngine.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _chkEngine.Location = new Point(12, CardHead + 42);
+        _chkEngine.Size = new Size(580, 22);
+        _chkEngine.Anchor = stretch;
         when.Controls.Add(_chkEngine);
 
         _chkSessions.Text = Loc.T("backup.withSessions");
-        _chkSessions.Location = new Point(16, 82);
+        _chkSessions.Location = new Point(12, CardHead + 68);
         _chkSessions.Size = new Size(400, 22);
         when.Controls.Add(_chkSessions);
 
         _lblKeep.Text = Loc.T("backup.keepPrefix");
-        _lblKeep.ForeColor = Muted;
-        _lblKeep.Location = new Point(16, 112);
+        _lblKeep.ForeColor = Theme.Colors.Muted;
+        _lblKeep.Location = new Point(12, CardHead + 96);
         _lblKeep.Size = new Size(120, 20);
         when.Controls.Add(_lblKeep);
 
         _numKeep.Minimum = 1;
         _numKeep.Maximum = 100;
         _numKeep.Value = 5;
-        _numKeep.Location = new Point(140, 110);
-        _numKeep.Size = new Size(60, 24);
+        _numKeep.Location = new Point(140, CardHead + 94);
+        _numKeep.Size = new Size(60, 26);
         when.Controls.Add(_numKeep);
 
         _lblKeepSuffix.Text = Loc.T("backup.keepSuffix");
-        _lblKeepSuffix.ForeColor = Muted;
-        _lblKeepSuffix.Location = new Point(206, 112);
+        _lblKeepSuffix.ForeColor = Theme.Colors.Muted;
+        _lblKeepSuffix.Location = new Point(206, CardHead + 96);
         _lblKeepSuffix.Size = new Size(200, 20);
         when.Controls.Add(_lblKeepSuffix);
 
         when.Controls.Add(new Label
         {
             Text = Loc.T("backup.secretHint"),
-            ForeColor = AmberText,
-            Location = new Point(16, 140),
-            Size = new Size(544, 22),
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+            ForeColor = Theme.Colors.Warning,
+            Location = new Point(12, CardHead + 122),
+            Size = new Size(592, 22),
+            Anchor = stretch,
         });
 
         // --- куда ----------------------------------------------------------
-        var where = new GroupBox
-        {
-            Text = Loc.T("backup.groupWhere"),
-            Location = new Point(12, 196),
-            Size = new Size(616, 136),
-            Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
-        };
-        Controls.Add(where);
+        var where = Card(Loc.T("backup.groupWhere"), new Point(12, 222), new Size(616, 150), stretch);
 
         where.Controls.Add(new Label
         {
             Text = Loc.T("backup.folder"),
-            Location = new Point(16, 28),
+            Location = new Point(12, CardHead + 14),
             Size = new Size(96, 20),
         });
 
         _txtFolder.ReadOnly = true;
-        _txtFolder.BackColor = Color.White;
-        _txtFolder.Location = new Point(114, 26);
-        _txtFolder.Size = new Size(248, 24);
-        _txtFolder.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _txtFolder.Location = new Point(114, CardHead + 12);
+        _txtFolder.Size = new Size(248, 26);
+        _txtFolder.Anchor = stretch;
         where.Controls.Add(_txtFolder);
 
         var pickFolder = new Button
         {
             Text = Loc.T("backup.change"),
-            Location = new Point(370, 25),
-            Size = new Size(92, 26),
+            Location = new Point(370, CardHead + 12),
+            Size = new Size(92, 32),
             Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
         pickFolder.Click += (_, _) => PickFolder();
         where.Controls.Add(pickFolder);
 
         _btnOpen.Text = Loc.T("backup.open");
-        _btnOpen.Location = new Point(470, 25);
-        _btnOpen.Size = new Size(90, 26);
+        _btnOpen.Location = new Point(470, CardHead + 12);
+        _btnOpen.Size = new Size(90, 32);
         _btnOpen.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _btnOpen.Click += (_, _) => OpenFolder();
         where.Controls.Add(_btnOpen);
 
         _chkKeys.Text = Loc.T("onboard.keys.enable");
-        _chkKeys.Location = new Point(16, 60);
+        _chkKeys.Location = new Point(12, CardHead + 46);
         _chkKeys.Size = new Size(420, 22);
         _chkKeys.CheckedChanged += (_, _) => SyncKeysHint();
         where.Controls.Add(_chkKeys);
 
         _btnAddKeyDir.Text = Loc.T("backup.addKeyDir");
-        _btnAddKeyDir.Location = new Point(446, 59);
-        _btnAddKeyDir.Size = new Size(114, 26);
+        _btnAddKeyDir.Location = new Point(446, CardHead + 46);
+        _btnAddKeyDir.Size = new Size(114, 32);
         _btnAddKeyDir.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _btnAddKeyDir.Click += (_, _) => AddKeyDirectory();
         where.Controls.Add(_btnAddKeyDir);
 
-        _lblKeysHint.ForeColor = Faint;
-        _lblKeysHint.Location = new Point(16, 86);
-        _lblKeysHint.Size = new Size(544, 42);
-        _lblKeysHint.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _lblKeysHint.ForeColor = Theme.Colors.Faint;
+        _lblKeysHint.Location = new Point(12, CardHead + 82);
+        _lblKeysHint.Size = new Size(592, 40);
+        _lblKeysHint.Anchor = stretch;
         where.Controls.Add(_lblKeysHint);
 
         // --- список --------------------------------------------------------
-        var listBox = new GroupBox
-        {
-            Text = Loc.T("backup.groupList"),
-            Location = new Point(12, 340),
-            Size = new Size(616, 226),
-            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
-        };
-        Controls.Add(listBox);
+        var listBox = Card(Loc.T("backup.groupList"), new Point(12, 384), new Size(616, 228), stretchDown);
 
-        _list.Location = new Point(16, 24);
-        _list.Size = new Size(420, 156);
-        _list.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        _list.Location = new Point(12, CardHead + 26);
+        _list.Size = new Size(430, 140);
+        _list.Anchor = stretchDown;
         _list.IntegralHeight = false;
         _list.DoubleClick += (_, _) => Verify();
         listBox.Controls.Add(_list);
 
         _btnVerify.Text = Loc.T("backup.verify");
-        _btnVerify.Location = new Point(448, 24);
-        _btnVerify.Size = new Size(124, 28);
+        _btnVerify.Location = new Point(454, CardHead + 26);
+        _btnVerify.Size = new Size(124, 32);
         _btnVerify.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _btnVerify.Click += (_, _) => Verify();
         listBox.Controls.Add(_btnVerify);
 
         _btnDelete.Text = Loc.T("backup.delete");
-        _btnDelete.Location = new Point(448, 58);
-        _btnDelete.Size = new Size(124, 28);
+        _btnDelete.Location = new Point(454, CardHead + 62);
+        _btnDelete.Size = new Size(124, 32);
         _btnDelete.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _btnDelete.Click += (_, _) => DeleteSelected();
         listBox.Controls.Add(_btnDelete);
 
         _btnRefresh.Text = Loc.T("backup.refresh");
-        _btnRefresh.Location = new Point(448, 92);
-        _btnRefresh.Size = new Size(124, 28);
+        _btnRefresh.Location = new Point(454, CardHead + 98);
+        _btnRefresh.Size = new Size(124, 32);
         _btnRefresh.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _btnRefresh.Click += (_, _) => Reload();
         listBox.Controls.Add(_btnRefresh);
 
-        _lblLast.ForeColor = Faint;
-        _lblLast.Location = new Point(16, 186);
-        _lblLast.Size = new Size(584, 30);
+        // Положение задано от низа карточки: Anchora пересчитывает Top при изменении высоты,
+        // а высота панели карточки на 2px меньше её размера (рамка), поэтому поправка обязательна.
+        _lblLast.ForeColor = Theme.Colors.Faint;
+        _lblLast.Location = new Point(12, CardHead + 174);
+        _lblLast.Size = new Size(592, 28);
         _lblLast.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         listBox.Controls.Add(_lblLast);
 
         // --- состояние ------------------------------------------------------
-        _lblStatus.ForeColor = Muted;
-        _lblStatus.Location = new Point(12, 572);
+        _lblStatus.ForeColor = Theme.Colors.Muted;
+        _lblStatus.Location = new Point(12, 614);
         _lblStatus.Size = new Size(616, 34);
         _lblStatus.Anchor = AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(_lblStatus);
 
         // Копия с движком делается минуты, и без движения человек не понимает, идёт работа
         // или панель встала. Полоса бежит всё время, пока копия собирается или проверяется.
-        _bar.Location = new Point(12, 610);
+        _bar.Location = new Point(12, 650);
         _bar.Size = new Size(616, 12);
         _bar.Style = ProgressBarStyle.Marquee;
         _bar.MarqueeAnimationSpeed = 30;
@@ -289,14 +296,14 @@ public sealed class BackupForm : Form
         // Ширины подобраны так, чтобы между кнопками был зазор: в прежней раскладке
         // «Восстановить из копии…» налезала на «Сохранить».
         _btnCreate.Text = Loc.T("backup.create");
-        _btnCreate.Location = new Point(12, 628);
+        _btnCreate.Location = new Point(12, 670);
         _btnCreate.Size = new Size(200, 34);
         _btnCreate.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _btnCreate.Click += async (_, _) => await CreateAsync();
         Controls.Add(_btnCreate);
 
         _btnRestore.Text = Loc.T("backup.restore");
-        _btnRestore.Location = new Point(224, 628);
+        _btnRestore.Location = new Point(224, 670);
         _btnRestore.Size = new Size(200, 34);
         _btnRestore.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _btnRestore.Click += (_, _) => OpenRestore();
@@ -306,11 +313,11 @@ public sealed class BackupForm : Form
         // иначе проверка вёрстки не видит её и пропускает наложение на соседнюю кнопку.
         _btnRestore.Enabled = _onRestore != null;
 
-        var save = new Button
+        var save = new Theme.PrimaryButton
         {
             Text = Loc.T("settings.save"),
             DialogResult = DialogResult.OK,
-            Location = new Point(436, 628),
+            Location = new Point(436, 670),
             Size = new Size(96, 34),
             Anchor = AnchorStyles.Bottom | AnchorStyles.Right,
         };
@@ -321,8 +328,8 @@ public sealed class BackupForm : Form
         {
             Text = Loc.T("settings.close"),
             DialogResult = DialogResult.Cancel,
-            Location = new Point(540, 628),
-            Size = new Size(88, 34),
+            Location = new Point(540, 670),
+            Size = new Size(88, 32),
             Anchor = AnchorStyles.Bottom | AnchorStyles.Right,
         };
         Controls.Add(close);
@@ -340,7 +347,7 @@ public sealed class BackupForm : Form
     /// Подсказки к элементам окна: по подписям не всегда понятно, что за что отвечает,
     /// а держать пояснения текстом в окне — значит сделать его ещё плотнее.
     /// </summary>
-    private void WireTips(GroupBox when, GroupBox where, GroupBox listBox, Button save, Button close)
+    private void WireTips(Theme.CardPanel when, Theme.CardPanel where, Theme.CardPanel listBox, Button save, Button close)
     {
         _tips.SetToolTip(when, Loc.T("backup.tip.when"));
         _tips.SetToolTip(_chkAuto, Loc.T("backup.tip.auto"));
@@ -488,17 +495,17 @@ public sealed class BackupForm : Form
             _lblLast.Text = Loc.T("backup.last", entries[0].Describe());
             if (!entries[0].Readable)
             {
-                _lblLast.ForeColor = AmberText;
+                _lblLast.ForeColor = Theme.Colors.Warning;
                 _lblLast.Text += Loc.T("backup.incomplete");
             }
             else
             {
-                _lblLast.ForeColor = Faint;
+                _lblLast.ForeColor = Theme.Colors.Faint;
             }
         }
         else
         {
-            _lblLast.ForeColor = Faint;
+            _lblLast.ForeColor = Theme.Colors.Faint;
             _lblLast.Text = Loc.T("backup.none");
         }
     }
@@ -522,7 +529,7 @@ public sealed class BackupForm : Form
         _busy = true;
         _btnCreate.Enabled = false;
         _bar.Visible = true;
-        _lblStatus.ForeColor = Muted;
+        _lblStatus.ForeColor = Theme.Colors.Muted;
         _lblStatus.Text = Loc.T("backup.creating");
         Refresh();
 
@@ -537,7 +544,7 @@ public sealed class BackupForm : Form
 
         AppLog.Write(_paths, "резервная копия (по кнопке): " + result.Summary());
 
-        _lblStatus.ForeColor = result.Ok ? GreenText : AmberText;
+        _lblStatus.ForeColor = result.Ok ? Theme.Colors.Success : Theme.Colors.Warning;
         var status = result.Summary()
                      + (result.Ok ? Environment.NewLine + Loc.T("backup.file", result.Path) : "");
         if (!result.Ok && result.Error.Contains("denied", StringComparison.OrdinalIgnoreCase))
@@ -558,17 +565,17 @@ public sealed class BackupForm : Form
         var entry = Selected();
         if (entry == null)
         {
-            _lblStatus.ForeColor = Muted;
+            _lblStatus.ForeColor = Theme.Colors.Muted;
             _lblStatus.Text = Loc.T("backup.selectCopy");
             return;
         }
 
-        _lblStatus.ForeColor = Muted;
+        _lblStatus.ForeColor = Theme.Colors.Muted;
         _lblStatus.Text = Loc.T("backup.checking", entry.Name);
         Refresh();
 
         var check = BackupService.Verify(entry.Path);
-        _lblStatus.ForeColor = check.Ok ? GreenText : AmberText;
+        _lblStatus.ForeColor = check.Ok ? Theme.Colors.Success : Theme.Colors.Warning;
         _lblStatus.Text = check.Summary() + Environment.NewLine + entry.Name;
         AppLog.Write(_paths, "проверка копии " + entry.Name + ": " + check.Summary());
     }
@@ -578,7 +585,7 @@ public sealed class BackupForm : Form
         var entry = Selected();
         if (entry == null)
         {
-            _lblStatus.ForeColor = Muted;
+            _lblStatus.ForeColor = Theme.Colors.Muted;
             _lblStatus.Text = Loc.T("backup.selectCopy");
             return;
         }
@@ -592,12 +599,12 @@ public sealed class BackupForm : Form
         {
             File.Delete(entry.Path);
             AppLog.Write(_paths, "копия удалена: " + entry.Name);
-            _lblStatus.ForeColor = Muted;
+            _lblStatus.ForeColor = Theme.Colors.Muted;
             _lblStatus.Text = Loc.T("backup.deleted", entry.Name);
         }
         catch (Exception error)
         {
-            _lblStatus.ForeColor = AmberText;
+            _lblStatus.ForeColor = Theme.Colors.Warning;
             _lblStatus.Text = Loc.T("backup.deleteFailed", error.Message);
         }
 

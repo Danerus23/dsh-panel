@@ -11,9 +11,6 @@ namespace DshTray;
 /// </summary>
 public sealed class PricesWindow : Form
 {
-    private static readonly Color Muted = Color.FromArgb(110, 110, 110);
-    private static readonly Color Faint = Color.FromArgb(130, 130, 130);
-
     private readonly Label _header = new();
     private readonly ListView _list = new();
     private readonly Button _copy = new();
@@ -28,21 +25,24 @@ public sealed class PricesWindow : Form
         StartPosition = FormStartPosition.CenterParent;
         ClientSize = new Size(760, 440);
         MinimumSize = new Size(560, 320);
-        Font = Loc.UiFont(10F);
-        BackColor = Color.White;
+        // Раньше окно было на 10pt — крупнее всех остальных окон продукта. Рабочий текст
+        // у всего продукта один, роль Body: разнобой из описи уходит.
+        Font = Theme.Body;
+        BackColor = Theme.Colors.Window;
         AutoScaleMode = AutoScaleMode.Font;
 
         BuildLayout();
+        Theme.Apply(this);
         Fill(result, sourceUrl);
     }
 
     private void BuildLayout()
     {
-        var buttons = new Panel { Dock = DockStyle.Bottom, Height = 46 };
+        var buttons = new Panel { Dock = DockStyle.Bottom, Height = 48 };
 
         _copy.Text = Loc.T("prices.copy");
         _copy.Location = new Point(534, 8);
-        _copy.Size = new Size(120, 30);
+        _copy.Size = new Size(120, 32);
         _copy.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _copy.Click += (_, _) => CopyToClipboard();
         buttons.Controls.Add(_copy);
@@ -52,7 +52,7 @@ public sealed class PricesWindow : Form
             Text = Loc.T("prices.close"),
             DialogResult = DialogResult.OK,
             Location = new Point(662, 8),
-            Size = new Size(90, 30),
+            Size = new Size(90, 32),
             Anchor = AnchorStyles.Top | AnchorStyles.Right,
         };
         buttons.Controls.Add(close);
@@ -64,7 +64,7 @@ public sealed class PricesWindow : Form
 
         _header.Dock = DockStyle.Top;
         _header.Height = 48;
-        _header.Padding = new Padding(10, 8, 10, 0);
+        _header.Padding = new Padding(12, 8, 12, 0);
 
         _list.Dock = DockStyle.Fill;
         _list.View = View.Details;
@@ -73,10 +73,11 @@ public sealed class PricesWindow : Form
         _list.HideSelection = false;
         _list.MultiSelect = true;
         _list.BorderStyle = BorderStyle.FixedSingle;
+        _list.HeaderStyle = ColumnHeaderStyle.Nonclickable;
 
         _empty.Dock = DockStyle.Fill;
         _empty.TextAlign = ContentAlignment.MiddleCenter;
-        _empty.ForeColor = Faint;
+        _empty.ForeColor = Theme.Colors.Faint;
         _empty.Visible = false;
 
         Controls.Add(_list);
@@ -133,7 +134,7 @@ public sealed class PricesWindow : Form
             _list.Items.Add(item);
         }
 
-        _header.ForeColor = Muted;
+        _header.ForeColor = Theme.Colors.Muted;
     }
 
     private void CopyToClipboard()

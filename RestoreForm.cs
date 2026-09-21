@@ -13,12 +13,6 @@ namespace DshTray;
 /// </summary>
 public sealed class RestoreForm : Form
 {
-    private static readonly Color Muted = Color.FromArgb(110, 110, 110);
-    private static readonly Color Faint = Color.FromArgb(130, 130, 130);
-    private static readonly Color GreenText = Color.FromArgb(21, 128, 61);
-    private static readonly Color AmberText = Color.FromArgb(161, 98, 7);
-    private static readonly Color RedText = Color.FromArgb(185, 28, 28);
-
     private readonly AppPaths _paths;
     private readonly AppSettings _settings;
     private readonly BackupService _backups;
@@ -61,13 +55,14 @@ public sealed class RestoreForm : Form
         MinimizeBox = true;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(620, 560);
-        MinimumSize = new Size(636, 600);
-        Font = Loc.UiFont(9F);
-        BackColor = Color.White;
+        ClientSize = new Size(620, 596);
+        MinimumSize = new Size(636, 636);
+        Font = Theme.Body;
+        BackColor = Theme.Colors.Window;
         AutoScaleMode = AutoScaleMode.Font;
 
         BuildLayout();
+        Theme.Apply(this);
         LoadArchive(preselected);
     }
 
@@ -78,66 +73,68 @@ public sealed class RestoreForm : Form
         var lblArchive = new Label
         {
             Text = Loc.T("restore.archive"),
-            Location = new Point(16, 19),
+            Location = new Point(16, 20),
             Size = new Size(62, 20),
         };
         Controls.Add(lblArchive);
 
         _txtArchive.ReadOnly = true;
-        _txtArchive.BackColor = Color.White;
-        _txtArchive.Location = new Point(80, 15);
-        _txtArchive.Size = new Size(384, 24);
+        _txtArchive.Location = new Point(82, 16);
+        _txtArchive.Size = new Size(384, 26);
         _txtArchive.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(_txtArchive);
 
         _btnPick.Text = Loc.T("restore.pick");
-        _btnPick.Location = new Point(472, 14);
-        _btnPick.Size = new Size(132, 26);
+        _btnPick.Location = new Point(472, 16);
+        _btnPick.Size = new Size(132, 32);
         _btnPick.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _btnPick.Click += (_, _) => PickArchive();
         Controls.Add(_btnPick);
 
         _btnCheck.Text = Loc.T("restore.check");
-        _btnCheck.Location = new Point(80, 46);
-        _btnCheck.Size = new Size(160, 26);
+        _btnCheck.Location = new Point(82, 52);
+        _btnCheck.Size = new Size(160, 32);
         _btnCheck.Click += async (_, _) => await CheckAsync();
         Controls.Add(_btnCheck);
 
-        _lblOrigin.ForeColor = Muted;
-        _lblOrigin.Location = new Point(16, 82);
+        _lblOrigin.ForeColor = StatusColor(Status.Muted);
+        _lblOrigin.Location = new Point(16, 92);
         _lblOrigin.Size = new Size(588, 20);
         _lblOrigin.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(_lblOrigin);
 
         _lblContentsTitle.Text = Loc.T("restore.contents");
-        _lblContentsTitle.Location = new Point(16, 108);
-        _lblContentsTitle.Size = new Size(588, 18);
+        _lblContentsTitle.Location = new Point(16, 120);
+        _lblContentsTitle.Size = new Size(588, 20);
         Controls.Add(_lblContentsTitle);
 
-        _lblContents.ForeColor = Muted;
-        _lblContents.Location = new Point(16, 128);
-        _lblContents.Size = new Size(588, 66);
+        // Полная копия несёт ключи, движок и десятки тысяч файлов: сводка занимает пять строк,
+        // а на китайском и того больше — 85px (проверено пробой с богатой описью). У прежних
+        // 66px последняя строка обрезалась, поэтому здесь 92.
+        _lblContents.ForeColor = StatusColor(Status.Muted);
+        _lblContents.Location = new Point(16, 144);
+        _lblContents.Size = new Size(588, 92);
         _lblContents.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(_lblContents);
 
-        _lblKeysWarning.ForeColor = RedText;
-        _lblKeysWarning.Location = new Point(16, 196);
+        _lblKeysWarning.ForeColor = StatusColor(Status.Danger);
+        _lblKeysWarning.Location = new Point(16, 244);
         _lblKeysWarning.Size = new Size(588, 32);
         _lblKeysWarning.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(_lblKeysWarning);
 
         _lblWhatTitle.Text = Loc.T("restore.whatToRestore");
-        _lblWhatTitle.Location = new Point(16, 236);
-        _lblWhatTitle.Size = new Size(588, 18);
+        _lblWhatTitle.Location = new Point(16, 280);
+        _lblWhatTitle.Size = new Size(588, 20);
         Controls.Add(_lblWhatTitle);
 
         var boxes = new (CheckBox Box, string Key, int Top)[]
         {
-            (_chkDshHome, "restore.opt.dshHome", 258),
-            (_chkPanel, "restore.opt.panel", 282),
-            (_chkKeys, "restore.opt.keys", 306),
-            (_chkEngine, "restore.opt.engine", 330),
-            (_chkSafety, "restore.opt.safety", 354),
+            (_chkDshHome, "restore.opt.dshHome", 304),
+            (_chkPanel, "restore.opt.panel", 328),
+            (_chkKeys, "restore.opt.keys", 352),
+            (_chkEngine, "restore.opt.engine", 376),
+            (_chkSafety, "restore.opt.safety", 400),
         };
 
         foreach (var (box, key, top) in boxes)
@@ -154,26 +151,26 @@ public sealed class RestoreForm : Form
         _chkEngine.Checked = true;
         _chkSafety.Checked = true;
 
-        _lblServer.Location = new Point(16, 388);
+        _lblServer.Location = new Point(16, 436);
         _lblServer.Size = new Size(440, 32);
         Controls.Add(_lblServer);
 
         _btnStopServer.Text = Loc.T("restore.stopServer");
-        _btnStopServer.Location = new Point(470, 386);
-        _btnStopServer.Size = new Size(134, 28);
+        _btnStopServer.Location = new Point(470, 434);
+        _btnStopServer.Size = new Size(134, 32);
         _btnStopServer.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         _btnStopServer.Click += (_, _) => StopServer();
         Controls.Add(_btnStopServer);
 
         _btnRestore.Text = Loc.T("restore.start");
-        _btnRestore.Location = new Point(16, 424);
-        _btnRestore.Size = new Size(190, 32);
+        _btnRestore.Location = new Point(16, 476);
+        _btnRestore.Size = new Size(190, 34);
         _btnRestore.Click += async (_, _) => await RestoreAsync();
         Controls.Add(_btnRestore);
 
         _btnClose.Text = Loc.T("restore.close");
         _btnClose.DialogResult = DialogResult.Cancel;
-        _btnClose.Location = new Point(502, 424);
+        _btnClose.Location = new Point(502, 476);
         _btnClose.Size = new Size(102, 32);
         _btnClose.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         Controls.Add(_btnClose);
@@ -181,15 +178,31 @@ public sealed class RestoreForm : Form
         _txtReport.Multiline = true;
         _txtReport.ReadOnly = true;
         _txtReport.ScrollBars = ScrollBars.Vertical;
-        _txtReport.BackColor = Color.White;
         _txtReport.BorderStyle = BorderStyle.FixedSingle;
-        _txtReport.Location = new Point(16, 466);
-        _txtReport.Size = new Size(588, 78);
+        _txtReport.Location = new Point(16, 518);
+        _txtReport.Size = new Size(588, 82);
         _txtReport.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(_txtReport);
 
         CancelButton = _btnClose;
     }
+
+    /// <summary>Состояние строки окна: цвет берём из палитры темы, а не из литерала.</summary>
+    private enum Status
+    {
+        Muted,
+        Danger,
+        Warning,
+        Success
+    }
+
+    private static Color StatusColor(Status status) => status switch
+    {
+        Status.Danger => Theme.Colors.Danger,
+        Status.Warning => Theme.Colors.Warning,
+        Status.Success => Theme.Colors.Success,
+        _ => Theme.Colors.Muted
+    };
 
     // --- разбор архива ------------------------------------------------------
 
@@ -222,13 +235,13 @@ public sealed class RestoreForm : Form
 
         if (!_plan.Ok)
         {
-            _lblOrigin.ForeColor = RedText;
+            _lblOrigin.ForeColor = StatusColor(Status.Danger);
             _lblOrigin.Text = Loc.T("restore.planFailed", _plan.Error);
             UpdateServerLine();
             return;
         }
 
-        _lblOrigin.ForeColor = Muted;
+        _lblOrigin.ForeColor = StatusColor(Status.Muted);
         _lblOrigin.Text = Loc.T("restore.origin", _plan.Origin());
         _lblContents.Text = string.Join(Environment.NewLine, _plan.Contents());
 
@@ -393,7 +406,7 @@ public sealed class RestoreForm : Form
     private void UpdateServerLine()
     {
         var running = _serverRunning != null && _serverRunning();
-        _lblServer.ForeColor = running ? AmberText : GreenText;
+        _lblServer.ForeColor = StatusColor(running ? Status.Warning : Status.Success);
         _lblServer.Text = Loc.T(running ? "restore.serverRunning" : "restore.serverStopped");
         _btnStopServer.Enabled = running;
     }

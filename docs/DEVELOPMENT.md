@@ -149,10 +149,10 @@ number, without the `+<commit>` build suffix (`AppVersion.Short`).
 The guards, all verified against `PanelRegistration.cs`: the key must exist (a portable build has no
 entry), the entry must introduce itself as exactly `DSH Panel`, and **nothing but `DisplayVersion` is
 touched and the entry is never created** — a foreign row in that list is never edited. An **isolated
-run** — the panel started with an overridden `DSH_PANEL_DATA`, `DSH_PANEL_STATE` or
-`DSH_PANEL_INSTANCE`, **or** with the autostart branch redirected through `DSH_PANEL_RUN_KEY`
-(`Autostart.IsIsolatedRun`: the same wide marker the notifications use, see the environment table
-below) — returns immediately and leaves the machine's entry alone: **the acceptance suite and the
+run** — the panel started with **any** override of the wide marker below (own data/state folders,
+own `DSH_HOME`, own key or backup folder, redirected legacy folder, own instance name, or the
+autostart branch redirected through `DSH_PANEL_RUN_KEY`; `Autostart.IsIsolatedRun`) — returns
+immediately and leaves the machine's entry alone: **the acceptance suite and the
 wizard check raise a real tray panel** in their own profiles — `tools\acceptance.ps1` runs
 `--selftest` and `--layout-check`, which build a real `TrayHost` and therefore a live `NotifyIcon`
 (`Visible = true`), and `tools\check-onboarding.ps1` opens a real panel window — so without this
@@ -335,7 +335,7 @@ where each one is explained:
 | --- | --- |
 | `DSH_PANEL_LANG` | interface language for one run (`ru`, `en`, `zh`); wins over `--lang` |
 | `DSH_PANEL_DATA`, `DSH_PANEL_STATE` | where settings and state live — this is how a second copy is run for tests |
-| `DSH_PANEL_NO_MIGRATE` | `1` disables the one-time migration from `%APPDATA%\DeepSeekHarness`; used by the build self-check and the CI so they never read the builder's own settings |
+| `DSH_PANEL_NO_MIGRATE` | `1` disables the one-time migration from `%APPDATA%\DeepSeekHarness`; used by the build self-check and the CI so they never read the builder's own settings. A run that asks for this is a check-shaped run, so it counts both as a check run and as an isolated run |
 | `DSH_PANEL_SSH_DIR` | your own key folder for one run: a restore closes key folders to the owner, so checks must not point at the real `~/.ssh` |
 | `DSH_HOME` | the DSH data folder for one run (`.dsh` by default): the panel and its checks read this one instead of `%USERPROFILE%\.dsh`, so a check never touches the real data |
 | `DSH_TRAY_TZ_OFFSET` | forces the time-zone offset in hours (`7`, `5.5`, `-8`) used to show peak hours — for checking another time zone |
@@ -350,20 +350,30 @@ where each one is explained:
 | `DSH_PANEL_DONATE` | the link shown in the About tab, overriding the shipped one (`AppLinks.DonateUrl` = `https://app.lava.top/3686297587`, so the row is shown; an empty link keeps the row hidden) |
 | `DSH_TRAY_BALANCE_SCRIPT` | your own fallback script for the balance request |
 
-An overridden `DSH_PANEL_DATA`, `DSH_PANEL_STATE` or `DSH_PANEL_INSTANCE` also marks the run as **a
-check** in the panel itself: such a run never repairs the real `HKCU\...\Run`
-(`Autostart.IsCheckRun` — deliberately **narrow**: it does not count a redirected `Run` branch, so
-that `tools\check-autostart.ps1` can still exercise the repair path when only `DSH_PANEL_RUN_KEY` is
+An overridden `DSH_PANEL_DATA`, `DSH_PANEL_STATE`, `DSH_PANEL_SSH_DIR`, `DSH_TRAY_BACKUP`,
+`DSH_HOME`, `DSH_PANEL_LEGACY_DATA`, `DSH_PANEL_INSTANCE` or `DSH_PANEL_NO_MIGRATE` also marks the
+run as **a check** in the panel itself: such a run never repairs the real `HKCU\...\Run`
+(`Autostart.IsCheckRun` — the same list **minus** the redirected `Run` branch, so that
+`tools\check-autostart.ps1` can still exercise the repair path when only `DSH_PANEL_RUN_KEY` is
 set). Without that, a check that raises the panel itself — `tools\check-onboarding.ps1` opens a real
 panel window in its own profile — would edit the owner's registry. `DSH_PANEL_RUN_KEY` is the
 narrower override for the same purpose.
 
-Everything else uses the **wide** marker, `Autostart.IsIsolatedRun` — overridden panel directories
-**or** a redirected `Run` branch — which means “this is not the owner's run”. An isolated run shows
-the person **nothing on its own initiative: neither windows nor balloons**. Every automatic message
-goes through the single door `TrayHost.NotifyBalloon`, and the rule behind it is
-`TrayHost.ShouldNotify(kind, isolatedRun)`; the kinds are enumerated in `TrayHost.NoticeKind`
-precisely so that `--selftest` can walk all of them instead of the one balloon somebody remembered.
+Everything else uses the **wide** marker, `Autostart.IsIsolatedRun` — **any** of those overrides,
+**including** a redirected `Run` branch — which means “this is not the owner's run”. The list itself
+is the single source of truth (`Autostart.IsolationOverrides`), and `--selftest` walks **every**
+variable in it, so a variable added to the marker is exercised automatically. Overrides meant for a
+single run and useful to an ordinary person — `DSH_PANEL_LANG`, `DSH_TRAY_PRICING`, `DSH_PANEL_API`,
+`DSH_PANEL_REPO`, `DSH_TRAY_NODE`, `DSH_TRAY_BIN` — are deliberately **not** part of it: calling such
+a run isolated would silently take the windows and balloons away from somebody who merely uses a
+portable Node. Before this was widened the marker counted only four variables, and a check that
+overrode just `DSH_HOME` (exactly what `tools\check-update-apply.ps1` did) read the owner's real
+`~/.dsh` and showed his balance. An isolated run shows the person **nothing on its own initiative:
+neither windows nor balloons**. Every automatic message goes through the single door
+`TrayHost.NotifyBalloon`, and the decision behind it is the one-liner
+`TrayHost.DoorDecision(kind)` — extracted as a method precisely so that `--selftest` can assert its
+**value**, not merely a reference to it; the kinds are enumerated in `TrayHost.NoticeKind` for the
+same reason, so that the self-test walks all of them instead of the one balloon somebody remembered.
 A suppressed message is still written to the panel log, so a silent run leaves a trace. The two
 balloons that answer a human action inside the same visible run — “hidden to tray” and “peak windows
 applied” — deliberately do not go through the door: without the person they never appear.
@@ -382,42 +392,62 @@ the guard cannot be “written but unwired”:
 |---|---|---|
 | onboarding wizard | `TrayHost.ShouldAutoShowOnboarding(onboarded, requested, isolated)` | only when asked with `--onboard`; otherwise a log line |
 | browser on server start | `TrayHost.ShouldAutoOpenBrowser(isolated)` | never opens |
+| server starting itself | `TrayHost.ShouldAutoStartServer(isolated)` | never starts |
 | panel window on start | `TrayHost.ShouldShowWindowOnStart(onboarded, isolated)` | never opens |
+| panel window on the “show the window” request | `TrayHost.ShouldShowPanelOnSignal(isolated)` | ignored, a log line instead |
 
-`MaybeShowOnboarding` (called only from the startup timer), `ShowPanelOnStart` (the constructor) and
-`StartInitialServer` ask those predicates **and** read `Autostart.IsIsolatedRun`; a suppressed
-decision is written to the panel log, exactly like a suppressed balloon. The onboarding wizard is
-still a window a check may ask for: `--onboard` wins over isolation, and `tools\check-onboarding.ps1`
-relies on precisely that. Without the key the wizard opens only on a real profile that has not been
-onboarded yet — before this gate, `tools\check-update-apply.ps1` (which restarts the panel with no
-arguments in its own fresh profile) put a modal wizard on the owner's desktop on every pipeline run.
+`MaybeShowOnboarding` (called only from the startup timer), `ShowPanelOnStart` (the constructor),
+`StartInitialServer` (the startup timer) and `OnShowEventRequested` (the request a second launch of
+the shortcut sends through the single-instance event) ask those predicates **and** read
+`Autostart.IsIsolatedRun`; a suppressed decision is written to the panel log, exactly like a
+suppressed balloon, and every one of those gates writes its line (the window gate used to log only
+when the profile was already onboarded). The onboarding wizard is still a window a check may ask
+for: `--onboard` wins over isolation, and `tools\check-onboarding.ps1` relies on precisely that.
+Without the key the wizard opens only on a real profile that has not been onboarded yet — before
+this gate, `tools\check-update-apply.ps1` (which restarts the panel with no arguments in its own
+fresh profile) put a modal wizard on the owner's desktop on every pipeline run.
 
 **The line between “the person sees” and “the check verifies”:** a check must not put anything on the
-owner's desktop, but it must still be able to verify what the panel *does*. Starting the server is
-therefore **not** gated — `tools\acceptance.ps1` starts it on its own sandbox port and checks the
-sign-in link the panel writes, so gating the start would delete the check itself; only the browser
-window that would pop up next is suppressed. Nor is the `NotifyIcon` gated: `--selftest` and
-`--layout-check` build a real `TrayHost`, and that live tray icon is what the structural cases work
-with. Everything that is a *window or a balloon* on the owner's desktop is gated; everything that is
-a *state the checks read* (a started server, the sign-in link, the log lines, the tray icon) is not.
+owner's desktop, and it must not take the owner's port either. The **automatic** server start is
+therefore gated like the windows: a run of a check used to raise `dsh web` on whatever port its fresh
+`settings.json` named — 3080 by default, the owner's live port — and a forced shutdown of the check's
+panel then left an orphan `node` holding it. What is **not** gated is the **explicit** path:
+`--server-start` (the CLI key `tools\acceptance.ps1` uses) starts the server on the check's own
+sandbox port and checks the sign-in link the panel writes, so the check that needs a server still
+gets one and still verifies it. In an isolated run the automatic start writes its suppression line to
+the log instead. Nor is the `NotifyIcon` gated: `--selftest` and `--layout-check` build a real
+`TrayHost`, and that live tray icon is what the structural cases work with. Everything that is a
+*window or a balloon* on the owner's desktop, and everything that would take his port, is gated;
+everything that is a *state the checks read* (a server the check asked for, the sign-in link, the log
+lines, the tray icon) is not.
 
-`--selftest` asserts this four times:
+`--selftest` asserts this five times:
 
 * over every `NoticeKind` (the guard silences all of them when the run is isolated, and none of them
   when it is not);
-* over the isolation marker itself: a case sets and clears each of `DSH_PANEL_DATA`,
-  `DSH_PANEL_STATE`, `DSH_PANEL_INSTANCE` and `DSH_PANEL_RUN_KEY` one at a time, asserts that
-  `Autostart.IsIsolatedRun` sees each of them (and that spaces do not count), and drives
-  `ShouldNotify` with that **computed** value both ways — restoring the environment afterwards,
-  because the rest of the self-test depends on it. Without this the selftest stayed green while
-  `IsIsolatedRun` lost its `DSH_PANEL_RUN_KEY` branch or the door stopped asking about isolation at
-  all;
-* over the full case tables of the three window predicates (all eight combinations of
-  onboarded/requested/isolated for the wizard);
+* over the isolation marker itself: the case holds the documented list as a **literal** (the red line
+  in `AGENTS.md` and the table above), asserts that `Autostart.IsolationOverrideNames` matches it
+  exactly — so narrowing the marker turns the case red instead of shrinking the loop with it — and
+  then sets each variable alone, asserting that `Autostart.IsIsolatedRun` sees it, that
+  `Autostart.IsCheckRun` agrees (true for every variable but the redirected `Run` branch), and that
+  the **door's decision** (`TrayHost.DoorDecision`) is false for **every** kind — a value, not a
+  reference, which is what catches a door reading the predicate and ignoring its answer
+  (`ShouldNotify(kind, IsIsolatedRun && NeverTrue())` keeps every reference and shows everything). It
+  also asserts that the single-run overrides above do **not** isolate, and that spaces do not count;
+  the environment is restored afterwards, because the rest of the self-test depends on it;
+* over the full case tables of the window, browser, server-start and show-request predicates (all
+  eight combinations of onboarded/requested/isolated for the wizard);
 * over the compiled **IL**: every `NotifyIcon.ShowBalloonTip` reference in the whole assembly must be
-  either `TrayHost.NotifyBalloon` or one of the two interactive balloons above, and each of the four
-  decision methods (`NotifyBalloon`, `MaybeShowOnboarding`, `ShowPanelOnStart`, `StartInitialServer`)
-  must actually call its predicate and read `Autostart.IsIsolatedRun`.
+  either the door or one of the explicitly interactive balloons (see the limit below), and each
+  decision method (`DoorDecision`, `MaybeShowOnboarding`, `ShowPanelOnStart`, `OnShowEventRequested`,
+  `StartInitialServer`) must actually call its predicate and read `Autostart.IsIsolatedRun`. The door
+  itself is recognised by **intent**: a site counts as the door when it calls `ShowBalloonTip` **and**
+  consults `TrayHost.DoorDecision`, so moving or renaming the door is not reported as a stray site,
+  while a balloon that bypasses the decision always is. The two interactive sites are an explicit
+  allow-list that is allowed to **shrink**: routing “hidden to tray” through the door as well is an
+  improvement, and the case stays green;
+* over reachability: the wizard is still called from somewhere, and so is the door — a decision nobody
+  consults is silent for the wrong reason.
 
 **What the IL case proves and what it does not.** It sees direct calls (`call`/`callvirt`) and
 method addresses taken for a delegate (`ldftn`/`ldvirtftn`) anywhere in the assembly — a balloon
@@ -429,7 +459,9 @@ So the case guarantees “no direct call and no delegate address slips past the 
 can ever show a balloon”: a hand-written reflection call, added on purpose, would pass it. That
 limit is deliberate and documented rather than papered over — the same honesty applies to the gate
 case: it proves that the decision methods call their predicates, not that no other code path in the
-future opens a window.
+future opens a window. The **value** half of the guarantee lives in the isolation case instead: the
+gate case would still pass a door whose body reads the predicate and then ignores the answer, which
+is why `DoorDecision` is a method and `--selftest` asserts its result in an isolated run.
 
 ## Version and changelog
 

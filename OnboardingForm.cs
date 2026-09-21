@@ -25,15 +25,6 @@ public sealed class OnboardingForm : Form
     internal const int StepCount = TotalSteps;
     private static readonly string[] LanguageCodes = { "auto", "ru", "en", "zh" };
 
-    private static readonly Color Muted = Color.FromArgb(110, 110, 110);
-    private static readonly Color Faint = Color.FromArgb(130, 130, 130);
-    private static readonly Color GreenText = Color.FromArgb(21, 128, 61);
-    private static readonly Color AmberText = Color.FromArgb(161, 98, 7);
-
-    /// <summary>Неудача (скачать не удалось, установка не прошла) — красным, чтобы отличать
-    /// от «пока не настроено», которое янтарное.</summary>
-    private static readonly Color RedText = Color.FromArgb(185, 28, 28);
-
     private readonly AppSettings _settings;
     private readonly AppPaths _paths;
     private readonly Action<string> _onLanguageChanged;
@@ -111,11 +102,12 @@ public sealed class OnboardingForm : Form
         ShowInTaskbar = true;
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(576, 420);
-        Font = Loc.UiFont(9F);
-        BackColor = Color.White;
+        Font = Theme.Body;
+        BackColor = Theme.Colors.Window;
         AutoScaleMode = AutoScaleMode.Font;
 
         BuildLayout();
+        Theme.Apply(this);
         LoadValues();
         ApplyTexts();
         ShowStep(0);
@@ -128,15 +120,16 @@ public sealed class OnboardingForm : Form
     {
         _caption.Location = new Point(16, 14);
         _caption.Size = new Size(544, 22);
-        _caption.Font = Loc.UiFont(11F, FontStyle.Bold);
+        _caption.Font = Theme.Heading;
+        _caption.ForeColor = Theme.Colors.Text;
         _caption.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         Controls.Add(_caption);
 
+        // Рамку вокруг шагов убрали: серая FixedSingle давала «модульный» вид, от которого
+        // продукт и уходит. Шаг подписан ролью Heading, а сам шаг лежит на фоне окна.
         _content.Location = new Point(12, 44);
         _content.Size = new Size(552, 320);
         _content.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
-        _content.BorderStyle = BorderStyle.FixedSingle;
-        _content.BackColor = Color.White;
         Controls.Add(_content);
 
         for (var index = 0; index < TotalSteps; index++)
@@ -152,19 +145,19 @@ public sealed class OnboardingForm : Form
         BuildKeysPage();
 
         _skip.Location = new Point(12, 376);
-        _skip.Size = new Size(120, 30);
+        _skip.Size = new Size(120, 32);
         _skip.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
         _skip.Click += (_, _) => Finish(skipped: true);
         Controls.Add(_skip);
 
         _back.Location = new Point(330, 376);
-        _back.Size = new Size(110, 30);
+        _back.Size = new Size(110, 32);
         _back.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
         _back.Click += (_, _) => ShowStep(_step - 1);
         Controls.Add(_back);
 
         _next.Location = new Point(450, 376);
-        _next.Size = new Size(114, 30);
+        _next.Size = new Size(114, 32);
         _next.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
         _next.Click += (_, _) => Next();
         Controls.Add(_next);
@@ -189,7 +182,7 @@ public sealed class OnboardingForm : Form
         };
         page.Controls.Add(_cmbLanguage);
 
-        _lblLanguageHint.ForeColor = Faint;
+        _lblLanguageHint.ForeColor = Theme.Colors.Faint;
         _lblLanguageHint.Location = new Point(16, 58);
         _lblLanguageHint.Size = new Size(500, 40);
         page.Controls.Add(_lblLanguageHint);
@@ -253,7 +246,7 @@ public sealed class OnboardingForm : Form
         _bar.Visible = false;
         page.Controls.Add(_bar);
 
-        _lblEnvHint.ForeColor = Faint;
+        _lblEnvHint.ForeColor = Theme.Colors.Faint;
         _lblEnvHint.Location = new Point(16, 214);
         _lblEnvHint.Size = new Size(520, 54);
         page.Controls.Add(_lblEnvHint);
@@ -276,7 +269,7 @@ public sealed class OnboardingForm : Form
         _btnPickDir.Click += (_, _) => PickFolder(_txtDir, Loc.T("onboard.dir.title"));
         page.Controls.Add(_btnPickDir);
 
-        _lblDirHint.ForeColor = Faint;
+        _lblDirHint.ForeColor = Theme.Colors.Faint;
         _lblDirHint.Location = new Point(16, 44);
         _lblDirHint.Size = new Size(510, 40);
         page.Controls.Add(_lblDirHint);
@@ -351,7 +344,7 @@ public sealed class OnboardingForm : Form
         _chkKeys.Size = new Size(510, 22);
         page.Controls.Add(_chkKeys);
 
-        _lblKeysHint.ForeColor = AmberText;
+        _lblKeysHint.ForeColor = Theme.Colors.Warning;
         _lblKeysHint.Location = new Point(16, 56);
         _lblKeysHint.Size = new Size(510, 90);
         page.Controls.Add(_lblKeysHint);
@@ -361,8 +354,8 @@ public sealed class OnboardingForm : Form
     private void ApplyTexts()
     {
         Text = Loc.T("onboard.title");
-        Font = Loc.UiFont(9F);
-        _caption.Font = Loc.UiFont(11F, FontStyle.Bold);
+        Font = Theme.Body;
+        _caption.Font = Theme.Heading;
 
         // Подпись шага: без неё при смене языка на первом шаге строка «Шаг 1 из 5 · …»
         // оставалась на прежнем языке до перехода на другой шаг.
@@ -478,7 +471,7 @@ public sealed class OnboardingForm : Form
 
         _bar.Visible = busy;
         UseWaitCursor = busy;
-        if (hint != null) SetHint(hint, Muted);
+        if (hint != null) SetHint(hint, Theme.Colors.Muted);
     }
 
     /// <summary>
@@ -506,7 +499,7 @@ public sealed class OnboardingForm : Form
         {
             BeginInvoke((Action)(() =>
             {
-                if (!IsDisposed) SetHint(text, Muted);
+                if (!IsDisposed) SetHint(text, Theme.Colors.Muted);
             }));
         }
         catch (InvalidOperationException)
@@ -541,12 +534,12 @@ public sealed class OnboardingForm : Form
             if (result.Ok)
             {
                 RememberPaths();
-                SetHint(result.Summary(), GreenText);
+                SetHint(result.Summary(), Theme.Colors.Success);
                 CheckEnvironment();
             }
             else
             {
-                SetHint(Loc.T("onboard.nodeDownloadFailed", result.Error), RedText);
+                SetHint(Loc.T("onboard.nodeDownloadFailed", result.Error), Theme.Colors.Danger);
             }
         }
         finally
@@ -567,7 +560,7 @@ public sealed class OnboardingForm : Form
         var npm = FindNpm();
         if (npm.Length == 0)
         {
-            SetHint(Loc.T("onboard.engineNoNpm"), RedText);
+            SetHint(Loc.T("onboard.engineNoNpm"), Theme.Colors.Danger);
             return;
         }
 
@@ -580,12 +573,12 @@ public sealed class OnboardingForm : Form
                 // Пути записываем сразу: движок лёг в наш же переносимый Node, и панель должна
                 // знать это и в полях, и в настройках — иначе она не находит то, что сама поставила.
                 RememberPaths();
-                SetHint(Loc.T("onboard.engineDone"), GreenText);
+                SetHint(Loc.T("onboard.engineDone"), Theme.Colors.Success);
                 CheckEnvironment();
             }
             else
             {
-                SetHint(Loc.T("onboard.engineFailed", result.Tail), RedText);
+                SetHint(Loc.T("onboard.engineFailed", result.Tail), Theme.Colors.Danger);
             }
         }
         finally
@@ -740,13 +733,13 @@ public sealed class OnboardingForm : Form
             // незаполненная переменная, и человек не понимает, что нашлось.
             var node = NodeLocator.ResolveNode();
             _nodeFound = true;
-            _lblNodeState.ForeColor = GreenText;
+            _lblNodeState.ForeColor = Theme.Colors.Success;
             _lblNodeState.Text = "✓ " + TextFit.Fit(_lblNodeState, Loc.T("onboard.env.nodeFound", node), node);
         }
         catch
         {
             _nodeFound = false;
-            _lblNodeState.ForeColor = AmberText;
+            _lblNodeState.ForeColor = Theme.Colors.Warning;
             _lblNodeState.Text = "• " + Loc.T("onboard.env.nodeMissing");
         }
 
@@ -754,13 +747,13 @@ public sealed class OnboardingForm : Form
         {
             var bin = NodeLocator.ResolveDshBin();
             _dshFound = true;
-            _lblDshState.ForeColor = GreenText;
+            _lblDshState.ForeColor = Theme.Colors.Success;
             _lblDshState.Text = "✓ " + TextFit.Fit(_lblDshState, Loc.T("onboard.env.dshFound", bin), bin);
         }
         catch
         {
             _dshFound = false;
-            _lblDshState.ForeColor = AmberText;
+            _lblDshState.ForeColor = Theme.Colors.Warning;
             _lblDshState.Text = "• " + Loc.T("onboard.env.dshMissing");
         }
 
@@ -777,17 +770,17 @@ public sealed class OnboardingForm : Form
         if (ours)
         {
             // Порт держит наша же панель — это не помеха, а признак, что всё уже работает.
-            _lblPortState.ForeColor = GreenText;
+            _lblPortState.ForeColor = Theme.Colors.Success;
             _lblPortState.Text = Loc.T("onboard.port.ours", owner);
         }
         else if (owner > 0)
         {
-            _lblPortState.ForeColor = AmberText;
+            _lblPortState.ForeColor = Theme.Colors.Warning;
             _lblPortState.Text = Loc.T("onboard.port.busy", name, owner);
         }
         else
         {
-            _lblPortState.ForeColor = GreenText;
+            _lblPortState.ForeColor = Theme.Colors.Success;
             _lblPortState.Text = Loc.T("onboard.port.free");
         }
     }

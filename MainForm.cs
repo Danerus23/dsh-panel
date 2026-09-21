@@ -6,20 +6,13 @@ namespace DshTray;
 /// <summary>
 /// Панель управления сервером. Вид и набор функций повторяют прежнюю
 /// PowerShell-панель; добавлены блок «Баланс» и уход в трей.
-/// Все подписи берутся из словарей (Loc), шрифт — с учётом языка.
+/// Все подписи берутся из словарей (Loc), цвета, шрифты и отступы — только из темы
+/// (<see cref="Theme"/>): своих литералов цвета и размеров шрифта в этом окне больше нет.
+/// Иначе окна снова разъедутся по виду, как разъехались до 1.22.0
+/// (техническая спека — _review/ui-1.22-spec.md).
 /// </summary>
 public sealed class MainForm : Form
 {
-    private static readonly Color Green = Color.FromArgb(34, 197, 94);
-    private static readonly Color GreenText = Color.FromArgb(21, 128, 61);
-    private static readonly Color Amber = Color.FromArgb(234, 179, 8);
-    private static readonly Color AmberText = Color.FromArgb(161, 98, 7);
-    private static readonly Color Grey = Color.FromArgb(148, 163, 184);
-    private static readonly Color GreyText = Color.FromArgb(71, 85, 105);
-    private static readonly Color Muted = Color.FromArgb(110, 110, 110);
-    private static readonly Color Faint = Color.FromArgb(130, 130, 130);
-    private static readonly Color OrangeText = Color.FromArgb(180, 83, 9);
-
     private readonly TrayHost _host;
 
     /// <summary>Подсказки к кнопкам главного окна: что именно сделает каждая.</summary>
@@ -31,14 +24,17 @@ public sealed class MainForm : Form
     private readonly Label _peak = new();
     private readonly Label _windows = new();
 
-    private readonly Button _settingsButton = new();
-    private readonly Button _backupsButton = new();
-    private readonly Button _start = new();
+    // Главная кнопка окна — отдельным типом: по нему Theme узнаёт, какую кнопку заливать
+    // акцентом, когда тема применяется ко всему окну целиком (Theme.Apply идёт по дереву
+    // контролов и о кнопках ничего не спрашивает, кроме их типа).
+    private readonly Button _start = new Theme.PrimaryButton();
     private readonly Button _restart = new();
     private readonly Button _stop = new();
     private readonly Button _open = new();
     private readonly Button _log = new();
     private readonly Button _folder = new();
+    private readonly Button _settingsButton = new();
+    private readonly Button _backupsButton = new();
     private readonly Button _balanceRefresh = new();
     private readonly Button _balancePlatform = new();
 
@@ -63,8 +59,9 @@ public sealed class MainForm : Form
         MinimizeBox = true;
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(520, 596);
-        Font = Loc.UiFont(9F);
-        BackColor = Color.White;
+        // Шрифт окна — роль Body: тот же девятый кегль, что и раньше, но теперь он
+        // не «магическое число» в окне, а роль из темы.
+        Font = Theme.Body;
         AutoScaleMode = AutoScaleMode.Font;
         ShowInTaskbar = true;
 
@@ -81,10 +78,14 @@ public sealed class MainForm : Form
         BuildLayout();
         WireEvents();
 
+        // Тема — последней: BuildLayout расставляет роли шрифтов у меток, а Theme.Apply
+        // обходит дерево целиком и приводит цвета, рамки и вид кнопок к одной палитре.
+        Theme.Apply(this);
+
         // Значки на кнопках ставятся один раз: Retext() пересобирает разметку, но сами кнопки
         // остаются теми же объектами, поэтому повторная установка только плодила бы картинки.
-        Glyphs.Attach(_settingsButton, Glyphs.Settings, Muted);
-        Glyphs.Attach(_backupsButton, Glyphs.Backups, Muted);
+        Glyphs.Attach(_settingsButton, Glyphs.Settings, Theme.Colors.Muted);
+        Glyphs.Attach(_backupsButton, Glyphs.Backups, Theme.Colors.Muted);
 
         // Галочка показывает сохранённую настройку, а не значение по умолчанию.
         _suppressBrowser = true;
@@ -99,7 +100,7 @@ public sealed class MainForm : Form
         var title = new Label
         {
             Text = AppVersion.Title,
-            Font = Loc.UiFont(13F, FontStyle.Bold),
+            Font = Theme.Title,
             Location = new Point(16, 12),
             // Ширина по тексту: фиксированная рамка залезала под кнопку «Резервные копии»
             // (с версией в заголовке текст стал длиннее).
@@ -110,8 +111,11 @@ public sealed class MainForm : Form
         var subtitle = new Label
         {
             Text = Loc.T("main.subtitle"),
-            ForeColor = Muted,
-            Location = new Point(18, 40),
+            Font = Theme.Hint,
+            ForeColor = Theme.Colors.Muted,
+            // Поле окна — 16 со всех сторон (шкала темы), поэтому подпись стоит под
+            // заголовком по одной с ним линии, а не на два пикселя правее.
+            Location = new Point(Theme.WindowPadding, 40),
             // Ширина по тексту: фиксированная рамка залезала под кнопку «Резервные копии».
             // Подпись держим короче ~200px: до кнопки 214px, и «Управление агентом DeepSeek
             // Harness» (220px) уже налезало на неё в русском — это ловит --layout-check.
@@ -121,81 +125,104 @@ public sealed class MainForm : Form
 
         _settingsButton.Text = Loc.T("main.settings");
         _settingsButton.Location = new Point(390, 16);
-        _settingsButton.Size = new Size(112, 30);
+        _settingsButton.Size = new Size(112, Theme.ButtonHeight);
+        Theme.Button(_settingsButton, Theme.ButtonKind.Secondary);
         Controls.Add(_settingsButton);
 
         // Копии — рядом с настройками: из трея их видно, а из панели раньше не было.
         _backupsButton.Text = Loc.T("main.backups");
         _backupsButton.Location = new Point(232, 16);
-        _backupsButton.Size = new Size(150, 30);
+        _backupsButton.Size = new Size(150, Theme.ButtonHeight);
+        Theme.Button(_backupsButton, Theme.ButtonKind.Secondary);
         Controls.Add(_backupsButton);
 
-        var stateBox = new GroupBox
+        // Карточка вместо GroupBox: «модульный» вид давала именно системная рамка группы.
+        // Заголовок карточки — обычная метка ролью Heading в её верхней строке (у GroupBox
+        // подпись рисовалась поверх рамки), поэтому координаты содержимого не меняются.
+        var stateCard = new Theme.CardPanel
         {
-            Text = Loc.T("main.groupState"),
             Location = new Point(12, 64),
             Size = new Size(496, 144),
         };
-        Controls.Add(stateBox);
+        Controls.Add(stateCard);
+
+        stateCard.Controls.Add(new Label
+        {
+            Text = Loc.T("main.groupState"),
+            Font = Theme.Heading,
+            ForeColor = Theme.Colors.Muted,
+            Location = new Point(12, 0),
+            AutoSize = true,
+        });
 
         _dot.Text = "\u25CF";
-        _dot.Font = Loc.UiFont(14F);
+        _dot.Font = Theme.Title;
         _dot.Location = new Point(12, 22);
         _dot.Size = new Size(28, 30);
-        stateBox.Controls.Add(_dot);
+        stateCard.Controls.Add(_dot);
 
         _state.Text = Loc.T("common.checking");
-        _state.Font = Loc.UiFont(11F, FontStyle.Bold);
+        _state.Font = Theme.Heading;
         _state.Location = new Point(40, 24);
         _state.Size = new Size(430, 24);
-        stateBox.Controls.Add(_state);
+        stateCard.Controls.Add(_state);
 
         _info.Text = "";
-        _info.ForeColor = Muted;
+        _info.Font = Theme.Body;
+        _info.ForeColor = Theme.Colors.Muted;
         _info.Location = new Point(16, 54);
         _info.Size = new Size(460, 22);
-        stateBox.Controls.Add(_info);
+        stateCard.Controls.Add(_info);
 
         _peak.Text = Loc.T("main.tariffChecking");
-        _peak.Font = Loc.UiFont(9F, FontStyle.Bold);
+        _peak.Font = Theme.BodyBold;
         _peak.Location = new Point(16, 78);
         _peak.Size = new Size(460, 22);
-        stateBox.Controls.Add(_peak);
+        stateCard.Controls.Add(_peak);
 
         _windows.Text = "";
-        _windows.ForeColor = Faint;
+        _windows.Font = Theme.Hint;
+        _windows.ForeColor = Theme.Colors.Faint;
         _windows.Location = new Point(16, 100);
         _windows.Size = new Size(460, 36);
-        stateBox.Controls.Add(_windows);
+        stateCard.Controls.Add(_windows);
 
+        // «Запустить» — единственное главное действие окна: акцентная заливка и на два
+        // пикселя больше остальных кнопок (Theme.PrimaryButtonHeight).
         _start.Text = Loc.T("main.start");
         _start.Location = new Point(12, 218);
-        _start.Size = new Size(160, 38);
+        _start.Size = new Size(160, Theme.PrimaryButtonHeight);
+        Theme.Button(_start, Theme.ButtonKind.Primary);
         Controls.Add(_start);
 
         _restart.Text = Loc.T("main.restart");
         _restart.Location = new Point(180, 218);
-        _restart.Size = new Size(160, 38);
+        _restart.Size = new Size(160, Theme.ButtonHeight);
+        Theme.Button(_restart, Theme.ButtonKind.Secondary);
         Controls.Add(_restart);
 
         _stop.Text = Loc.T("main.stop");
         _stop.Location = new Point(348, 218);
-        _stop.Size = new Size(160, 38);
+        _stop.Size = new Size(160, Theme.ButtonHeight);
+        Theme.Button(_stop, Theme.ButtonKind.Secondary);
         Controls.Add(_stop);
 
         _open.Text = Loc.T("main.open");
         _open.Location = new Point(12, 264);
-        _open.Size = new Size(160, 32);
+        _open.Size = new Size(160, Theme.ButtonHeight);
+        Theme.Button(_open, Theme.ButtonKind.Secondary);
         Controls.Add(_open);
 
         _log.Text = Loc.T("main.log");
         _log.Location = new Point(180, 264);
-        _log.Size = new Size(160, 32);
+        _log.Size = new Size(160, Theme.ButtonHeight);
+        Theme.Button(_log, Theme.ButtonKind.Secondary);
         Controls.Add(_log);
 
         _folder.Text = Loc.T("main.dshFolder");
         _folder.Location = new Point(348, 264);
-        _folder.Size = new Size(160, 32);
+        _folder.Size = new Size(160, Theme.ButtonHeight);
+        Theme.Button(_folder, Theme.ButtonKind.Secondary);
         Controls.Add(_folder);
 
         _chkBrowser.Text = Loc.T("main.openBrowser");
@@ -209,47 +236,62 @@ public sealed class MainForm : Form
         _chkAutostart.Size = new Size(420, 22);
         Controls.Add(_chkAutostart);
 
-        var balanceBox = new GroupBox
+        var balanceCard = new Theme.CardPanel
         {
-            Text = Loc.T("main.groupBalance"),
             Location = new Point(12, 362),
             Size = new Size(496, 148),
         };
-        Controls.Add(balanceBox);
+        Controls.Add(balanceCard);
+
+        balanceCard.Controls.Add(new Label
+        {
+            Text = Loc.T("main.groupBalance"),
+            Font = Theme.Heading,
+            ForeColor = Theme.Colors.Muted,
+            Location = new Point(12, 0),
+            AutoSize = true,
+        });
 
         _balanceBig.Text = Loc.T("common.dash");
-        _balanceBig.Font = Loc.UiFont(14F, FontStyle.Bold);
+        _balanceBig.Font = Theme.Title;
+        // Высота 32: роль Title (15pt) требует 28px — в прежние 26px при 14pt текст влезал,
+        // а теперь обрезался бы (это и поймал --layout-check). Кегль не уменьшаем.
         _balanceBig.Location = new Point(16, 24);
-        _balanceBig.Size = new Size(460, 26);
-        balanceBox.Controls.Add(_balanceBig);
+        _balanceBig.Size = new Size(460, 32);
+        balanceCard.Controls.Add(_balanceBig);
 
         _balanceState.Text = Loc.T("common.checking");
-        _balanceState.ForeColor = Faint;
-        _balanceState.Location = new Point(16, 56);
+        _balanceState.Font = Theme.Hint;
+        _balanceState.ForeColor = Theme.Colors.Faint;
+        _balanceState.Location = new Point(16, 60);
         _balanceState.Size = new Size(460, 22);
-        balanceBox.Controls.Add(_balanceState);
+        balanceCard.Controls.Add(_balanceState);
 
         _balanceRefresh.Text = Loc.T("main.refreshBalance");
         _balanceRefresh.Location = new Point(16, 92);
-        _balanceRefresh.Size = new Size(150, 30);
-        balanceBox.Controls.Add(_balanceRefresh);
+        _balanceRefresh.Size = new Size(150, Theme.ButtonHeight);
+        Theme.Button(_balanceRefresh, Theme.ButtonKind.Secondary);
+        balanceCard.Controls.Add(_balanceRefresh);
 
         _balancePlatform.Text = Loc.T("main.platform");
         _balancePlatform.Location = new Point(176, 92);
-        _balancePlatform.Size = new Size(140, 30);
-        balanceBox.Controls.Add(_balancePlatform);
+        _balancePlatform.Size = new Size(140, Theme.ButtonHeight);
+        Theme.Button(_balancePlatform, Theme.ButtonKind.Secondary);
+        balanceCard.Controls.Add(_balancePlatform);
 
         _balanceChecked.Text = "";
-        _balanceChecked.ForeColor = Faint;
+        _balanceChecked.Font = Theme.Hint;
+        _balanceChecked.ForeColor = Theme.Colors.Faint;
         _balanceChecked.TextAlign = ContentAlignment.MiddleRight;
         _balanceChecked.Location = new Point(326, 96);
         _balanceChecked.Size = new Size(154, 22);
-        balanceBox.Controls.Add(_balanceChecked);
+        balanceCard.Controls.Add(_balanceChecked);
 
         var hint = new Label
         {
             Text = Loc.T("main.hint"),
-            ForeColor = Faint,
+            Font = Theme.Hint,
+            ForeColor = Theme.Colors.Faint,
             Location = new Point(16, 518),
             Size = new Size(492, 62),
         };
@@ -306,36 +348,38 @@ public sealed class MainForm : Form
         _balancePlatform.Click += (_, _) => _host.OpenPlatform();
     }
 
-    /// <summary>Перерисовка состояния: вызывается из TrayHost на потоке интерфейса.</summary>
+    /// <summary>Перерисовка состояния: вызывается из TrayHost на потоке интерфейса.
+    /// Цвета состояния — роли темы: «работает» — Success, «порт занят другим» и пик — Warning,
+    /// остановлено — Muted, отказ получения баланса — Danger.</summary>
     public void ApplyStatus(ServerStatus status, PeakState peak, BalanceResult balance, bool busy, bool autostart)
     {
         _busy = busy;
 
         if (status.Running)
         {
-            _dot.ForeColor = Green;
+            _dot.ForeColor = Theme.Colors.Success;
             _state.Text = Loc.T("state.runningTitle");
-            _state.ForeColor = GreenText;
+            _state.ForeColor = Theme.Colors.Success;
             _info.Text = _host.HasAuthenticatedUrl
                 ? Loc.T("main.pidUrlKnown", status.Pid)
                 : Loc.T("main.pidForeign", status.Pid);
         }
         else if (status.PortBusyByOther)
         {
-            _dot.ForeColor = Amber;
+            _dot.ForeColor = Theme.Colors.Warning;
             _state.Text = Loc.T("state.portBusyTitle", status.Port);
-            _state.ForeColor = AmberText;
+            _state.ForeColor = Theme.Colors.Warning;
             _info.Text = $"{status.ProcessName} (PID {status.Pid}) · {status.Url}";
         }
         else
         {
-            _dot.ForeColor = Grey;
+            _dot.ForeColor = Theme.Colors.Disabled;
             _state.Text = Loc.T("state.stoppedTitle");
-            _state.ForeColor = GreyText;
+            _state.ForeColor = Theme.Colors.Muted;
             _info.Text = Loc.T("main.pressStart");
         }
 
-        _peak.ForeColor = peak.InPeak ? OrangeText : GreenText;
+        _peak.ForeColor = peak.InPeak ? Theme.Colors.Warning : Theme.Colors.Success;
         var peakText = Loc.T("main.tariff", peak.StateText);
         if (!string.IsNullOrEmpty(peak.NextText)) peakText += " · " + peak.NextText;
         _peak.Text = peakText;
@@ -367,19 +411,20 @@ public sealed class MainForm : Form
         {
             var low = _host.IsBalanceLow(balance);
             _balanceBig.Text = balance.Summary;
-            _balanceBig.ForeColor = low ? AmberText : Color.Black;
+            _balanceBig.ForeColor = low ? Theme.Colors.Warning : Theme.Colors.Text;
             _balanceState.Text = Loc.T("main.balanceAvailable", Loc.T(balance.Available ? "common.yes" : "common.no"))
                                  + (string.IsNullOrEmpty(balance.Source) ? "" : $" · {balance.Source}")
                                  + (low ? " · " + Loc.T("main.balanceLow", _host.ThresholdText) : "");
-            _balanceState.ForeColor = balance.Available ? (low ? AmberText : GreenText) : AmberText;
+            _balanceState.ForeColor = balance.Available ? (low ? Theme.Colors.Warning : Theme.Colors.Success) : Theme.Colors.Warning;
             _balanceChecked.Text = Loc.T("main.checkedAt", balance.CheckedAt.ToString("HH:mm:ss"));
         }
         else
         {
             _balanceBig.Text = Loc.T("common.dash");
-            _balanceBig.ForeColor = Color.Black;
+            _balanceBig.ForeColor = Theme.Colors.Text;
             _balanceState.Text = balance.Error;
-            _balanceState.ForeColor = AmberText;
+            // Отказ получить баланс — это ошибка, а не предупреждение: роль Danger.
+            _balanceState.ForeColor = Theme.Colors.Danger;
             _balanceChecked.Text = Loc.T("main.checkAttempt", balance.CheckedAt.ToString("HH:mm:ss"));
         }
     }
@@ -436,6 +481,8 @@ public sealed class MainForm : Form
     /// <summary>
     /// Перенабирает подписи после смены языка: окно перестраивается из тех же полей,
     /// обработчики остаются на месте (их вешает WireEvents один раз).
+    /// Тема применяется здесь второй раз — Retext собирает окно заново, и без этого
+    /// после смены языка вид вернулся бы к системным цветам (отдельный пункт приёмки 1.22.0).
     /// </summary>
     public void Retext()
     {
@@ -445,6 +492,7 @@ public sealed class MainForm : Form
             Text = AppVersion.Title;
             Controls.Clear();
             BuildLayout();
+            Theme.Apply(this);
 
             // Галочка показывает сохранённую настройку, а не значение по умолчанию.
             _suppressBrowser = true;

@@ -62,25 +62,61 @@ public static class Autostart
     /// старте «починила» боевую запись владельца и перевела её на свою временную копию — после
     /// перезагрузки вместо панели поднялась бы она, а потом папку удалили бы, и автозапуск молча
     /// перестал бы работать вовсе. Поэтому в таком прогоне починка не делает ничего.
+    ///
+    /// Считаются ВСЕ подмены данных из <see cref="IsolationOverrides"/>, кроме уведённой ветки
+    /// реестра: прежде признак знал только три переменные, и проверка, подменившая, скажем, один
+    /// <c>DSH_HOME</c>, правила бы настоящий <c>Run</c> — ровно тот случай, ради которого признак и
+    /// появился. Ветка реестра исключена намеренно: с ней починку упражняет
+    /// <c>tools\check-autostart.ps1</c>, и запрещать её там нельзя.
     /// </summary>
-    private static bool IsCheckRun =>
+    internal static bool IsCheckRun =>
         !RunKeyOverridden
-        && (HasEnv("DSH_PANEL_DATA") || HasEnv("DSH_PANEL_STATE") || HasEnv("DSH_PANEL_INSTANCE"));
+        && IsolationOverrides.Any(name => name != "DSH_PANEL_RUN_KEY" && HasEnv(name));
 
     /// <summary>
-    /// Это не панель владельца, а прогон в изолированной среде: подменены каталоги панели **или**
-    /// ветка реестра. Для правки записи эти два случая разные (<see cref="IsCheckRun"/> править
-    /// не даёт, а уведённая ветка реестра — даёт, иначе проверку автозапуска нечем проверить),
-    /// но для уведомлений разницы нет: в любом таком прогоне человеку не показываем ничего.
+    /// Переменные, подмена которых означает «это прогон проверки, а не панель владельца»: каждая
+    /// уводит в свою папку данные, состояние, ключи, резервные копии, домашнюю папку DSH, папку
+    /// настроек прежней генерации — либо меняет имя экземпляра или ветку автозапуска. Перечень
+    /// ОБЯЗАН совпадать с таблицей подмен в <c>docs\DEVELOPMENT.md</c> и с красной линией №2 в
+    /// <c>AGENTS.md</c>: проверка, подменившая только один из этих каталогов, иначе получила бы
+    /// окна, шарики и запись в «Программы и компоненты» владельца — ровно это и случилось в
+    /// <c>tools\check-update-apply.ps1</c> (он подменял данные и состояние, но не DSH_HOME).
+    ///
+    /// Здесь СОЗНАТЕЛЬНО нет <c>DSH_PANEL_LANG</c>, <c>DSH_TRAY_PRICING</c>, <c>DSH_PANEL_API</c>,
+    /// <c>DSH_PANEL_REPO</c>, <c>DSH_TRAY_NODE</c>, <c>DSH_TRAY_BIN</c> и прочих подмен «на один
+    /// прогон»: часть из них названа в README и нужна обычному человеку (свой Node, свой язык),
+    /// и объявлять такой прогон изолированным значило бы молча лишить его окон и шариков.
+    /// </summary>
+    private static readonly string[] IsolationOverrides =
+    {
+        "DSH_PANEL_DATA", "DSH_PANEL_STATE", "DSH_PANEL_SSH_DIR", "DSH_TRAY_BACKUP",
+        "DSH_HOME", "DSH_PANEL_LEGACY_DATA", "DSH_PANEL_INSTANCE", "DSH_PANEL_RUN_KEY",
+        "DSH_PANEL_NO_MIGRATE",
+    };
+
+    /// <summary>
+    /// Тот же перечень для самопроверки: кейс «Изоляция ок» обязан выставлять по одной КАЖДУЮ
+    /// переменную признака, а не запомненный список из четырёх. Иначе новая подмена (так и вышло
+    /// с <c>DSH_HOME</c>) осталась бы вне кейса, и он оставался бы зелёным.
+    /// </summary>
+    internal static IReadOnlyList<string> IsolationOverrideNames => IsolationOverrides;
+
+    /// <summary>
+    /// Это не панель владельца, а прогон в изолированной среде: подменён хотя бы один из
+    /// <see cref="IsolationOverrides"/>. Для правки записи автозапуска случаев два
+    /// (<see cref="IsCheckRun"/> править не даёт, а уведённая ветка реестра — даёт, иначе проверку
+    /// автозапуска нечем проверить), но для уведомлений и окон разницы нет: в любом таком прогоне
+    /// человеку не показываем ничего.
     ///
     /// Это ОБЩИЙ признак «прогон не владельца»: по нему молчат все автоматические сообщения
-    /// (<see cref="TrayHost.ShouldNotify"/> и дверь <c>TrayHost.NotifyBalloon</c>) и не правится
-    /// версия в «Программах и компонентах» (<see cref="PanelRegistration.RefreshVersion"/>).
+    /// (<see cref="TrayHost.DoorDecision"/> и <see cref="TrayHost.ShouldNotify"/>), не показываются
+    /// окна (<see cref="TrayHost.ShouldShowWindowOnStart"/>, <see cref="TrayHost.ShouldAutoShowOnboarding"/>,
+    /// <see cref="TrayHost.ShouldShowPanelOnSignal"/>, <see cref="TrayHost.ShouldAutoOpenBrowser"/>),
+    /// не поднимается сервер сам (<see cref="TrayHost.ShouldAutoStartServer"/>) и не правится версия
+    /// в «Программах и компонентах» (<see cref="PanelRegistration.RefreshVersion"/>).
     /// Другого определения изоляции в панели быть не должно.
     /// </summary>
-    internal static bool IsIsolatedRun =>
-        RunKeyOverridden
-        || HasEnv("DSH_PANEL_DATA") || HasEnv("DSH_PANEL_STATE") || HasEnv("DSH_PANEL_INSTANCE");
+    internal static bool IsIsolatedRun => IsolationOverrides.Any(HasEnv);
 
     private static bool HasEnv(string name) =>
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name));

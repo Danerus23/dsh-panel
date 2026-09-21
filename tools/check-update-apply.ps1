@@ -16,7 +16,12 @@
 param(
     [Parameter(Mandatory = $true)][string]$Exe,
     [string]$Work = '',
-    [int]$Port = 3915
+    [int]$Port = 3915,
+    # Порт, на который смотрит песочный профиль панели. 0 — подобрать свободный самим: значение
+    # по умолчанию в свежем settings.json — 3080, то есть порт владельца, и прогон проверки не
+    # имеет права даже смотреть в его сторону. Ключ --port тут не поможет: update.cmd поднимает
+    # панель без аргументов (UpdateService), поэтому порт задаётся настройкой песочницы.
+    [int]$ServerPort = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,11 +35,23 @@ function Check([string]$name, [bool]$ok, [string]$detail) {
 }
 
 if ($Port -eq 3080) { throw 'порт 3080 занят живой панелью — проверка его не трогает' }
+if ($ServerPort -eq 3080) { throw 'порт 3080 занят живой панелью — проверка его не трогает' }
 if (-not (Test-Path -LiteralPath $Exe)) { throw ('не нашёл панель: ' + $Exe) }
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'нужен Node.js для заглушки GitHub' }
 
 if (-not $Work) { $Work = Join-Path $env:TEMP ('dsh-update-apply-' + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
 New-Item -ItemType Directory -Path $Work -Force | Out-Null
+
+# Свободный порт для песочного профиля панели: слушаем нулевой порт, забираем выданный номер и
+# отпускаем его. Так проверка не зависит ни от занятости 3097 (его берёт приёмка), ни от порядка
+# запуска проверок в конвейере.
+if ($ServerPort -eq 0) {
+    $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $probe.Start()
+    $ServerPort = ([System.Net.IPEndPoint]$probe.LocalEndpoint).Port
+    $probe.Stop()
+}
+if ($ServerPort -eq $Port) { throw 'песочный порт панели и порт заглушки GitHub должны быть разными' }
 
 $version = (Get-Item -LiteralPath $Exe).VersionInfo.ProductVersion
 if ($version.IndexOf('+') -gt 0) { $version = $version.Substring(0, $version.IndexOf('+')) }
@@ -42,6 +59,7 @@ $version = $version.TrimStart('v')
 
 Write-Host ('Песочница: ' + $Work)
 Write-Host ('Версия панели: ' + $version)
+Write-Host ('Песочный порт панели: ' + $ServerPort)
 
 # 1. Панель в папке с пробелом — как настоящая установка
 $target = Join-Path $Work 'DSH Panel'
@@ -96,12 +114,29 @@ http.createServer((request, response) => {
 '@
 [IO.File]::WriteAllText($stub, $stubSource, (New-Object Text.UTF8Encoding($false)))
 
-$stubProcess = Start-Process -FilePath 'node' -ArgumentList @($stub, $files, $Port, $version) -PassThru -WindowStyle Hidden
-Start-Sleep -Seconds 2
-
 $data = Join-Path $Work 'data'
 $state = Join-Path $Work 'state'
-New-Item -ItemType Directory -Path $data, $state, (Join-Path $Work 'ssh'), (Join-Path $Work 'backups') -Force | Out-Null
+# Не $home: так называется встроенная переменная PowerShell, и присваивание ей падает.
+$dshHome = Join-Path $Work 'dsh-home'
+$legacy = Join-Path $Work 'legacy-appdata'
+New-Item -ItemType Directory -Path $data, $state, (Join-Path $Work 'ssh'),
+    (Join-Path $Work 'backups'), $dshHome, $legacy -Force | Out-Null
+
+# Песочный профиль панели пишем ДО первого запуска. Без этого свежий settings.json получал
+# serverPort = 3080 (значение по умолчанию), и панель проверки смотрела на живой порт владельца,
+# а её собственный автозапуск сервера — тот, что глушит TrayHost.ShouldAutoStartServer, — целился
+# бы в него же. Язык и мастер заданы явно: профиль должен быть похож на обычный, чтобы проверка
+# ловила именно изоляцию, а не пустой профиль.
+$settingsPath = Join-Path $data 'settings.json'
+$sandboxSettings = [ordered]@{
+    language           = 'ru'
+    onboarded          = $true
+    openBrowserOnStart = $true
+    serverPort         = $ServerPort
+    balanceAutoRefresh = $false
+    peakAutoCheck      = $false
+} | ConvertTo-Json
+[IO.File]::WriteAllText($settingsPath, $sandboxSettings, (New-Object Text.UTF8Encoding($false)))
 
 $keepData = $env:DSH_PANEL_DATA
 $keepState = $env:DSH_PANEL_STATE
@@ -111,17 +146,59 @@ $keepApi = $env:DSH_PANEL_API
 $keepInstance = $env:DSH_PANEL_INSTANCE
 $keepLang = $env:DSH_PANEL_LANG
 $keepMigrate = $env:DSH_PANEL_NO_MIGRATE
+$keepHome = $env:DSH_HOME
+$keepLegacy = $env:DSH_PANEL_LEGACY_DATA
 
+# Полный набор подмен из красной линии №2 (AGENTS.md) и таблицы docs\DEVELOPMENT.md: своя папка
+# настроек, своё состояние, свои ключи, свои копии, своя домашняя папка DSH (в ней лежит ключ —
+# без неё панель читала настоящий %USERPROFILE%\.dsh и показывала баланс владельца) и своя папка
+# настроек прежней генерации.
+#
+# DSH_PANEL_RUN_KEY здесь НЕ выставляется намеренно: без него Autostart.IsCheckRun видит прогон
+# проверки (подменены DSH_PANEL_DATA/STATE/INSTANCE) и не пишет в реестр вообще ничего — это
+# строже, чем увести запись в свою ветку, которую пришлось бы потом убирать.
 $env:DSH_PANEL_DATA = $data
 $env:DSH_PANEL_STATE = $state
 $env:DSH_PANEL_SSH_DIR = Join-Path $Work 'ssh'
 $env:DSH_TRAY_BACKUP = Join-Path $Work 'backups'
+$env:DSH_HOME = $dshHome
+$env:DSH_PANEL_LEGACY_DATA = $legacy
 $env:DSH_PANEL_API = 'http://127.0.0.1:' + $Port
 $env:DSH_PANEL_INSTANCE = 'dsh-update-apply'
 $env:DSH_PANEL_LANG = 'ru'
 $env:DSH_PANEL_NO_MIGRATE = '1'
 
 try {
+    # Заглушка поднимается ВНУТРИ try: иначе ранняя ошибка подготовки песочницы оставляла бы её
+    # процесс жить (так и вышло один раз — осиротевший node держал порт, а следующий прогон молча
+    # скачал сборку прошлого).
+    $stubProcess = Start-Process -FilePath 'node' -ArgumentList @($stub, $files, $Port, $version) -PassThru -WindowStyle Hidden
+
+    # И она обязана встать ИМЕННО на свой порт со СВОЕЙ сборкой: порт мог остаться занят прошлой
+    # (или чужой) заглушкой, и панель тогда скачала бы чужой архив, а проверка этого не заметила.
+    # Сверяем не «отвечает ли кто-нибудь», а контрольную сумму: у нашей сборки — своя.
+    $stubReady = $false
+    $stubError = ''
+    for ($i = 0; $i -lt 20; $i++) {
+        if ($stubProcess.HasExited) { break }
+        try {
+            # WebClient, а не Invoke-WebRequest: заглушка отдаёт файлы как octet-stream, и
+            # Invoke-WebRequest вернул бы байты, а не текст — сверка суммы молча не сработала бы.
+            $web = New-Object System.Net.WebClient
+            try {
+                $served = $web.DownloadString('http://127.0.0.1:' + $Port + '/files/SHA256SUMS.txt')
+            }
+            finally { $web.Dispose() }
+            if ($served -match $hash) { $stubReady = $true; break }
+            $stubError = 'на порту отвечает чужая заглушка'
+        }
+        catch { $stubError = $_.Exception.Message }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $stubReady) {
+        throw ('заглушка GitHub не встала на порт ' + $Port + ' со своей сборкой — порт занят прошлым или чужим процессом: ' + $stubError)
+    }
+
     # 3. Готовим обновление
     $out = Join-Path $Work 'prepare.txt'
     & (Join-Path $target 'DshTray.exe') --update-prepare --force --out $out | Out-Null
@@ -150,6 +227,46 @@ try {
     Check 'Команда замены напечатана' $hasCommand 'панель показала, чем будет заменять файлы'
     Check 'Файлы заменены в папке с пробелом' $applied 'robocopy отработал, откат не потребовался'
 
+    # Панель, которую поднял сценарий замены, дописывает журнал не сразу: строки подавления и
+    # строку счёта пишет таймер старта. Ждём их появления, а не спим угаданное время.
+    $stateLog = Join-Path $state 'dsh-tray.log'
+    $stateLogText = ''
+    for ($i = 0; $i -lt 30; $i++) {
+        if (Test-Path -LiteralPath $stateLog) {
+            $stateLogText = Get-Content -LiteralPath $stateLog -Raw -Encoding UTF8
+            if (($stateLogText -match 'сервер при старте не поднят') -and
+                ($stateLogText -match 'счёт \(при запуске\)')) { break }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    # Изоляция песочницы проверяется не словами, а тремя утверждениями о том, что прогон
+    # НЕ трогал владельца: настройки несут песочный порт, журнал не знает про 3080 и не содержит
+    # баланса из настоящего профиля, а сервер сам не поднялся (его глушит ShouldAutoStartServer,
+    # иначе проверка заняла бы порт владельца и оставила бы осиротевший node).
+    $settingsNow = if (Test-Path -LiteralPath $settingsPath) {
+        Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8
+    } else { '' }
+    $portOk = ($settingsNow -match ('"serverPort":\s*' + $ServerPort)) -and
+              ($settingsNow -notmatch '"serverPort":\s*3080')
+    Check 'Песочный профиль: порт панели — песочный, а не 3080' $portOk ('serverPort = ' + $ServerPort)
+
+    $noRealPort = ($stateLogText.Length -gt 0) -and ($stateLogText -notmatch '3080')
+    Check 'Журнал песочницы не упоминает порт 3080' $noRealPort 'панель проверки не смотрела на живой порт'
+
+    $balanceLine = ($stateLogText -split "`r?`n" | Where-Object { $_ -match 'счёт \(при запуске\)' } |
+        Select-Object -First 1)
+    $balanceIsolated = [bool]$balanceLine -and ($balanceLine -match 'не получен')
+    Check 'Баланс владельца не читается: ключ в песочницу не попал' $balanceIsolated `
+        ($balanceLine -replace '^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*', '')
+
+    $urlFile = Join-Path $state 'web-url.txt'
+    $listening = [bool](Get-NetTCPConnection -LocalPort $ServerPort -State Listen -ErrorAction SilentlyContinue)
+    $suppressed = $stateLogText -match 'сервер при старте не поднят \(изолированный прогон\)'
+    Check 'Сервер сам не поднялся: изоляция заглушила автозапуск' `
+        ((-not (Test-Path -LiteralPath $urlFile)) -and (-not $listening) -and $suppressed) `
+        ('порт ' + $ServerPort + ' свободен, ссылки входа нет')
+
     if ($prepared -and $hasCommand -and -not $applied) {
         Write-Host '  журнал обновления:' -ForegroundColor Yellow
         Get-Content -LiteralPath (Join-Path $state 'update\update.log') -Encoding UTF8 -ErrorAction SilentlyContinue |
@@ -165,6 +282,8 @@ finally {
     $env:DSH_PANEL_INSTANCE = $keepInstance
     $env:DSH_PANEL_LANG = $keepLang
     $env:DSH_PANEL_NO_MIGRATE = $keepMigrate
+    $env:DSH_HOME = $keepHome
+    $env:DSH_PANEL_LEGACY_DATA = $keepLegacy
 
     if ($stubProcess -and -not $stubProcess.HasExited) { try { $stubProcess.Kill() } catch { } }
 
