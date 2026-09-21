@@ -14,7 +14,7 @@
 # it refuses to combine a release tag with a different project version.
 
 PackageIdentifier: Danerus23.DSHPanel
-PackageVersion: 1.20.3
+PackageVersion: 1.21.0
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.12.0
