@@ -133,18 +133,10 @@ public sealed class TrayHost : ApplicationContext
             }
 
             // Первый запуск: сначала мастер настройки, потом всё остальное — иначе панель
-            // начнёт поднимать сервер в чужой папке и на чужом порту. Окно панели до мастера
-            // не показываем: мастер должен открыться на чистом экране, а не поверх панели.
-            // Это единственное место, где принимается решение о мастере: раньше его показывал
-            // ещё и Program, и на первом запуске открывались два окна мастера.
-            if (!Settings.Onboarded || _onboardRequested)
-            {
-                _onboardRequested = false;
-                ShowOnboarding();
-
-                // Мастер пройден (или закрыт) — человек ждёт панель, а не пустой рабочий стол.
-                if (!_startHidden) ShowPanel();
-            }
+            // начнёт поднимать сервер в чужой папке и на чужом порту. Решение принимается
+            // в MaybeShowOnboarding (и только там): раньше мастер показывал ещё и Program,
+            // и на первом запуске открывались два окна мастера.
+            MaybeShowOnboarding();
 
             RefreshState();
             StartInitialServer();
@@ -157,13 +149,11 @@ public sealed class TrayHost : ApplicationContext
             // Просроченную копию делаем не сразу, а через полминуты после старта.
             _nextBackupCheck = NextBackupAt();
 
-            // Раз в сутки тихо спрашиваем GitHub о новой версии. Ничего не скачиваем сами:
-            // если версия новее — показываем шарик и человек сам решает в «Настройках».
-            if (Settings.UpdateCheckedAt == null
-                || (DateTime.Now - Settings.UpdateCheckedAt.Value).TotalHours >= 24)
-            {
-                _ = CheckUpdatesQuietAsync();
-            }
+            // Спрашиваем GitHub о новой версии при КАЖДОМ запуске панели: ничего не скачиваем сами,
+            // только узнаём номер и показываем шарик. Раньше проверка шла не чаще раза в сутки, из-за
+            // чего выпуск, вышедший утром, можно было не заметить до следующего дня. От повторных
+            // шариков защищает UpdateService.ShouldAnnounce: одно сообщение на версию.
+            _ = CheckUpdatesQuietAsync();
         };
 
         // Главное окно нас не держит: приложение живёт, пока жив значок в трее.
@@ -177,16 +167,9 @@ public sealed class TrayHost : ApplicationContext
 
         if (!autoStart) return;
 
-        if (!startHidden)
-        {
-            // Пока мастер первой настройки не пройден, окно не показываем: через мгновение
-            // откроется мастер, и панель не должна стоять за ним.
-            if (Settings.Onboarded)
-            {
-                _form.Show();
-                _form.Activate();
-            }
-        }
+        // Пока мастер первой настройки не пройден, окно не показываем: через мгновение
+        // откроется мастер, и панель не должна стоять за ним. Решение и изоляция — внутри.
+        if (!startHidden) ShowPanelOnStart();
 
         _timer.Start();
         _startupTimer.Start();
@@ -200,6 +183,112 @@ public sealed class TrayHost : ApplicationContext
     public bool ServerRunning => _status.Running;
 
     public bool HasAuthenticatedUrl => _server.GetAuthenticatedUrl(skipRunningCheck: true).Length > 0;
+
+    // --- сообщения человеку ------------------------------------------------
+
+    /// <summary>
+    /// Виды сообщений, которые панель показывает человеку САМА, без его действия. Перечисление
+    /// нужно самопроверке: она обходит ВСЕ виды и убеждается, что в изолированном прогоне молчит
+    /// каждый, — а не только тот, о котором вспомнили (шарик автозапуска владелец уже получил).
+    /// Появляется новый вид автоматического сообщения — он обязан появиться и здесь, иначе
+    /// останется вне общего предохранителя и самопроверка этого не заметит.
+    /// </summary>
+    internal enum NoticeKind
+    {
+        /// <summary>На GitHub вышла версия новее этой.</summary>
+        UpdateAvailable,
+
+        /// <summary>Прошлое обновление не применилось: панель не вышла, мьютекс занят, откат.</summary>
+        UpdateOutcome,
+
+        /// <summary>Окна пика на странице цен разошлись с нашими.</summary>
+        PeakWindows,
+
+        /// <summary>Баланс опустился ниже порога из настроек.</summary>
+        BalanceLow,
+
+        /// <summary>Резервная копия не удалась.</summary>
+        BackupFailed,
+
+        /// <summary>Ошибка, которую человеку надо показать, а окна панели под рукой нет.</summary>
+        Error,
+
+        /// <summary>Запись автозапуска не удалось починить, и сам человек этого не увидит.</summary>
+        AutostartBroken,
+    }
+
+    /// <summary>
+    /// Единственное правило: панель говорит человеку что-либо по своей инициативе, только когда
+    /// это его собственный прогон. Изолированный прогон (<paramref name="isolatedRun"/> — это
+    /// <see cref="Autostart.IsIsolatedRun"/>: подменены каталоги панели и/или ветка автозапуска)
+    /// — это наши же проверки на машине владельца: они запускают собранную копию с тем же номером
+    /// версии, что стоит у него, и однажды он уже получил от такой проверки шарик про собственный
+    /// автозапуск. Такой прогон не показывает ему НИЧЕГО — ни окон, ни шариков.
+    ///
+    /// Признак <paramref name="kind"/> в правиле не участвует намеренно: исключений нет ни для
+    /// одного вида автоматического сообщения, а нужен он, чтобы самопроверка обошла все виды,
+    /// а не один. Мастер первой настройки видом сообщения не является — это запрошенное окно,
+    /// и изоляция его не касается (<c>tools\check-onboarding.ps1</c> считает именно его окна).
+    /// </summary>
+    internal static bool ShouldNotify(NoticeKind kind, bool isolatedRun) => !isolatedRun;
+
+    /// <summary>
+    /// Показывать ли мастер первой настройки. Два законных повода, и только они:
+    /// <paramref name="requested"/> — человек (или проверка) попросил мастер ключом <c>--onboard</c>,
+    /// это <c>tools\check-onboarding.ps1</c> считает именно его окна; либо профиль настоящий
+    /// (<paramref name="isolated"/> = <see cref="Autostart.IsIsolatedRun"/> ложно) и мастер в нём
+    /// ещё не пройден. В изолированном прогоне мастер сам не открывается: наши проверки поднимают
+    /// панель без ключей на машине владельца (так делает <c>tools\check-update-apply.ps1</c>),
+    /// и модальное окно мастера оказывалось на его рабочем столе. Правило чистым предикатом —
+    /// чтобы самопроверка перебрала ВСЕ восемь сочетаний, а не поверила коду на слово.
+    /// </summary>
+    internal static bool ShouldAutoShowOnboarding(bool onboarded, bool requested, bool isolated) =>
+        requested || (!onboarded && !isolated);
+
+    /// <summary>
+    /// Открывать ли браузер самому, когда панель поднимает сервер при старте. В изолированном
+    /// прогоне — нет: ни один наш прогон не имеет права открыть окно браузера на рабочем столе
+    /// владельца. Сервер при этом поднимается как обычно: проверка приёмки считает именно
+    /// поднятый сервер и ссылку входа, а не окно браузера.
+    /// </summary>
+    internal static bool ShouldAutoOpenBrowser(bool isolated) => !isolated;
+
+    /// <summary>
+    /// Показывать ли окно панели при старте. Окно открывается только у настоящего прогона с
+    /// пройденным мастером: в изолированном прогоне панель живёт значком в трее и не кладёт
+    /// окно поверх работы владельца.
+    /// </summary>
+    internal static bool ShouldShowWindowOnStart(bool onboarded, bool isolated) => onboarded && !isolated;
+
+    /// <summary>
+    /// Единственная дверь автоматических сообщений: всё, что панель говорит человеку по своей
+    /// инициативе, идёт через неё, и правило изоляции живёт здесь, а не в семи местах. В
+    /// изолированном прогоне сообщение не показывается, но остаётся в журнале — иначе проверка
+    /// не сможет объяснить, почему панель молчала.
+    ///
+    /// Шарики в ответ на действие человека (окно свёрнуто в трей, окна пика только что применены)
+    /// через эту дверь не идут: они показываются в ответ на то, что человек сам сделал в этом же
+    /// прогоне, и без него не появляются.
+    /// </summary>
+    private void NotifyBalloon(NoticeKind kind, string title, string text, ToolTipIcon icon, int milliseconds)
+    {
+        if (!ShouldNotify(kind, Autostart.IsIsolatedRun))
+        {
+            AppLog.Write(_paths, $"сообщение «{title}» не показано (изолированный прогон): {text}");
+            return;
+        }
+
+        try
+        {
+            // Клик по шарику открывает «Настройки» только у сообщения об окнах пика.
+            _balloonShowsPrices = kind == NoticeKind.PeakWindows;
+            _tray.ShowBalloonTip(milliseconds, title, text, icon);
+        }
+        catch
+        {
+            // Всплывающая подсказка — не повод падать.
+        }
+    }
 
     // --- меню трея ---------------------------------------------------------
 
@@ -418,18 +507,9 @@ public sealed class TrayHost : ApplicationContext
 
         if (!result.Ok)
         {
-            try
-            {
-                _balloonShowsPrices = false;
-                _tray.BalloonTipTitle = Loc.T("app.title") + " — " + Loc.T("tray.backupFailedTitle");
-                _tray.BalloonTipText = Loc.T("tray.backupFailedText", result.Error);
-                _tray.BalloonTipIcon = ToolTipIcon.Warning;
-                _tray.ShowBalloonTip(10000);
-            }
-            catch
-            {
-                // Всплывающая подсказка — не повод падать.
-            }
+            NotifyBalloon(NoticeKind.BackupFailed,
+                Loc.T("app.title") + " — " + Loc.T("tray.backupFailedTitle"),
+                Loc.T("tray.backupFailedText", result.Error), ToolTipIcon.Warning, 10000);
         }
 
         return result;
@@ -551,18 +631,10 @@ public sealed class TrayHost : ApplicationContext
         _pendingPricing = result;
         UpdateMenu();
 
-        try
-        {
-            _balloonShowsPrices = true;
-            _tray.BalloonTipTitle = Loc.T("app.title") + " — " + Loc.T("tray.pricingChangedTitle");
-            _tray.BalloonTipText = Loc.T("tray.pricingChangedText", result.CurrentText, result.FoundText);
-            _tray.BalloonTipIcon = ToolTipIcon.Warning;
-            _tray.ShowBalloonTip(15000);
-        }
-        catch
-        {
-            // Всплывающая подсказка — не повод падать.
-        }
+        NotifyBalloon(NoticeKind.PeakWindows,
+            Loc.T("app.title") + " — " + Loc.T("tray.pricingChangedTitle"),
+            Loc.T("tray.pricingChangedText", result.CurrentText, result.FoundText),
+            ToolTipIcon.Warning, 15000);
     }
 
     /// <summary>
@@ -634,6 +706,63 @@ public sealed class TrayHost : ApplicationContext
             AppLog.Write(_paths, "перезапустить панель не удалось: " + error.Message);
         }
     }
+    /// <summary>
+    /// Решение о мастере при старте панели — отдельным методом, потому что его обязан видеть
+    /// <c>--selftest</c> (структурный кейс «Гейты ок» ищет ровно этот метод и требует, чтобы он
+    /// спрашивал предикат <see cref="ShouldAutoShowOnboarding"/> и признак
+    /// <see cref="Autostart.IsIsolatedRun"/>). Подавленный мастер не исчезает бесследно: в журнал
+    /// идёт строка, по которой проверка объясняет, почему панель молчала.
+    /// </summary>
+    private void MaybeShowOnboarding()
+    {
+        if (!ShouldAutoShowOnboarding(Settings.Onboarded, _onboardRequested, Autostart.IsIsolatedRun))
+        {
+            // Мастер не показываем ТОЛЬКО тогда, когда его и не просили, и профиль изолирован:
+            // если профиль настоящий, его покажет ветка ниже, а если мастер просили — тоже она.
+            if (!Settings.Onboarded && !_onboardRequested)
+            {
+                AppLog.Write(_paths, "мастер первой настройки не показан (изолированный прогон): "
+                                     + "профиль не пройден, ключа --onboard нет");
+            }
+
+            return;
+        }
+
+        _onboardRequested = false;
+        ShowOnboarding();
+
+        // Мастер пройден (или закрыт) — человек ждёт панель, а не пустой рабочий стол.
+        if (!_startHidden) ShowPanel();
+    }
+
+    /// <summary>
+    /// Окно панели при старте. Своим решением, а не побочным эффектом конструктора: так его
+    /// видит <c>--selftest</c> (кейс «Гейты ок») и так изолированный прогон не кладёт окно на
+    /// рабочий стол владельца.
+    /// </summary>
+    private void ShowPanelOnStart()
+    {
+        if (!ShouldShowWindowOnStart(Settings.Onboarded, Autostart.IsIsolatedRun))
+        {
+            if (Settings.Onboarded)
+            {
+                AppLog.Write(_paths, "окно панели при старте не показано (изолированный прогон)");
+            }
+
+            return;
+        }
+
+        try
+        {
+            _form.Show();
+            _form.Activate();
+        }
+        catch
+        {
+            // Окно могло не построиться — панель всё равно живёт в трее.
+        }
+    }
+
     public bool ShowOnboarding()
     {
         // Мастер показывается один раз за запуск: это первая настройка, и второе окно поверх
@@ -703,13 +832,20 @@ public sealed class TrayHost : ApplicationContext
             Settings.Save(_paths.SettingsPath);
             AppLog.Write(_paths, "обновления: " + check.Summary());
 
-            if (check.Ok && check.Newer)
+            // Шарик показываем один раз на версию: проверка идёт при каждом запуске, и без этой
+            // проверки человек видел бы одно и то же сообщение на каждом старте, пока не обновится.
+            // Версию помечаем объявленной и тогда, когда шарик мог не дойти: ShowBalloonTip ничего
+            // не сообщает о том, показался ли он (выключенные уведомления, «не беспокоить», политика
+            // «No balloon tips»), поэтому повторить сообщение при следующем запуске нельзя обещать —
+            // повтор будет только со следующим выпуском. Та же новость лежит в видимом месте:
+            // «Настройки → Обновления» показывают версию и заметки независимо от шарика.
+            if (check.Ok && UpdateService.ShouldAnnounce(check.Latest, Settings.UpdateAnnounced, AppVersion.Short))
             {
-                _balloonShowsPrices = false;
-                _tray.BalloonTipTitle = AppVersion.Title;
-                _tray.BalloonTipText = Loc.T("tray.updateAvailable", check.Latest);
-                _tray.BalloonTipIcon = ToolTipIcon.Info;
-                _tray.ShowBalloonTip(8000);
+                NotifyBalloon(NoticeKind.UpdateAvailable, AppVersion.Title,
+                    Loc.T("tray.updateAvailable", check.Latest), ToolTipIcon.Info, 8000);
+
+                Settings.UpdateAnnounced = check.Latest;
+                Settings.Save(_paths.SettingsPath);
             }
         }
         catch (Exception error)
@@ -996,18 +1132,8 @@ public sealed class TrayHost : ApplicationContext
             value.ToString("0.##", CultureInfo.InvariantCulture), balance.Currency, ThresholdText);
         AppLog.Write(_paths, "предупреждение о балансе: " + text);
 
-        try
-        {
-            _balloonShowsPrices = false;
-            _tray.BalloonTipTitle = AppVersion.Title + " — " + Loc.T("tray.balanceLowTitle");
-            _tray.BalloonTipText = text;
-            _tray.BalloonTipIcon = ToolTipIcon.Warning;
-            _tray.ShowBalloonTip(10000);
-        }
-        catch
-        {
-            // Всплывающая подсказка — не повод падать.
-        }
+        NotifyBalloon(NoticeKind.BalanceLow,
+            AppVersion.Title + " — " + Loc.T("tray.balanceLowTitle"), text, ToolTipIcon.Warning, 10000);
     }
 
     private async Task RunActionAsync(string busyText, Func<ServerStatus> work)
@@ -1038,15 +1164,25 @@ public sealed class TrayHost : ApplicationContext
         }
     }
 
-    private void ShowError(string message)
+    private void ShowError(string message, bool background = false)
     {
         try
         {
             // Имя продукта — из словаря: раньше здесь было зашито прежнее «DeepSeek Harness»,
             // и ошибка на английском интерфейсе подписывалась чужим именем.
             var title = Loc.T("app.title");
-            if (_form.Visible) MessageBox.Show(_form, message, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            else _tray.ShowBalloonTip(5000, title, message, ToolTipIcon.Warning);
+
+            // Ошибка в ответ на действие человека при открытом окне панели — окном, как и раньше.
+            // Фоновая ошибка (сервер не поднялся при старте) окном не показывается никогда: она
+            // приходит не в ответ на действие, и окно поверх чужой работы — это и есть «панель
+            // мешает». Дальше — единственная дверь автоматических сообщений.
+            if (!background && _form.Visible)
+            {
+                MessageBox.Show(_form, message, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            NotifyBalloon(NoticeKind.Error, title, message, ToolTipIcon.Warning, 5000);
         }
         catch
         {
@@ -1106,10 +1242,16 @@ public sealed class TrayHost : ApplicationContext
                 AppLog.Write(_paths, "автозапуск: " + DescribeAutostartFix(fix)
                     + (fix.Before.Path.Length > 0 ? $", было: {fix.Before.Path}" : ""));
             }
-            if (fix.After.Where == Autostart.Where.Other)
+
+            // Шарик — только про то, что панель не смогла починить сама: правило про состояние
+            // записи («живую соседнюю копию шариком не трогаем») живёт в Autostart.ShouldNotify.
+            // Изоляцию проверяют оба — и ShouldNotify (это его контракт, и его проверяет
+            // самопроверка), и дверь NotifyBalloon (она общая для всех автоматических сообщений);
+            // на классе дефекта, из-за которого владелец получил шарик, лишняя проверка не лишняя.
+            if (Autostart.ShouldNotify(fix.After.Where, Autostart.IsIsolatedRun))
             {
-                _tray.ShowBalloonTip(10000, Loc.T("tray.autostartOtherTitle"),
-                    Loc.T("tray.autostartOtherText", fix.After.Path), ToolTipIcon.Warning);
+                NotifyBalloon(NoticeKind.AutostartBroken, Loc.T("tray.autostartBrokenTitle"),
+                    Loc.T("tray.autostartBrokenText", fix.After.Path), ToolTipIcon.Warning, 10000);
             }
         }
         catch
@@ -1127,10 +1269,14 @@ public sealed class TrayHost : ApplicationContext
     {
         try
         {
+            // Итог разбирается и пишется в журнал ВСЕГДА, вместе с изолированным прогоном:
+            // это делает сам UpdateService.StartupNotice до возврата (и «не применилось», и
+            // «применилось»), поэтому предохранитель стоит только перед показом человеку.
             var outcome = UpdateService.StartupNotice(_paths);
             if (outcome == null || !outcome.Failed) return;
 
-            _tray.ShowBalloonTip(15000, Loc.T("update.title"), outcome.Message, ToolTipIcon.Warning);
+            NotifyBalloon(NoticeKind.UpdateOutcome, Loc.T("update.title"), outcome.Message,
+                ToolTipIcon.Warning, 15000);
         }
         catch
         {
@@ -1187,7 +1333,17 @@ public sealed class TrayHost : ApplicationContext
     {
         // Как и прежняя панель: если сервера нет — поднимаем его сами.
         // Значения снимаем на потоке интерфейса, работаем — в фоне.
-        var openBrowser = !_startHidden && Settings.OpenBrowserOnStart;
+        //
+        // Браузер при этом — единственное, что человек УВИДЕЛ БЫ, не сделав ничего, поэтому он
+        // и глушится в изолированном прогоне. Сам сервер глушить нельзя: приёмка
+        // (tools\acceptance.ps1) считает именно поднятый на её порту сервер и ссылку входа,
+        // а не окно браузера. Граница простая: проверяемое — работает, видимое — молчит.
+        var wantsBrowser = !_startHidden && Settings.OpenBrowserOnStart;
+        var openBrowser = wantsBrowser && ShouldAutoOpenBrowser(Autostart.IsIsolatedRun);
+        if (wantsBrowser && !openBrowser)
+        {
+            AppLog.Write(_paths, "браузер при старте не открыт (изолированный прогон)");
+        }
 
         Task.Run(() =>
         {
@@ -1199,7 +1355,8 @@ public sealed class TrayHost : ApplicationContext
             }
             catch (Exception error)
             {
-                ShowError(error.Message);
+                // Фоновая ветка: сервер поднимался сам, человека рядом с этим действием нет.
+                ShowError(error.Message, background: true);
             }
             finally
             {
@@ -1434,7 +1591,17 @@ public sealed class TrayHost : ApplicationContext
 
     public void SaveOnboardingShot(string path, int step = 0)
     {
-        using var wizard = new OnboardingForm(_paths, Settings);
+        // Единственный снимок, который раньше показывался по центру экрана: OnboardingForm сам
+        // ставит CenterScreen и ShowInTaskbar, а соседние снимки уводят окно за экран. Съёмка
+        // идёт в изолированном прогоне на машине владельца (рецепт — в AGENTS.md), поэтому окно
+        // уводим так же, как у соседей: пиксели те же, а на рабочем столе ничего не мелькает.
+        using var wizard = new OnboardingForm(_paths, Settings)
+        {
+            StartPosition = FormStartPosition.Manual,
+            Location = new Point(-4000, -4000),
+            ShowInTaskbar = false,
+        };
+
         wizard.ShowStepForCheck(step);
         RenderShot(wizard, path);
     }

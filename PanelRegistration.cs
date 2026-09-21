@@ -33,10 +33,14 @@ public static class PanelRegistration
     /// </summary>
     public static bool RefreshVersion()
     {
-        // Прогон проверки с подменёнными каталогами машинную запись не трогает: приёмочные проверки
-        // и проверка мастера поднимают панель в трее, и без этого предохранителя они бы правили
-        // «Программы и компоненты» владельца. Тот же признак использует Autostart.cs.
-        if (IsCheckRun()) return false;
+        // Прогон проверки машинную запись не трогает: приёмочные проверки и проверка мастера
+        // поднимают панель в трее, и без этого предохранителя они бы правили «Программы и
+        // компоненты» владельца.
+        //
+        // Признак берём общий — Autostart.IsIsolatedRun. Он шире «подменены каталоги»: ловит и
+        // прогон с уведённой веткой реестра (DSH_PANEL_RUN_KEY), который тоже наш, а не владельца.
+        // Иначе GUI-прогон только с этой переменной правил бы настоящий DisplayVersion.
+        if (Autostart.IsIsolatedRun) return false;
 
         try
         {
@@ -58,16 +62,5 @@ public static class PanelRegistration
             // версия, на работу панели это не влияет.
             return false;
         }
-    }
-
-    /// <summary>Это прогон проверки: у панели подменены свои каталоги или имя экземпляра.</summary>
-    private static bool IsCheckRun()
-    {
-        foreach (var name in new[] { "DSH_PANEL_DATA", "DSH_PANEL_STATE", "DSH_PANEL_INSTANCE" })
-        {
-            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(name))) return true;
-        }
-
-        return false;
     }
 }

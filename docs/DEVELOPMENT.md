@@ -148,12 +148,16 @@ number, without the `+<commit>` build suffix (`AppVersion.Short`).
 
 The guards, all verified against `PanelRegistration.cs`: the key must exist (a portable build has no
 entry), the entry must introduce itself as exactly `DSH Panel`, and **nothing but `DisplayVersion` is
-touched and the entry is never created** — a foreign row in that list is never edited. A **check
-run** (the panel started with an overridden `DSH_PANEL_DATA`, `DSH_PANEL_STATE` or
-`DSH_PANEL_INSTANCE`) returns immediately and leaves the machine's entry alone: the acceptance suite
-and the wizard check raise a real tray panel, and without this guard they would edit the owner's list.
-That check-run marker is the same one `Autostart` uses. A key locked by policy or missing rights is
-not an error either: the old version simply stays, and the panel works as usual.
+touched and the entry is never created** — a foreign row in that list is never edited. An **isolated
+run** — the panel started with an overridden `DSH_PANEL_DATA`, `DSH_PANEL_STATE` or
+`DSH_PANEL_INSTANCE`, **or** with the autostart branch redirected through `DSH_PANEL_RUN_KEY`
+(`Autostart.IsIsolatedRun`: the same wide marker the notifications use, see the environment table
+below) — returns immediately and leaves the machine's entry alone: **the acceptance suite and the
+wizard check raise a real tray panel** in their own profiles — `tools\acceptance.ps1` runs
+`--selftest` and `--layout-check`, which build a real `TrayHost` and therefore a live `NotifyIcon`
+(`Visible = true`), and `tools\check-onboarding.ps1` opens a real panel window — so without this
+guard those runs would edit the owner's list. A key locked by policy or missing rights is not an
+error either: the old version simply stays, and the panel works as usual.
 
 ## Acceptance
 
@@ -347,10 +351,85 @@ where each one is explained:
 | `DSH_TRAY_BALANCE_SCRIPT` | your own fallback script for the balance request |
 
 An overridden `DSH_PANEL_DATA`, `DSH_PANEL_STATE` or `DSH_PANEL_INSTANCE` also marks the run as **a
-check** in the panel itself: such a run never repairs the real `HKCU\...\Run` and never corrects the
-version in “Programs and features” (`PanelRegistration.IsCheckRun`; the same marker `Autostart` uses).
-Without that, the acceptance suite — which really does raise a tray panel — would edit the owner's
-registry. `DSH_PANEL_RUN_KEY` is the narrower override for the same purpose.
+check** in the panel itself: such a run never repairs the real `HKCU\...\Run`
+(`Autostart.IsCheckRun` — deliberately **narrow**: it does not count a redirected `Run` branch, so
+that `tools\check-autostart.ps1` can still exercise the repair path when only `DSH_PANEL_RUN_KEY` is
+set). Without that, a check that raises the panel itself — `tools\check-onboarding.ps1` opens a real
+panel window in its own profile — would edit the owner's registry. `DSH_PANEL_RUN_KEY` is the
+narrower override for the same purpose.
+
+Everything else uses the **wide** marker, `Autostart.IsIsolatedRun` — overridden panel directories
+**or** a redirected `Run` branch — which means “this is not the owner's run”. An isolated run shows
+the person **nothing on its own initiative: neither windows nor balloons**. Every automatic message
+goes through the single door `TrayHost.NotifyBalloon`, and the rule behind it is
+`TrayHost.ShouldNotify(kind, isolatedRun)`; the kinds are enumerated in `TrayHost.NoticeKind`
+precisely so that `--selftest` can walk all of them instead of the one balloon somebody remembered.
+A suppressed message is still written to the panel log, so a silent run leaves a trace. The two
+balloons that answer a human action inside the same visible run — “hidden to tray” and “peak windows
+applied” — deliberately do not go through the door: without the person they never appear.
+`Autostart.ShouldNotify(state, isolatedRun)` adds the autostart-specific rule on top (a live
+neighbouring copy is never announced by a balloon; the tray tooltip says nothing about autostart, so
+the state is visible in the tray menu and in the panel window's checkbox hint). `PanelRegistration.RefreshVersion`
+uses the wide marker too, so a GUI run that only redirects `DSH_PANEL_RUN_KEY` no longer touches the
+owner's “Programs and features” entry. `ShowError` is silenced only on its **background** branch
+(`background: true` — the server failed to start on its own); an error in answer to a human action is
+still shown in a window when the panel window is open.
+
+**Windows follow the same rule**, and each of them is a pure predicate `--selftest` enumerates, so
+the guard cannot be “written but unwired”:
+
+| Decision | Predicate | In an isolated run |
+|---|---|---|
+| onboarding wizard | `TrayHost.ShouldAutoShowOnboarding(onboarded, requested, isolated)` | only when asked with `--onboard`; otherwise a log line |
+| browser on server start | `TrayHost.ShouldAutoOpenBrowser(isolated)` | never opens |
+| panel window on start | `TrayHost.ShouldShowWindowOnStart(onboarded, isolated)` | never opens |
+
+`MaybeShowOnboarding` (called only from the startup timer), `ShowPanelOnStart` (the constructor) and
+`StartInitialServer` ask those predicates **and** read `Autostart.IsIsolatedRun`; a suppressed
+decision is written to the panel log, exactly like a suppressed balloon. The onboarding wizard is
+still a window a check may ask for: `--onboard` wins over isolation, and `tools\check-onboarding.ps1`
+relies on precisely that. Without the key the wizard opens only on a real profile that has not been
+onboarded yet — before this gate, `tools\check-update-apply.ps1` (which restarts the panel with no
+arguments in its own fresh profile) put a modal wizard on the owner's desktop on every pipeline run.
+
+**The line between “the person sees” and “the check verifies”:** a check must not put anything on the
+owner's desktop, but it must still be able to verify what the panel *does*. Starting the server is
+therefore **not** gated — `tools\acceptance.ps1` starts it on its own sandbox port and checks the
+sign-in link the panel writes, so gating the start would delete the check itself; only the browser
+window that would pop up next is suppressed. Nor is the `NotifyIcon` gated: `--selftest` and
+`--layout-check` build a real `TrayHost`, and that live tray icon is what the structural cases work
+with. Everything that is a *window or a balloon* on the owner's desktop is gated; everything that is
+a *state the checks read* (a started server, the sign-in link, the log lines, the tray icon) is not.
+
+`--selftest` asserts this four times:
+
+* over every `NoticeKind` (the guard silences all of them when the run is isolated, and none of them
+  when it is not);
+* over the isolation marker itself: a case sets and clears each of `DSH_PANEL_DATA`,
+  `DSH_PANEL_STATE`, `DSH_PANEL_INSTANCE` and `DSH_PANEL_RUN_KEY` one at a time, asserts that
+  `Autostart.IsIsolatedRun` sees each of them (and that spaces do not count), and drives
+  `ShouldNotify` with that **computed** value both ways — restoring the environment afterwards,
+  because the rest of the self-test depends on it. Without this the selftest stayed green while
+  `IsIsolatedRun` lost its `DSH_PANEL_RUN_KEY` branch or the door stopped asking about isolation at
+  all;
+* over the full case tables of the three window predicates (all eight combinations of
+  onboarded/requested/isolated for the wizard);
+* over the compiled **IL**: every `NotifyIcon.ShowBalloonTip` reference in the whole assembly must be
+  either `TrayHost.NotifyBalloon` or one of the two interactive balloons above, and each of the four
+  decision methods (`NotifyBalloon`, `MaybeShowOnboarding`, `ShowPanelOnStart`, `StartInitialServer`)
+  must actually call its predicate and read `Autostart.IsIsolatedRun`.
+
+**What the IL case proves and what it does not.** It sees direct calls (`call`/`callvirt`) and
+method addresses taken for a delegate (`ldftn`/`ldvirtftn`) anywhere in the assembly — a balloon
+reached through a delegate is reported as a stray site, which is why the scan covers those two
+opcodes as well as the two call opcodes. It does **not** see a deliberate reflection lookup
+(`typeof(NotifyIcon).GetMethod("ShowBalloonTip").Invoke(...)`): there the name of the method is
+ordinary string data, not a reference, and no static scan can tell it apart from any other string.
+So the case guarantees “no direct call and no delegate address slips past the door”, not “nothing
+can ever show a balloon”: a hand-written reflection call, added on purpose, would pass it. That
+limit is deliberate and documented rather than papered over — the same honesty applies to the gate
+case: it proves that the decision methods call their predicates, not that no other code path in the
+future opens a window.
 
 ## Version and changelog
 
@@ -390,6 +469,17 @@ registry. `DSH_PANEL_RUN_KEY` is the narrower override for the same purpose.
   Without that, someone on a release candidate would never be offered the final release.
 
 ## Updates and integrity
+
+The panel asks GitHub for the latest release **on every start** (`TrayHost.CheckUpdatesQuietAsync`) —
+nothing is downloaded at that point, only the version number is read. The balloon about a newer version
+is shown **once per version** (`UpdateService.ShouldAnnounce`): without that guard a person who restarts
+the panel several times would be told the same thing on every start. The version already announced lives
+in `updateAnnounced` in the settings file. It is recorded as announced **even if the balloon never
+reached the person** — `ShowBalloonTip` reports nothing back (notifications switched off, “do not
+disturb”, a “No balloon tips” policy) — so the panel deliberately makes **no** promise to repeat the
+message at the next start: without a new release there is no next message. The visible place with the
+same news is Settings → Updates, which shows the version and the release notes regardless of any
+balloon.
 
 The panel updates itself from the GitHub release: it downloads its **own build variant** — `DshPanel.zip`
 for the ordinary build, `DshPanel-selfcontained.zip` for the single-file build with the runtime inside,

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
@@ -1039,6 +1040,224 @@ internal static class Program
             if (!halfCommentOk) problems++;
             report.AppendLine($"Заметки {(halfCommentOk ? "ок" : "БЕДА")}: оборванный «<!--» в середине строки не сохранён (тело {halfCommentRaw.Length} знаков)");
 
+            // Обновления проверяются при КАЖДОМ запуске панели, поэтому шарик о новой версии
+            // обязан показываться один раз на версию — иначе человек получал бы его на каждом старте.
+            var sayNew = UpdateService.ShouldAnnounce("1.22.0", "", "1.21.0");
+            var sayAgain = UpdateService.ShouldAnnounce("1.22.0", "1.22.0", "1.21.0");
+            var sayOlder = UpdateService.ShouldAnnounce("1.20.0", "", "1.21.0");
+            var sayEmpty = UpdateService.ShouldAnnounce("", "", "1.21.0");
+            var sayNext = UpdateService.ShouldAnnounce("1.23.0", "1.22.0", "1.21.0");
+            var saySame = UpdateService.ShouldAnnounce("1.21.0", "", "1.21.0");
+            // Тег с «v» и хеш сборки — та же версия, а не новая; откат выпуска назад молчит.
+            var sayTagged = UpdateService.ShouldAnnounce("v1.22.0", "1.22.0", "1.21.0");
+            var sayHashed = UpdateService.ShouldAnnounce("1.22.0+91c7b69", "1.22.0", "1.21.0");
+            var sayBack = UpdateService.ShouldAnnounce("1.21.1", "1.22.0", "1.21.0");
+            var announceOk = sayNew && !sayAgain && !sayOlder && !sayEmpty && sayNext && !saySame
+                             && !sayTagged && !sayHashed && !sayBack;
+            if (!announceOk) problems++;
+            report.AppendLine($"Обновления {(announceOk ? "ок" : "БЕДА")}: шарик один раз на версию " +
+                              $"(новая {sayNew}, повтор {sayAgain}, старая {sayOlder}, пусто {sayEmpty}, " +
+                              $"следующая {sayNext}, текущая {saySame}, тег {sayTagged}, хеш {sayHashed}, назад {sayBack})");
+
+            // Шарик про автозапуск: изолированный прогон (подменены каталоги ИЛИ ветка реестра) не
+            // показывает НИЧЕГО — наши проверки запускают собранную копию на машине владельца,
+            // «ведёт на живую соседнюю копию» видно в меню трея, а вот неисправимую запись
+            // человеку показываем.
+            var notifyCheck = Autostart.ShouldNotify(Autostart.Where.Other, true);
+            var notifyOther = Autostart.ShouldNotify(Autostart.Where.Other, false);
+            var notifyMissing = Autostart.ShouldNotify(Autostart.Where.Missing, false);
+            var notifyUnknown = Autostart.ShouldNotify(Autostart.Where.Unknown, false);
+            var notifySelf = Autostart.ShouldNotify(Autostart.Where.Self, false);
+            var notifyMissingInRun = Autostart.ShouldNotify(Autostart.Where.Missing, true);
+            var notifyOk = !notifyCheck && !notifyOther && notifyMissing && notifyUnknown && !notifySelf
+                           && !notifyMissingInRun;
+            if (!notifyOk) problems++;
+            report.AppendLine($"Автозапуск {(notifyOk ? "ок" : "БЕДА")}: шарик не мешает " +
+                              $"(изолированный прогон {notifyCheck}, чужая копия {notifyOther}, " +
+                              $"нет файла {notifyMissing}, реестр не читается {notifyUnknown}, " +
+                              $"своя запись {notifySelf}, нет файла в прогоне {notifyMissingInRun})");
+
+            // Автоматические сообщения: в изолированном прогоне молчит КАЖДЫЙ вид, а не один
+            // шарик автозапуска, на котором мы уже обожглись (владелец получил от нашей проверки
+            // сообщение про собственный автозапуск). Перебор идёт по самому перечислению видов:
+            // новый вид автоматического сообщения нельзя добавить в стороне от предохранителя —
+            // он попадёт в этот перебор сам. Через то же правило ходит единственная дверь
+            // автоматических шариков (TrayHost.NotifyBalloon), поэтому кейс чувствителен к классу.
+            var noticeKinds = Enum.GetValues<TrayHost.NoticeKind>();
+            var noticeQuiet = noticeKinds.Count(kind => !TrayHost.ShouldNotify(kind, isolatedRun: true));
+            var noticeLoud = noticeKinds.Count(kind => TrayHost.ShouldNotify(kind, isolatedRun: false));
+            var noticesOk = noticeQuiet == noticeKinds.Length && noticeLoud == noticeKinds.Length;
+            if (!noticesOk) problems++;
+            report.AppendLine($"Уведомления {(noticesOk ? "ок" : "БЕДА")}: изолированный прогон молчит " +
+                              $"(видов {noticeKinds.Length}: молчат {noticeQuiet}, говорят в своём прогоне {noticeLoud})");
+
+            // И то же правило — про сам код, а не про намерение: читаем IL собранной панели и
+            // смотрим, из каких методов вызывается ShowBalloonTip. Мимо двери имеют право ходить
+            // только два шарика в ответ на действие человека (свёртывание окна в трей и только что
+            // применённые в «Настройках» окна пика) — без человека они не появляются. Новый
+            // фоновый вызов в обход двери, в каком бы файле он ни появился, провалит этот кейс,
+            // а не тихо дойдёт до владельца.
+            var balloonDoor = new[] { "TrayHost.NotifyBalloon", "TrayHost.HideToTray", "TrayHost.OpenSettings" };
+            var balloonSites = BalloonCallSites();
+            var balloonStray = balloonSites.Where(name => !balloonDoor.Contains(name)).Distinct().ToList();
+            var balloonsOk = balloonDoor.All(name => balloonSites.Contains(name)) && balloonStray.Count == 0;
+            if (!balloonsOk) problems++;
+            report.AppendLine($"Шарики {(balloonsOk ? "ок" : "БЕДА")}: дверь одна — " +
+                              $"ShowBalloonTip зовут {string.Join(", ", balloonSites.Distinct())}" +
+                              (balloonStray.Count > 0 ? $"; мимо двери: {string.Join(", ", balloonStray)}" : ""));
+
+            // Мастер первой настройки: четыре сочетания «прошёл / просили / изоляция» разворачиваются
+            // в восемь проверок, и у каждого своё решение. Модальное окно мастера в изолированном
+            // прогоне — это ровно то, что увидел владелец: панель поднимали без ключей из проверки
+            // замены файлов, а таймер старта открывал мастер поверх его работы.
+            var onboardingCases = new (bool Onboarded, bool Requested, bool Isolated, bool Expected)[]
+            {
+                (true, false, false, false),    // обычный прогон, мастер пройден — показывать нечего
+                (true, false, true, false),     // изолированный прогон молчит
+                (false, false, false, true),    // настоящий первый запуск — мастер показываем
+                (false, false, true, false),    // ИЗОЛЯЦИЯ и мастер не пройден — не показываем
+                (false, true, false, true),     // --onboard: мастер просили
+                (false, true, true, true),      // --onboard в изоляции: проверка мастера видит окна
+                (true, true, false, true),
+                (true, true, true, true),
+            };
+
+            var onboardingWrong = new List<string>();
+            foreach (var item in onboardingCases)
+            {
+                var actual = TrayHost.ShouldAutoShowOnboarding(item.Onboarded, item.Requested, item.Isolated);
+                if (actual != item.Expected)
+                {
+                    onboardingWrong.Add($"(пройден {item.Onboarded}, просили {item.Requested}, " +
+                                        $"изоляция {item.Isolated}) → {actual}, ждали {item.Expected}");
+                }
+            }
+
+            var onboardingOk = onboardingWrong.Count == 0;
+            if (!onboardingOk) problems++;
+            report.AppendLine($"Мастер {(onboardingOk ? "ок" : "БЕДА")}: сочетаний {onboardingCases.Length}, " +
+                              $"показываем {onboardingCases.Count(item => item.Expected)}" +
+                              (onboardingOk ? "" : " — неверно: " + string.Join("; ", onboardingWrong)));
+
+            // Видимое при старте: браузер и окно панели. В изолированном прогоне молчат оба —
+            // это и есть граница «человек видит против проверка считает»: сервер поднимается
+            // (его считает приёмка), а окна и браузера на рабочем столе владельца не появляется.
+            var browserOwn = TrayHost.ShouldAutoOpenBrowser(isolated: false);
+            var browserIsolated = TrayHost.ShouldAutoOpenBrowser(isolated: true);
+            var windowOwn = TrayHost.ShouldShowWindowOnStart(onboarded: true, isolated: false);
+            var windowFirstRun = TrayHost.ShouldShowWindowOnStart(onboarded: false, isolated: false);
+            var windowIsolated = TrayHost.ShouldShowWindowOnStart(onboarded: true, isolated: true);
+            var windowFirstRunIsolated = TrayHost.ShouldShowWindowOnStart(onboarded: false, isolated: true);
+            var visibleOk = browserOwn && !browserIsolated && windowOwn && !windowFirstRun
+                            && !windowIsolated && !windowFirstRunIsolated;
+            if (!visibleOk) problems++;
+            report.AppendLine($"Видимое при старте {(visibleOk ? "ок" : "БЕДА")}: " +
+                              $"браузер — своему прогону {browserOwn}, изолированному {browserIsolated}; " +
+                              $"окно — своему {windowOwn}, первому запуску {windowFirstRun}, " +
+                              $"изолированному {windowIsolated}, первому запуску в изоляции {windowFirstRunIsolated}");
+
+            // Признак изоляции проверяется НА САМОМ ДЕЛЕ, а не литералом: кейс сам выставляет и
+            // снимает четыре переменные и смотрит, что Autostart.IsIsolatedRun это видит, а правило
+            // двери спрашивает именно его. Без этого зелёными проходили две поломки: сужение
+            // признака (выброшена ветка DSH_PANEL_RUN_KEY — ровно то, что чинила партия) и дверь,
+            // переставшая спрашивать изоляцию.
+            var isolateNames = new[]
+            {
+                "DSH_PANEL_DATA", "DSH_PANEL_STATE", "DSH_PANEL_INSTANCE", "DSH_PANEL_RUN_KEY",
+            };
+            var isolateSaved = isolateNames
+                .Select(name => (Name: name, Value: Environment.GetEnvironmentVariable(name)))
+                .ToList();
+            var isolateNotes = new List<string>();
+            var isolateOk = true;
+
+            try
+            {
+                foreach (var name in isolateNames)
+                {
+                    foreach (var other in isolateNames) Environment.SetEnvironmentVariable(other, null);
+                    Environment.SetEnvironmentVariable(name, "1");
+
+                    var seen = Autostart.IsIsolatedRun;
+                    // То же правило — через саму дверь, и с признаком, посчитанным из окружения:
+                    // это и ловит дверь, переставшую спрашивать изоляцию.
+                    var quiet = noticeKinds.All(kind => !TrayHost.ShouldNotify(kind, Autostart.IsIsolatedRun));
+                    isolateOk &= seen && quiet;
+                    isolateNotes.Add($"{name}: {seen}");
+                }
+
+                foreach (var name in isolateNames) Environment.SetEnvironmentVariable(name, null);
+                var none = Autostart.IsIsolatedRun;
+                var loud = noticeKinds.All(kind => TrayHost.ShouldNotify(kind, Autostart.IsIsolatedRun));
+
+                // Значение из пробелов признаком не считается: пустую строку в окружении получить
+                // легко, и она не должна глушить панель у человека.
+                Environment.SetEnvironmentVariable("DSH_PANEL_DATA", "   ");
+                var spaces = Autostart.IsIsolatedRun;
+
+                isolateOk &= !none && loud && !spaces;
+                isolateNotes.Add($"нет переменных: {none}");
+                isolateNotes.Add($"пробелы: {spaces}");
+            }
+            finally
+            {
+                // Возвращаем окружение как было: от него зависит смысл остальных кейсов, а сама
+                // самопроверка идёт изолированным прогоном (переменные выставлены снаружи).
+                foreach (var item in isolateSaved) Environment.SetEnvironmentVariable(item.Name, item.Value);
+            }
+
+            if (!isolateOk) problems++;
+            report.AppendLine($"Изоляция {(isolateOk ? "ок" : "БЕДА")}: признак виден по каждой переменной, " +
+                              $"дверь спрашивает его ({string.Join(", ", isolateNotes)})");
+
+            // Предикат бесполезен, если решение его не спрашивает. Кейс читает IL самих решающих
+            // методов и требует, чтобы каждый звал СВОЙ предикат и общий признак изоляции. Так
+            // ловится то, что до сих пор проходило зелёным на одних литералах: дверь шариков,
+            // переставшая спрашивать изоляцию (ShouldNotify(kind, false)), снятый гейт мастера,
+            // браузер без проверки.
+            var gateRules = new (string Owner, string Predicate)[]
+            {
+                ("NotifyBalloon", "TrayHost.ShouldNotify"),
+                ("MaybeShowOnboarding", "TrayHost.ShouldAutoShowOnboarding"),
+                ("ShowPanelOnStart", "TrayHost.ShouldShowWindowOnStart"),
+                ("StartInitialServer", "TrayHost.ShouldAutoOpenBrowser"),
+            };
+
+            var gateProblems = new List<string>();
+            foreach (var rule in gateRules)
+            {
+                var owner = PanelMethod(rule.Owner);
+                if (owner == null)
+                {
+                    gateProblems.Add(rule.Owner + ": метода нет");
+                    continue;
+                }
+
+                var references = MethodReferences(owner);
+                if (!references.Contains(rule.Predicate))
+                {
+                    gateProblems.Add(rule.Owner + " не спрашивает " + rule.Predicate);
+                }
+
+                if (!references.Contains("Autostart.IsIsolatedRun"))
+                {
+                    gateProblems.Add(rule.Owner + " не спрашивает изоляцию");
+                }
+            }
+
+            // Мастер обязан быть достижим: «гейт на месте» ничего не стоит, если его никто не зовёт.
+            var onboardingReachable = typeof(TrayHost).Assembly.GetTypes()
+                .SelectMany(DeclaredMethods)
+                .Any(method => method.Name != "MaybeShowOnboarding"
+                               && MethodReferences(method).Contains("TrayHost.MaybeShowOnboarding"));
+            if (!onboardingReachable) gateProblems.Add("MaybeShowOnboarding: никто не зовёт — мастер недостижим");
+
+            var gatesOk = gateProblems.Count == 0;
+            if (!gatesOk) problems++;
+            report.AppendLine($"Гейты {(gatesOk ? "ок" : "БЕДА")}: решение спрашивают " +
+                              $"({string.Join(", ", gateRules.Select(rule => rule.Owner))})" +
+                              (gatesOk ? "" : " — " + string.Join("; ", gateProblems)));
+
             var icons = new[] { ServerVisual.Running, ServerVisual.Stopped, ServerVisual.BusyOther };
             foreach (var visual in icons)
             {
@@ -1094,6 +1313,121 @@ internal static class Program
 
         return false;
     }
+
+    /// <summary>
+    /// Из каких методов панели вызывается <c>NotifyIcon.ShowBalloonTip</c>: читаем IL собранного
+    /// кода, потому что «все автоматические шарики идут через одну дверь» иначе остаётся
+    /// утверждением на слово. Смотрим всю сборку целиком (включая вложенные типы: асинхронные
+    /// методы компилятор переносит в автомат состояния, и вызов шарика из <c>async</c>-метода
+    /// лежал бы именно там), а не один TrayHost — иначе шарик, добавленный в другом файле,
+    /// прошёл бы мимо проверки.
+    ///
+    /// Ловится и прямой вызов, и ссылка на метод для делегата (<c>ldftn</c>/<c>ldvirtftn</c>):
+    /// проверяющий показал, что делегат обходил прежний обход по одним 0x28/0x6F. Отражение по
+    /// имени (<c>GetMethod("ShowBalloonTip").Invoke(...)</c>) не ловится и поймано быть не может —
+    /// в этом случае имя метода обычная строка, а не ссылка; что кейс гарантирует, а что нет,
+    /// сказано в docs\DEVELOPMENT.md.
+    /// </summary>
+    private static List<string> BalloonCallSites()
+    {
+        const string balloon = "NotifyIcon.ShowBalloonTip";
+        var found = new List<string>();
+
+        foreach (var type in typeof(TrayHost).Assembly.GetTypes())
+        {
+            foreach (var method in DeclaredMethods(type))
+            {
+                if (MethodReferences(method).Contains(balloon))
+                {
+                    found.Add(type.Name + "." + method.Name);
+                }
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// Все методы типа, объявленные в нём самом: унаследованные тела к делу не относятся.
+    /// </summary>
+    private static IEnumerable<MethodBase> DeclaredMethods(Type type) =>
+        type.GetMethods(BindingFlags.Instance | BindingFlags.Static
+                        | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+
+    /// <summary>
+    /// На какие методы ссылается тело метода: <c>call</c>/<c>callvirt</c> (вызов) и
+    /// <c>ldftn</c>/<c>ldvirtftn</c> (адрес метода — так компилятор делает делегат). Имя
+    /// возвращается как «Тип.Метод», у свойств снимается «get_»/«set_»: в IL обращение к свойству
+    /// выглядит вызовом метода, а в правилах удобнее видеть имя свойства.
+    ///
+    /// Неудача разбора токена — не беда: байт <c>0x28</c> может попасться внутри чужого операнда,
+    /// такой токен просто пропускается.
+    /// </summary>
+    private static List<string> MethodReferences(MethodBase method)
+    {
+        var found = new List<string>();
+
+        byte[] il;
+        try
+        {
+            il = method.GetMethodBody()?.GetILAsByteArray();
+        }
+        catch
+        {
+            return found;   // тела нет (сгенерированный метод) — и ссылок в нём нет
+        }
+
+        if (il == null) return found;
+
+        for (var index = 0; index + 4 < il.Length; index++)
+        {
+            int operand;
+            if (il[index] == 0x28 || il[index] == 0x6F)
+            {
+                // 0x28 — call, 0x6F — callvirt; сразу за опкодом идёт токен метода.
+                operand = index + 1;
+            }
+            else if (il[index] == 0xFE && index + 5 < il.Length
+                     && (il[index + 1] == 0x06 || il[index + 1] == 0x07))
+            {
+                // 0xFE 0x06 — ldftn, 0xFE 0x07 — ldvirtftn; токен идёт через байт.
+                operand = index + 2;
+            }
+            else
+            {
+                continue;
+            }
+
+            try
+            {
+                var target = method.Module.ResolveMethod(BitConverter.ToInt32(il, operand));
+                if (target?.DeclaringType != null) found.Add(MethodLabel(target));
+            }
+            catch
+            {
+                // Чужой байт — пропускаем.
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>Имя метода для правил: «Тип.Метод», у свойств — без «get_»/«set_».</summary>
+    private static string MethodLabel(MethodBase method)
+    {
+        var name = method.Name;
+        if (name.StartsWith("get_", StringComparison.Ordinal) || name.StartsWith("set_", StringComparison.Ordinal))
+        {
+            name = name[4..];
+        }
+
+        return (method.DeclaringType?.Name ?? "?") + "." + name;
+    }
+
+    /// <summary>Метод панели по имени — для структурных кейсов самопроверки.</summary>
+    private static MethodBase PanelMethod(string name) =>
+        typeof(TrayHost).GetMethod(name, BindingFlags.Instance | BindingFlags.Static
+                                         | BindingFlags.Public | BindingFlags.NonPublic);
 
     /// <summary>Код ответа на запрос HEAD: «200», «404» или текст ошибки. Для --node-check.</summary>
     private static string Probe(string url)

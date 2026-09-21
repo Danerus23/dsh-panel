@@ -448,9 +448,17 @@ public sealed class AppSettings
 
     // --- обновления ---------------------------------------------------------
 
-    /// <summary>Когда в последний раз спрашивали GitHub — чтобы не делать это при каждом запуске.</summary>
+    /// <summary>Когда в последний раз спрашивали GitHub — для окна «Обновления» и журнала.
+    /// Саму проверку это поле больше не ограничивает: она идёт при каждом запуске панели,
+    /// а от повторных шариков защищает <see cref="UpdateAnnounced"/>.</summary>
     [JsonPropertyName("updateCheckedAt")]
     public DateTime? UpdateCheckedAt { get; set; }
+
+    /// <summary>Версия, о которой человеку уже сказали шариком. Проверка идёт при каждом
+    /// запуске, поэтому без этого поля шарик показывался бы на каждом старте, пока человек не
+    /// обновится. Пусто — ещё ни о чём не говорили.</summary>
+    [JsonPropertyName("updateAnnounced")]
+    public string UpdateAnnounced { get; set; } = "";
 
     /// <summary>Какая версия лежит на GitHub по последней проверке (пусто — ещё не проверяли).</summary>
     [JsonPropertyName("updateLatest")]
@@ -602,6 +610,7 @@ public sealed class AppSettings
         BackupLastAt = loaded.BackupLastAt;
         BackupLastPath = loaded.BackupLastPath;
         UpdateCheckedAt = loaded.UpdateCheckedAt;
+        UpdateAnnounced = loaded.UpdateAnnounced;
         UpdateLatest = loaded.UpdateLatest;
         UpdatePublished = loaded.UpdatePublished;
         UpdatePageUrl = loaded.UpdatePageUrl;
