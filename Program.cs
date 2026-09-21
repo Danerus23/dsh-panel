@@ -29,6 +29,7 @@ internal enum RunMode
     InstallNode,
     LangCheck,
     EnvCheck,
+    AutostartFix,
     LayoutCheck,
     Help,
 }
@@ -182,6 +183,9 @@ internal sealed class CliOptions
                 case "--env-check":
                     options.Mode = RunMode.EnvCheck;
                     break;
+                case "--autostart-fix":
+                    options.Mode = RunMode.AutostartFix;
+                    break;
                 case "--layout-check":
                     options.Mode = RunMode.LayoutCheck;
                     break;
@@ -264,6 +268,15 @@ internal static class Program
         if (options.Mode == RunMode.EnvCheck)
         {
             WriteReport(EnvironmentReport(settings, paths), options.OutPath);
+            return 0;
+        }
+
+        // Починка автозапуска по команде — тот же код, что панель выполняет при старте.
+        // Нужна проверкам (они уводят реестр в свою ветку через DSH_PANEL_RUN_KEY) и человеку
+        // для случая «панель не поднимается при входе, а в трее старая копия».
+        if (options.Mode == RunMode.AutostartFix)
+        {
+            WriteReport(AutostartFixReport(), options.OutPath);
             return 0;
         }
 
@@ -493,7 +506,7 @@ internal static class Program
             {
                 if (update.Name.Length > 0) report.AppendLine("  " + update.Name);
                 if (update.PageUrl.Length > 0) report.AppendLine("  " + update.PageUrl);
-                if (update.ZipUrl.Length > 0) report.AppendLine("  " + Loc.T("cli.updateAsset", "DshPanel.zip"));
+                if (update.ZipUrl.Length > 0) report.AppendLine("  " + Loc.T("cli.updateAsset", update.AssetName));
                 if (update.SetupUrl.Length > 0) report.AppendLine("  " + Loc.T("cli.updateAsset", "dsh-panel-setup.exe"));
                 if (update.Notes.Length > 0)
                 {
@@ -671,7 +684,7 @@ internal static class Program
         report.AppendLine(Loc.T("cli.nextSwitch",
             string.IsNullOrEmpty(peakState.NextText) ? Loc.T("common.dash") : peakState.NextText));
         report.AppendLine(Loc.T("main.windows", peakState.WindowText, peakState.Checked));
-        report.AppendLine(Loc.T("cli.autostart", Loc.T(Autostart.IsEnabled() ? "common.yes" : "common.no")));
+        report.AppendLine(Loc.T("cli.autostart", DescribeAutostart(Autostart.Inspect())));
         report.AppendLine(Loc.T("cli.openBrowser", Loc.T(settings.OpenBrowserOnStart ? "common.yes" : "common.no")));
 
         var balanceResult = balance.Query();
@@ -789,6 +802,12 @@ internal static class Program
                 ("1.20.0-beta", "1.20.0-rc.1", false),
                 ("v1.20.1", "1.20.0", true),
                 ("1.9.0", "1.10.0", false),
+                // .NET дописывает в ProductVersion хеш сборки («1.20.2+8529c83»): без обрезки
+                // суффикса сверка версий валила бы каждое обновление, а пересборка под тем же
+                // номером выглядела бы новее. Обе стороны сравнения обязаны чиститься.
+                ("1.20.2+8529c83", "1.20.2", false),
+                ("1.20.2", "1.20.2+8529c83", false),
+                ("1.20.3+8529c83", "1.20.2+deadbee", true),
             };
 
             foreach (var item in versions)
@@ -938,6 +957,44 @@ internal static class Program
         {
             // Консоли нет — отчёт остался в файле.
         }
+    }
+
+    /// <summary>
+    /// Состояние автозапуска словами. Человеку и в жалобе важно не «да/нет», а КУДА ведёт
+    /// запись: «включён» при записи на чужую копию — это ровно та путаница, из-за которой
+    /// после перезагрузки поднималась старая панель.
+    /// </summary>
+    private static string DescribeAutostart(Autostart.State state) => state.Where switch
+    {
+        Autostart.Where.None => Loc.T("cli.autostartOff"),
+        Autostart.Where.Self => Loc.T("cli.autostartSelf"),
+        Autostart.Where.Missing => Loc.T("cli.autostartMissing",
+            state.Path.Length > 0 ? state.Path : Loc.T("common.dash")),
+        Autostart.Where.Older => Loc.T("cli.autostartOlder", state.Path),
+        Autostart.Where.Unknown => Loc.T("cli.autostartUnknown"),
+        _ => Loc.T("cli.autostartOther", state.Path),
+    };
+
+    /// <summary>
+    /// Починка автозапуска по команде: тот же код, что панель выполняет при старте
+    /// (<see cref="Autostart.Repair"/>). Печатает состояние до и после и совершённое действие,
+    /// чтобы проверка могла утверждать результат, а человек — увидеть причину.
+    ///
+    /// Кроме русского текста печатается машинная строка <c>action=…</c>: проверка сверяет
+    /// действие по ней, а не по русской подписи, — иначе проверка ломалась бы на английской
+    /// Windows или от любой правки формулировки.
+    /// </summary>
+    private static string AutostartFixReport()
+    {
+        var report = new StringBuilder();
+        var fix = Autostart.Repair();
+
+        report.AppendLine("До:       " + Loc.T("cli.autostart", DescribeAutostart(fix.Before)));
+        report.AppendLine("После:    " + Loc.T("cli.autostart", DescribeAutostart(fix.After)));
+        report.AppendLine("Действие: " + (fix.Changed ? fix.Action : "не требовалось"));
+        report.AppendLine("action=" + (fix.Changed ? fix.Action : "none"));
+        report.AppendLine("dedup=" + (fix.HadDuplicate ? "true" : "false"));
+        return report.ToString();
     }
 
     /// <summary>
@@ -1107,6 +1164,7 @@ internal static class Program
             "  DshTray.exe --onboard — " + Loc.T("cli.help.onboard"),
             "  DshTray.exe --status [--out <file>] — " + Loc.T("cli.help.status"),
             "  DshTray.exe --env-check [--out <file>] — " + Loc.T("cli.help.envCheck"),
+            "  DshTray.exe --autostart-fix [--out <file>] — " + Loc.T("cli.help.autostartFix"),
             "  DshTray.exe --lang-check — " + Loc.T("cli.help.langCheck"),
             "  DshTray.exe --layout-check — " + Loc.T("cli.help.layoutCheck"),
             "  DshTray.exe --selftest [--out <file>] — " + Loc.T("cli.help.selftest"),

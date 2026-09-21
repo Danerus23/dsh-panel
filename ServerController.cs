@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
@@ -117,20 +118,37 @@ public sealed class ServerController
         }
     }
 
-    public ServerStatus GetStatus()
+    /// <summary>
+    /// Состояние сервера. <paramref name="cleanStalePid"/> выключает уборку устаревшей записи
+    /// в server.pid — ею пользуется Stop: если остановить сервер не удастся, файлы состояния
+    /// должны остаться на месте (в web-url.txt ссылка для входа с токеном, восстановить нечем).
+    /// </summary>
+    public ServerStatus GetStatus(bool cleanStalePid = true)
     {
         var status = new ServerStatus { Port = Port, Url = Url };
         var owner = GetPortOwner();
-        if (owner <= 0) return status;
+        if (owner <= 0)
+        {
+            // Порта никто не слушает: сервер остановлен или ещё поднимается. Заодно убираем
+            // запись в server.pid, если процесс из неё уже мёртв (файл переживает перезагрузку).
+            if (cleanStalePid) ForgetStalePid(0, false);
+            return status;
+        }
 
         status.Pid = owner;
         status.ProcessName = ProcessName(owner);
 
-        // «Наш сервер» — это тот, который подняли мы: либо записанный номер процесса, либо
-        // наша ссылка для входа на этот порт. Раньше любое `node` на порту считалось своим,
-        // и панель останавливала чужой процесс — например чужой node-сервер разработчика.
+        // «Наш сервер» — это тот, чьё владение подтверждается сведениями о самом процессе:
+        // записанный номер процесса плюс живой node с нашим портом в командной строке (см. IsOurs).
+        // Файл ссылки для входа владением не считается: он лишь источник адреса с токеном, и раньше
+        // одного упоминания порта в нём хватало, чтобы панель назвала своим — и остановила —
+        // чужой процесс, случайно занявший наш порт.
         if (IsOurs(owner, Port, _paths)) status.Running = true;
         else status.PortBusyByOther = true;
+
+        // Устаревшую запись в server.pid убираем здесь же: иначе на следующем определении
+        // состояния она снова выдавала бы себя за доказательство владения.
+        if (cleanStalePid) ForgetStalePid(owner, status.Running);
 
         return status;
     }
@@ -150,10 +168,10 @@ public sealed class ServerController
 
     /// <summary>
     /// Кто слушает порт: номер процесса, его имя и признак «это наш сервер». Нашим считаем
-    /// процесс node, который либо мы же и запускали (совпал записанный номер), либо поднят на
-    /// порт, для которого у нас лежит ссылка для входа: ссылку пишет сервер, поднятый панелью
-    /// или прежним лаунчером. Без этой проверки мастер и настройки пугали бы человека янтарным
-    /// «порт занят», когда порт держит его же запущенный сервер DSH.
+    /// только процесс, чьё владение подтверждается сведениями о нём самом (см. IsOurs):
+    /// ссылка для входа на этот порт владением не считается. Без этой проверки мастер и
+    /// настройки пугали бы человека янтарным «порт занят», когда порт держит его же
+    /// запущенный сервер DSH, — но зато панель не называла бы своим чужой процесс.
     /// </summary>
     public static (int Pid, string Name, bool Ours) Listener(int port, AppPaths paths)
     {
@@ -175,39 +193,336 @@ public sealed class ServerController
         return (pid, name, IsOurs(pid, port, paths));
     }
 
-    /// <summary>Наш ли это сервер: записанный номер процесса или наша ссылка для входа на этот порт.</summary>
+    // --- подтверждение владения --------------------------------------------
+    //
+    // Владение подтверждается сведениями о самом процессе, а не файлами состояния.
+    // Проверка стоит на пути и определения состояния, и остановки сервера: процесс, не
+    // прошедший её, не убивают никогда — иначе панель останавливала бы чужую программу,
+    // занявшую её порт (на живой машине так чуть не погиб чужой node, поднятый прежней
+    // копией панели: server.pid хранил мёртвый номер, а ссылка для входа упоминала порт).
+
+    private const int ProcessCommandLineInformation = 60;
+    private const int ProcessQueryLimitedInformation = 0x1000;
+    private const uint StatusInfoLengthMismatch = 0xC0000004;
+    private const uint StatusBufferTooSmall = 0xC0000023;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(int access, bool inheritHandle, int pid);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("ntdll.dll")]
+    private static extern uint NtQueryInformationProcess(IntPtr process, int informationClass,
+        IntPtr information, int informationLength, out int returnLength);
+
+    // Последний вердикт о владении: причина отказа и то, к кому она относилась. Нужен, чтобы
+    // не писать одну и ту же строку на каждом тике таймера (1,5 с) — иначе журнал превратился
+    // бы в поток «не подтверждён» и вытеснил всё остальное. -1 — вердикта ещё не было.
+    private static int _verdictPid = -1;
+    private static int _verdictPort = -1;
+    private static string _verdictReason = "";
+
+    /// <summary>
+    /// Наш ли это сервер. Сервер наш, только если выполнено всё сразу:
+    /// (а) в server.pid записан именно этот номер процесса;
+    /// (б) процесс жив;
+    /// (в) это node (образ node.exe);
+    /// (г) в его командной строке есть наш порт;
+    /// (д) это не наш собственный процесс.
+    ///
+    /// Путь к bin.js движка намеренно НЕ проверяется. Он законно меняется — свой переносимый
+    /// Node, накат копии, переустановка движка, — а ложное «чужой» дороже: панель теряет
+    /// способность остановить СВОЙ сервер и показывает вечное «порт занят другим процессом».
+    /// Номер процесса из server.pid пишем только мы, а от переиспользования номера защищает
+    /// время создания процесса: убийство (KillTree) сверяет его с тем, что видела эта проверка.
+    ///
+    /// Файл ссылки для входа (web-url.txt) владением не считается вообще: в нём адрес с
+    /// токеном, и раньше одного упоминания порта в нём хватало, чтобы назвать своим — и
+    /// остановить — чужой процесс. Номер процесса из server.pid сам по себе тоже не доказательство:
+    /// файл переживает перезагрузку, а номера переиспользуются.
+    ///
+    /// Сведения о процессе получить не удалось (нет прав, чужая учётная запись, защищённый
+    /// процесс) — считаем сервер чужим: предупредить безопаснее, чем остановить чужое.
+    /// Причина отказа попадает в журнал приложения — один раз на смену вердикта.
+    /// </summary>
     private static bool IsOurs(int pid, int port, AppPaths paths)
+    {
+        return IsOurs(pid, port, paths, out _);
+    }
+
+    /// <summary>
+    /// То же, но наружу отдаётся время создания процесса — его Stop передаёт в KillTree, чтобы
+    /// убить именно тот процесс, который проверяла эта проверка (номер процесса переиспользуется).
+    /// </summary>
+    private static bool IsOurs(int pid, int port, AppPaths paths, out long startedAt)
+    {
+        startedAt = 0;
+
+        if (pid <= 0) return false;
+
+        // (д) Свой собственный процесс сервером быть не может: раньше «Остановить» могла
+        // прицелиться в саму панель, если её номер оказался в server.pid.
+        if (pid == Environment.ProcessId)
+        {
+            LogVerdict(paths, pid, port, $"владение портом {port} (PID {pid}) не подтверждено: "
+                                         + "это сама панель, считаю владельца чужим");
+            return false;
+        }
+
+        // (а) Записанный номер обязан совпасть: без него владение подтвердить нечем.
+        if (ReadRecordedPid(paths) != pid)
+        {
+            LogVerdict(paths, pid, port, $"владение портом {port} (PID {pid}) не подтверждено: "
+                                         + "в server.pid записан другой номер, считаю владельца чужим");
+            return false;
+        }
+
+        // (б) Процесс жив; заодно берём время его создания — по нему потом сверяется убийство.
+        startedAt = ProcessStartTicks(pid);
+        if (startedAt == 0)
+        {
+            LogVerdict(paths, pid, port, $"владение портом {port} (PID {pid}) не подтверждено: "
+                                         + "процесс недоступен, считаю владельца чужим");
+            return false;
+        }
+
+        // (в, г) Сведения о процессе: имя образа и командная строка.
+        var commandLine = ProcessCommandLine(pid);
+        if (commandLine.Length == 0)
+        {
+            startedAt = 0;
+            LogVerdict(paths, pid, port, $"владелец порта {port} (PID {pid}) не подтверждён: сведения "
+                                         + "о процессе недоступны, считаю его чужим");
+            return false;
+        }
+
+        if (!IsNodeImage(pid, commandLine))
+        {
+            startedAt = 0;
+            LogVerdict(paths, pid, port, $"владелец порта {port} (PID {pid}) не подтверждён: "
+                                         + "это не node.exe, считаю его чужим");
+            return false;
+        }
+
+        if (!CommandLineHasPort(commandLine, port))
+        {
+            startedAt = 0;
+            LogVerdict(paths, pid, port, $"владелец порта {port} (PID {pid}) не подтверждён: "
+                                         + "в командной строке нет нашего порта, считаю его чужим");
+            return false;
+        }
+
+        // Владение подтверждено. В журнал это тоже попадает — но только как смена вердикта.
+        LogVerdict(paths, pid, port, "");
+        return true;
+    }
+
+    /// <summary>
+    /// Пишет вердикт о владении в журнал, только когда он изменился. IsOurs зовут на каждом тике
+    /// таймера трея (1,5 с), и без этой проверки при постоянно занятом порте журнал заполнялся бы
+    /// одинаковыми строками (десятки тысяч в сутки) и ротировался бы за часы, вытесняя полезное.
+    /// Пустая причина означает «владение подтверждено».
+    /// </summary>
+    private static void LogVerdict(AppPaths paths, int pid, int port, string reason)
+    {
+        if (_verdictPid == pid && _verdictPort == port
+            && string.Equals(_verdictReason, reason, StringComparison.Ordinal)) return;
+
+        _verdictPid = pid;
+        _verdictPort = port;
+        _verdictReason = reason;
+
+        AppLog.Write(paths, reason.Length > 0
+            ? reason
+            : $"владение портом {port} подтверждено: PID {pid} — наш сервер");
+    }
+
+    /// <summary>Номер процесса из server.pid; 0 — файла нет, он нечитаем или в нём не число.</summary>
+    private static int ReadRecordedPid(AppPaths paths)
     {
         try
         {
-            if (File.Exists(paths.PidPath))
-            {
-                var text = File.ReadAllText(paths.PidPath).Trim();
-                if (int.TryParse(text, out var recorded) && recorded == pid) return true;
-            }
+            if (!File.Exists(paths.PidPath)) return 0;
+            return int.TryParse(File.ReadAllText(paths.PidPath).Trim(), out var recorded) && recorded > 0
+                ? recorded
+                : 0;
         }
         catch
         {
-            // Файл с номером процесса мог не записаться — смотрим ссылку.
+            return 0;
         }
+    }
 
+    /// <summary>
+    /// Убирает устаревшую запись в server.pid. Файл переживает перезагрузку, а номера процессов
+    /// переиспользуются, поэтому запись — подсказка, а не доказательство.
+    ///
+    /// Правило: удаляем, если записанный процесс мёртв ЛИБО порт держит другой процесс. Оставляем,
+    /// когда владение подтверждено, и когда порт пока свободен, а записанный процесс жив: сервер
+    /// как раз поднимается, и запись только что сделала сама панель (Start пишет файл до того,
+    /// как движок привяжет порт).
+    ///
+    /// Прежняя формулировка была инвертирована — она удаляла запись ровно тогда, когда порт держал
+    /// именно записанный процесс, и оставляла её, когда порт занят чужим. Не «чинить» обратно.
+    ///
+    /// web-url.txt не трогаем никогда: в нём ссылка для входа с токеном.
+    /// </summary>
+    private void ForgetStalePid(int owner, bool ours)
+    {
         try
         {
-            foreach (var path in paths.UrlCandidates())
-            {
-                if (!File.Exists(path)) continue;
+            if (ours) return;
+            if (!File.Exists(_paths.PidPath)) return;
 
-                var url = File.ReadAllText(path, Encoding.UTF8).Trim();
-                if (url.Length == 0) continue;
-                if (Regex.IsMatch(url, $":{port}(?:[/?#]|$)")) return true;
+            var text = File.ReadAllText(_paths.PidPath).Trim();
+            if (!int.TryParse(text, out var recorded) || recorded <= 0)
+            {
+                TryDelete(_paths.PidPath);
+                AppLog.Write(_paths, "server.pid устарел (в файле не номер процесса) — убран");
+                return;
             }
+
+            // Мёртвая запись или порт занят кем-то другим — доказательством такая запись быть
+            // не может. А вот «порт держит именно записанный процесс, но он не наш» оставляем:
+            // своё решение принимает IsOurs, и переписывать чужой номер в файле нечего.
+            if (IsAlive(recorded) && (owner <= 0 || owner == recorded)) return;
+
+            TryDelete(_paths.PidPath);
+            AppLog.Write(_paths, $"server.pid устарел (записан {recorded}, слушает {owner}) — убран");
         }
         catch
         {
-            // Нечитаемая ссылка — считаем сервер чужим: предупредить безопаснее, чем промолчать.
+            // Файл занят или нечитаем: проверка владения и без него честная, поэтому молчим.
+        }
+    }
+
+    /// <summary>
+    /// Время создания процесса в тиках; 0 — процесса нет, он завершился или сведения о нём
+    /// недоступны (нет прав). По этому значению Stop убеждается, что убивает тот же процесс,
+    /// который проверяла IsOurs: номера процессов переиспользуются.
+    /// </summary>
+    private static long ProcessStartTicks(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            if (process.HasExited) return 0;
+            return process.StartTime.Ticks;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>Процесс с таким номером существует и ещё не завершился.</summary>
+    private static bool IsAlive(int pid)
+    {
+        return ProcessStartTicks(pid) != 0;
+    }
+
+    /// <summary>
+    /// Это образ node.exe. Спрашиваем и систему (имя процесса), и командную строку: если
+    /// система назвала процесс иначе, командной строке не верим — она могла быть подделана.
+    /// </summary>
+    private static bool IsNodeImage(int pid, string commandLine)
+    {
+        var byName = ProcessName(pid);
+        var knownByName = byName.Length > 0;
+        var nodeByName = string.Equals(byName, "node", StringComparison.OrdinalIgnoreCase);
+        if (knownByName && !nodeByName) return false;
+
+        var image = Path.GetFileName(FirstToken(commandLine));
+        var nodeByLine = string.Equals(image, "node.exe", StringComparison.OrdinalIgnoreCase);
+
+        return nodeByName || nodeByLine;
+    }
+
+    /// <summary>Первый элемент командной строки — путь к самому исполняемому файлу.</summary>
+    private static string FirstToken(string commandLine)
+    {
+        var text = commandLine.TrimStart();
+        if (text.StartsWith('"'))
+        {
+            var end = text.IndexOf('"', 1);
+            return end > 1 ? text[1..end] : text.Trim('"');
         }
 
-        return false;
+        var space = text.IndexOf(' ');
+        return space > 0 ? text[..space] : text;
+    }
+
+    /// <summary>
+    /// Порт в командной строке именно как аргумент запуска сервера: «--port 3080», «--port=3080»,
+    /// «--port:3080» (движок и прежние сборки могли звать по-разному, и свой сервер из-за формы
+    /// записи не должен становиться чужим). Хвост (?!\d) не даёт порту 3080 совпасть с 30800.
+    /// </summary>
+    private static bool CommandLineHasPort(string commandLine, int port)
+    {
+        return Regex.IsMatch(commandLine, @"--port[=:\s]+""?" + port + @"(?!\d)", RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>
+    /// Командная строка процесса: NtQueryInformationProcess с классом ProcessCommandLineInformation
+    /// (то же, что показывает диспетчер задач). Пустая строка — сведений нет: нет прав на
+    /// чужой процесс, процесс уже завершился или запрос не поддержан. Тогда владение не
+    /// подтверждается, и панель считает владельца порта чужим.
+    /// </summary>
+    private static string ProcessCommandLine(int pid)
+    {
+        // Раскладка UNICODE_STRING зависит от разрядности процесса: указатель на строку лежит на
+        // смещении 8 только в 64-битном. Собираем под win-x64, но если панель когда-нибудь соберут
+        // под x86, чтение по этому смещению дало бы мусорный адрес, а PtrToStringUni по нему —
+        // необрабатываемое падение (AccessViolation в .NET не ловится). Пустая строка означает
+        // «владение не подтверждено», то есть тот же безопасный дефолт.
+        if (IntPtr.Size != 8) return "";
+
+        var handle = IntPtr.Zero;
+        try
+        {
+            handle = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+            if (handle == IntPtr.Zero) return "";
+
+            var size = 1024;
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var buffer = Marshal.AllocHGlobal(size);
+                try
+                {
+                    var status = NtQueryInformationProcess(handle, ProcessCommandLineInformation,
+                        buffer, size, out var needed);
+
+                    if (status == 0)
+                    {
+                        // UNICODE_STRING: Length (2 байта), MaximumLength (2 байта), указатель на
+                        // строку (8 — смещение x64, см. проверку разрядности выше). Строка
+                        // скопирована в наш же буфер, поэтому указатель годен сразу.
+                        var length = Marshal.ReadInt16(buffer);
+                        var pointer = Marshal.ReadIntPtr(buffer, 8);
+                        if (length <= 0 || pointer == IntPtr.Zero) return "";
+                        return Marshal.PtrToStringUni(pointer, length / 2)?.Trim() ?? "";
+                    }
+
+                    if (status != StatusInfoLengthMismatch && status != StatusBufferTooSmall) return "";
+                    size = Math.Max(needed, size * 2);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+
+            return "";
+        }
+        catch
+        {
+            return "";
+        }
+        finally
+        {
+            if (handle != IntPtr.Zero) CloseHandle(handle);
+        }
     }
 
     /// <summary>
@@ -546,7 +861,9 @@ public sealed class ServerController
 
     public ServerStatus Stop(Action tick = null, int timeoutSec = 25)
     {
-        var status = GetStatus();
+        // Определяем состояние без чистки server.pid: если остановить не удастся, файлы
+        // состояния обязаны остаться на месте (см. в конце метода).
+        var status = GetStatus(cleanStalePid: false);
 
         // Порт держит чужая программа. Панель не имеет права её останавливать: это может быть
         // чужой сервер с несохранёнными данными. Говорим об этом и выходим.
@@ -557,14 +874,21 @@ public sealed class ServerController
             return status;
         }
 
+        // Убиваем только то, что доказанно наше.
         var process = _server;
         if (process != null)
         {
-            KillTree(process.Id);
+            // Свой сервер держим живым дескриптором: пока процесс не завершился, его номер не
+            // может достаться чужому — поэтому убиваем по этому же дескриптору, а не по номеру.
+            KillTree(process);
         }
-        else if (status.Running && status.Pid > 0)
+        else if (status.Running && status.Pid > 0 && status.Pid != Environment.ProcessId
+                 && IsOurs(status.Pid, Port, _paths, out var startedAt))
         {
-            KillTree(status.Pid);
+            // Владение перепроверяем прямо перед убийством: между определением состояния и
+            // этим моментом номер процесса мог достаться чужому, а чужое панель не убивает.
+            // KillTree сверяет ещё и время создания — то самое, что видела эта проверка.
+            KillTree(status.Pid, startedAt);
         }
 
         var deadline = DateTime.UtcNow.AddSeconds(timeoutSec);
@@ -575,21 +899,36 @@ public sealed class ServerController
             if (GetPortOwner() == 0) break;
         }
 
-        // Порт всё ещё занят — добиваем владельца, но только если он наш (проверка та же,
-        // что и при опросе состояния: записанный номер процесса или наша ссылка).
+        // Порт всё ещё занят — добиваем владельца, но только если он прошёл проверку владения
+        // (номер из server.pid, живой node, наш порт в командной строке) и это по-прежнему тот
+        // самый процесс: время создания сверяет KillTree. Чужой процесс не убиваем никогда.
         var owner = GetPortOwner();
-        if (owner > 0 && owner != Environment.ProcessId && IsOurs(owner, Port, _paths))
+        if (owner > 0 && owner != Environment.ProcessId
+            && IsOurs(owner, Port, _paths, out var ownerStartedAt))
         {
-            KillTree(owner);
+            KillTree(owner, ownerStartedAt);
             Thread.Sleep(500);
             tick?.Invoke();
         }
 
         _server = null;
         CloseLog();
-        TryDelete(_paths.PidPath);
-        TryDelete(_paths.OwnUrlPath);
-        return GetStatus();
+
+        // Файлы состояния убираем только если порт в итоге свободен. Если остановить не удалось,
+        // server.pid и web-url.txt остаются: в ссылке токен входа, и восстановить его нечем —
+        // стереть её на неудавшейся остановке значило бы потерять вход в панель навсегда.
+        if (GetPortOwner() == 0)
+        {
+            TryDelete(_paths.PidPath);
+            TryDelete(_paths.OwnUrlPath);
+        }
+        else
+        {
+            AppLog.Write(_paths, "порт остался занят — server.pid и web-url.txt оставлены "
+                                 + "(в web-url.txt ссылка для входа с токеном)");
+        }
+
+        return GetStatus(cleanStalePid: false);
     }
 
     // --- служебное ---------------------------------------------------------
@@ -632,12 +971,17 @@ public sealed class ServerController
     /// Переменная окружения процесса для этого не годится: панель, запущенная до установки Node
     /// (например, установщиком или автозапуском при входе), держит PATH без него, и все дочерние
     /// процессы — включая движок — получают устаревшее окружение.
+    ///
+    /// Путь к системному PATH в реестре был записан без разделителей
+    /// («SYSTEMCurrentControlSet…»), ключ молча не открывался, и системный PATH в окружение
+    /// сервера не попадал. Теперь неудача открытия ключа ещё и попадает в журнал: раньше она
+    /// была неотличима от «ключ пуст».
     /// </summary>
-    private static string FreshPath()
+    private string FreshPath()
     {
         var parts = new List<string>();
 
-        void AddFrom(RegistryKey root, string subKey)
+        void AddFrom(RegistryKey root, string subKey, string title)
         {
             try
             {
@@ -645,16 +989,20 @@ public sealed class ServerController
                 if (key?.GetValue("Path") is string value && value.Length > 0)
                 {
                     parts.Add(Environment.ExpandEnvironmentVariables(value));
+                    return;
                 }
+
+                AppLog.Write(_paths, $"PATH: ключ реестра не прочитан или пуст — {title} ({subKey})");
             }
-            catch
+            catch (Exception error)
             {
-                // Не прочитали — обойдёмся тем, что есть.
+                AppLog.Write(_paths, $"PATH: ключ реестра не прочитан — {title} ({subKey}): {error.Message}");
             }
         }
 
-        AddFrom(Registry.CurrentUser, "Environment");
-        AddFrom(Registry.LocalMachine, @"SYSTEMCurrentControlSetControlSession ManagerEnvironment");
+        AddFrom(Registry.CurrentUser, "Environment", "PATH пользователя");
+        AddFrom(Registry.LocalMachine, @"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+            "системный PATH");
         parts.Add(Environment.GetEnvironmentVariable("Path") ?? "");
 
         return string.Join(";", parts.Where(part => part.Length > 0));
@@ -860,21 +1208,33 @@ public sealed class ServerController
         }
     }
 
-    private static void KillTree(int pid)
+    /// <summary>
+    /// Останавливает процесс и его потомков — но только если это по-прежнему ТОТ САМЫЙ процесс,
+    /// которого проверяла IsOurs. Номер процесса переиспользуется, поэтому одного номера мало:
+    /// между проверкой владения и убийством процесс мог завершиться и его номер достаться
+    /// чужому. Время создания процесса (startedAt) — то, что видела проверка; не совпало —
+    /// не убиваем.
+    /// </summary>
+    private static bool KillTree(int pid, long startedAt)
     {
-        if (pid <= 0 || pid == Environment.ProcessId) return;
+        if (pid <= 0 || pid == Environment.ProcessId || startedAt == 0) return false;
 
         try
         {
             using var process = Process.GetProcessById(pid);
+            if (process.StartTime.Ticks != startedAt) return false;
+
             process.Kill(entireProcessTree: true);
             process.WaitForExit(5000);
-            return;
+            return true;
         }
         catch
         {
-            // Процесс уже мёртв или не даёт себя убить — пробуем taskkill.
+            // Процесс уже мёртв или не даёт себя убить — ниже пробуем taskkill, но лишь
+            // убедившись, что номер всё ещё принадлежит тому же процессу.
         }
+
+        if (!IsSameProcess(pid, startedAt)) return false;
 
         try
         {
@@ -887,11 +1247,44 @@ public sealed class ServerController
             };
             using var killer = Process.Start(psi);
             killer?.WaitForExit(5000);
+            return true;
         }
         catch
         {
-            // Ничего: ниже вызывающий код проверит, освободился ли порт.
+            // Ничего: вызывающий код проверит, освободился ли порт.
+            return false;
         }
+    }
+
+    /// <summary>
+    /// Останавливает процесс, который панель сама запустила и держит живым дескриптором.
+    /// Здесь номер процесса переиспользован быть не может, пока дескриптор жив, поэтому
+    /// убиваем по нему же, а не по номеру, взятому из файла или из таблицы портов.
+    /// </summary>
+    private static bool KillTree(Process process)
+    {
+        if (process == null) return false;
+
+        try
+        {
+            if (process.HasExited) return false;
+            if (process.Id == Environment.ProcessId) return false;
+
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(5000);
+            return true;
+        }
+        catch
+        {
+            // Не дал себя убить: дальше порт проверит Stop и добьёт владельца по проверке владения.
+            return false;
+        }
+    }
+
+    /// <summary>Тот же ли это процесс: номер совпадает и время создания то же.</summary>
+    private static bool IsSameProcess(int pid, long startedAt)
+    {
+        return startedAt != 0 && ProcessStartTicks(pid) == startedAt;
     }
 
     private static void TryDelete(string path)

@@ -734,7 +734,7 @@ public sealed class SettingsForm : Form
             return;
         }
 
-        SetUpdateBusy(true, Loc.T("update.downloading", "DshPanel.zip"));
+        SetUpdateBusy(true, Loc.T("update.downloading", check.AssetName));
         try
         {
             var download = await Task.Run(() => UpdateService.Prepare(check, _paths, step => BeginInvoke((Action)(() => _lblUpdateState.Text = step))));

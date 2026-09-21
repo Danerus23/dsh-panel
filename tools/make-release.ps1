@@ -161,6 +161,21 @@ try {
             & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\check-restore.ps1') -Dll (Join-Path $panel 'DshTray.dll') -Work (Join-Path $dist 'restore-check')
         }
 
+        # Автозапуск: запись в HKCU\...\Run хранит абсолютный путь к exe, и её надо сверять
+        # с текущей копией. Проверка уводит реестр в свою ветку (DSH_PANEL_RUN_KEY) и в конце
+        # убеждается, что настоящий автозапуск человека не тронут.
+        Step 'Автозапуск (сверка и починка записи)' {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\check-autostart.ps1') -Exe (Join-Path $panel 'DshTray.exe')
+        }
+
+        # Перенос настроек прежней панели — тоже в своей песочнице: прежняя папка подменяется
+        # переменной DSH_PANEL_LEGACY_DATA, поэтому настоящий %APPDATA%\DeepSeekHarness не
+        # читается. Дефект был живой: файл прежней панели всегда новее панельного, и настройки
+        # панели затирались при каждом запуске — проверка обязана это ловить.
+        Step 'Перенос настроек прежней панели' {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\check-migrate.ps1') -Exe (Join-Path $panel 'DshTray.exe')
+        }
+
         # Путь обновления проверяется отдельно: поднимается локальная заглушка GitHub API,
         # и панель проходит его целиком — скачивание, сверка контрольных сумм, распаковка.
         # Публиковать выпуск для этого не нужно.

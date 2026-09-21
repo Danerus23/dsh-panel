@@ -79,6 +79,10 @@ $env:DSH_HOME = $dshHome
 $env:DSH_TRAY_BACKUP = $backups
 $env:DSH_PANEL_SSH_DIR = $ssh
 Remove-Item Env:\DSH_PANEL_LANG -ErrorAction SilentlyContinue
+# Перенос настроек из папки прежней генерации выключаем: он читает настоящий
+# %APPDATA%\DeepSeekHarness сборщика и тащит его файлы в песочницу приёмки, из-за чего проверка
+# «мастер ещё не пройден» смотрела бы в чужой файл. Так же поступают build.ps1 и остальные проверки.
+$env:DSH_PANEL_NO_MIGRATE = '1'
 
 try {
     # 1. Первый запуск: мастер ещё не пройден.

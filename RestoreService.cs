@@ -117,6 +117,8 @@ public sealed class RestoreResult
 ///  • распаковывается только то, что лежит внутри своей группы — запись с «..» или
 ///    абсолютным путём не выйдет за пределы каталога-назначения;
 ///  • ключи и сертификаты возвращаются только по явной галочке и закрываются на владельца;
+///  • пути из настроек чужой копии проверяются: чего на этой машине нет, то вычищается и
+///    называется в отчёте; у копии с этой же машины пути не трогаются вовсе;
 ///  • чужой архив (без нашей описи) не трогаем вовсе.
 /// </summary>
 public static class RestoreService
@@ -225,6 +227,10 @@ public static class RestoreService
             var locked = 0;
             var lockedFiles = new List<string>();
 
+            // Легли ли на диск настройки панели из копии: только в этом случае их пути
+            // пришли с чужой машины и их надо проверять на этой.
+            var panelSettingsRestored = false;
+
             using (var zip = ZipFile.OpenRead(plan.Path))
             {
                 foreach (var entry in zip.Entries)
@@ -255,6 +261,7 @@ public static class RestoreService
                         entry.ExtractToFile(full, overwrite: true);
                         result.Files++;
                         result.Bytes += entry.Length;
+                        if (IsPanelSettings(entry.FullName)) panelSettingsRestored = true;
                         if (result.Files % 25 == 0) progress?.Invoke(entry.FullName);
                     }
                     catch (Exception error)
@@ -298,19 +305,55 @@ public static class RestoreService
             // Свой Node из копии прописываем в настройки ТОЛЬКО если файл действительно лёг
             // на диск: иначе панель запомнила бы путь к несуществующему node.exe.
             var ownNode = Path.Combine(OwnNodeDir(paths), "node.exe");
+
+            // Читаются ли настройки, пришедшие из копии. Ложь означает, что писать в файл
+            // нельзя вообще: не прочитав его, мы записали бы поверх чужое значение — умолчания
+            // из памяти, а не то, что лежит в файле.
+            var settingsReadable = true;
+
             if (File.Exists(ownNode))
             {
-                settings.NodePath = ownNode;
-                settings.Save(paths.SettingsPath);
-                NodeLocator.ApplyOverrides(settings.NodePath, settings.DshBinPath);
-                result.Restored.Add(Loc.T("restore.nodeOwn", AppPaths.Display(settings.NodePath)));
+                // Файл настроек из копии перечитываем: в settings лежит объект, загруженный при
+                // старте панели, и сохранение его целиком вернуло бы порт, язык, пройденный
+                // мастер и прочее к состоянию ДО наката — то есть затёрло бы только что
+                // восстановленные настройки (а отчёт при этом говорил бы, что они вернулись).
+                // Если настроек в копии не было (или выбран --no-settings), перечитывать нечего:
+                // в settings как раз и лежат собственные настройки панели, и их сохранение
+                // вместе с новым путём к Node — то, что нужно.
+                if (panelSettingsRestored) settingsReadable = settings.Reload(paths.SettingsPath);
+
+                if (!settingsReadable)
+                {
+                    // Файл есть, но не разбирается (битый, обрезанный, занят чужой программой).
+                    // Не трогаем его вовсе: ни сохранения, ни чистки путей. Иначе умолчания
+                    // (порт 3080, мастер не пройден) легли бы поверх того, что пришло из копии.
+                    result.Skipped.Add(Loc.T("restore.settingsUnreadable", AppPaths.Display(paths.SettingsPath)));
+                    AppLog.Write(paths, "накат копии: настройки панели прочитать не удалось — файл оставлен "
+                                        + "как есть, путь к своему Node не записан: " + paths.SettingsPath);
+                }
+                else
+                {
+                    // Поверх восстановленного файла пишем ровно одно — путь к своему node.exe:
+                    // всё остальное в файле уже пришло из копии, и трогать его нечем.
+                    settings.NodePath = ownNode;
+                    settings.Save(paths.SettingsPath);
+                    NodeLocator.ApplyOverrides(settings.NodePath, settings.DshBinPath);
+                    result.Restored.Add(Loc.T("restore.nodeOwn", AppPaths.Display(settings.NodePath)));
+                }
             }
             else if (!string.Equals(nodePathBefore, settings.NodePath, StringComparison.OrdinalIgnoreCase))
             {
                 // Ветка на случай, если путь пришёл из настроек копии: сохраняем как есть.
+                // Сейчас она недостижима (settings.NodePath меняет только ветка выше), но если
+                // её когда-нибудь займут, перечитать файл надо здесь так же, как и там.
                 settings.Save(paths.SettingsPath);
                 NodeLocator.ApplyOverrides(settings.NodePath, settings.DshBinPath);
             }
+
+            // Проверка путей — после ветки про свой Node: та дописывает в файл путь к своему
+            // node.exe, и проверять надо уже окончательный файл. Если настройки из копии
+            // прочитать не удалось, не трогаем ничего.
+            if (panelSettingsRestored && settingsReadable) PruneMissingPaths(paths, plan, result);
 
             // Накат считается удачным, только если записалось хоть что-то И ничего не осталось
             // незаписанным: иначе человек думал бы, что копия легла целиком.
@@ -336,6 +379,142 @@ public static class RestoreService
         if (options.Keys && plan.HasKeys) yield return ("restore.group.keys", plan.KeyFiles);
         if (options.Engine && plan.HasEngine) yield return ("restore.group.engine", plan.EngineFiles);
         if (options.Engine && plan.HasInstaller) yield return ("restore.group.installer", plan.InstallerFiles);
+    }
+
+    /// <summary>
+    /// Настройки панели из копии — это запись appdata/&lt;папка продукта&gt;/settings.json.
+    /// Внутри группы имя папки продукта срезается (см. Target), поэтому проверяем и с ним.
+    /// </summary>
+    private static bool IsPanelSettings(string entryName)
+    {
+        if (!entryName.StartsWith("appdata/", StringComparison.OrdinalIgnoreCase)) return false;
+
+        var rest = entryName["appdata/".Length..];
+        if (rest.StartsWith(AppPaths.ProductFolder + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            rest = rest[(AppPaths.ProductFolder.Length + 1)..];
+        }
+
+        return string.Equals(rest, "settings.json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Проверяет пути в восстановленных настройках. Пути в settings.json абсолютные: на другой
+    /// машине node.exe, lib\bin.js, рабочая папка, папка копий и каталоги ключей указывают
+    /// в никуда. Рантайм спасается поиском своих путей, но человек видит мёртвые значения
+    /// в настройках и не понимает, откуда они.
+    ///
+    /// Копия с ЭТОЙ машины этим же пользователем — другое дело: пути родные, и «сейчас нет» не
+    /// значит «мёртв». Флешка вынута, сетевой диск отключён, папку создадут позже — вычистив
+    /// значение, мы потеряли бы его безвозвратно. Поэтому такую копию не чистим вовсе: только
+    /// называем в отчёте то, чего сейчас нет, а решает человек. Чистим лишь чужие пути, и только
+    /// те, что вообще можно проверить (см. <see cref="UntouchablePath"/>).
+    /// </summary>
+    private static void PruneMissingPaths(AppPaths paths, RestorePlan plan, RestoreResult result)
+    {
+        try
+        {
+            if (!File.Exists(paths.SettingsPath)) return;
+
+            var settings = AppSettings.Load(paths.SettingsPath);
+
+            // Чистим только чужую копию: у своей пути родные, и решать про них человеку.
+            var clean = !IsSameMachine(plan);
+            var problems = new List<string>();
+
+            settings.NodePath = Keep(settings.NodePath, "restore.path.node", clean, problems);
+            settings.DshBinPath = Keep(settings.DshBinPath, "restore.path.dshBin", clean, problems);
+            settings.ServerWorkingDir = Keep(settings.ServerWorkingDir, "restore.path.workDir", clean, problems);
+            settings.BackupFolder = Keep(settings.BackupFolder, "restore.path.backupFolder", clean, problems);
+            settings.BackupLastPath = Keep(settings.BackupLastPath, "restore.path.lastBackup", clean, problems);
+
+            // Каталоги ключей — единственный список среди этих полей: чистим поэлементно.
+            var keyDirs = settings.BackupKeyDirs ?? new List<string>();
+            var kept = new List<string>();
+            foreach (var directory in keyDirs)
+            {
+                if (string.IsNullOrWhiteSpace(directory)) continue;
+
+                var value = Keep(directory, "restore.path.keyDirs", clean, problems);
+                if (value.Length > 0) kept.Add(value);
+            }
+
+            settings.BackupKeyDirs = kept;
+
+            if (problems.Count == 0) return;
+
+            // Для чужой копии путь вычищен — значит, файл надо сохранить. Для своей копии файл
+            // не менялся: человеку только говорим, что именно сейчас не нашлось.
+            if (clean) settings.Save(paths.SettingsPath);
+
+            var list = string.Join("; ", problems);
+            result.Skipped.Add(Loc.T(clean ? "restore.pathsDropped" : "restore.pathsMissing", list));
+            AppLog.Write(paths, clean
+                ? "накат копии: из настроек убраны пути, которых нет на этой машине (" + problems.Count + "): " + list
+                : "накат копии: в настройках из копии этой же машины сейчас нет путей (" + problems.Count
+                  + "), оставлены как есть: " + list);
+        }
+        catch (Exception error)
+        {
+            // Настройки не поправились — накат из-за этого провальным не считаем (рантайм
+            // и сам не пользуется несуществующими путями), но человеку говорим.
+            result.Skipped.Add(Loc.T("restore.pathsNotPruned", error.Message));
+        }
+    }
+
+    /// <summary>
+    /// Что оставить на месте этого пути. Существующий и непроверяемый (сетевой, относительный)
+    /// путь остаётся как есть. Несуществующий называем в списке; для чужой копии (clean) ещё
+    /// и очищаем — тогда возвращаем пустую строку.
+    /// </summary>
+    private static string Keep(string value, string labelKey, bool clean, List<string> problems)
+    {
+        if (UntouchablePath(value)) return value;
+        if (ExistsOnThisMachine(value)) return value;
+
+        problems.Add(Loc.T(labelKey) + ": " + AppPaths.Display(value));
+        return clean ? "" : value;
+    }
+
+    /// <summary>
+    /// Путь, который мы не проверяем и не трогаем. Случаев три, и все три означают «оставить
+    /// как есть»:
+    ///  • пустое значение — проверять нечего;
+    ///  • сетевой путь (\\сервер\папка или //сервер/папка) — проверка существования пошла бы
+    ///    в сеть к чужому узлу, а архив недоверенный: обращаться наружу по его указке нельзя;
+    ///  • путь не полный (относительный, «C:папка», с переменной окружения) — разрешать его
+    ///    от текущего каталога процесса нельзя: это каталог панели, а не то, что имел в виду
+    ///    человек. Непонятное значение оставляем человеку, а не догадке.
+    /// </summary>
+    private static bool UntouchablePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return true;
+
+        var trimmed = path.Trim();
+        if (trimmed.StartsWith(@"\\", StringComparison.Ordinal)) return true;
+        if (trimmed.StartsWith("//", StringComparison.Ordinal)) return true;
+
+        try
+        {
+            return !Path.IsPathFullyQualified(trimmed);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    /// <summary>Есть ли по этому пути файл или каталог. Проверяем только проверяемое.</summary>
+    private static bool ExistsOnThisMachine(string path)
+    {
+        try
+        {
+            return File.Exists(path) || Directory.Exists(path);
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     /// <summary>

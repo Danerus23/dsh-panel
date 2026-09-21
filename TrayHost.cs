@@ -41,6 +41,8 @@ public sealed class TrayHost : ApplicationContext
     private readonly ToolStripMenuItem _mnuSettings = new(Loc.T("tray.settings"));
     private readonly ToolStripMenuItem _mnuBackups = new(Loc.T("tray.backups"));
     private readonly ToolStripMenuItem _mnuAutostart = new(Loc.T("tray.autostart")) { CheckOnClick = false };
+    private readonly ToolStripMenuItem _mnuAutostartTake = new(Loc.T("tray.autostartTake"));
+    private Autostart.State _autostartState = Autostart.State.Off;
     private readonly ToolStripMenuItem _mnuChangelog = new(Loc.T("tray.changelog"));
     private readonly ToolStripMenuItem _mnuExit = new(Loc.T("tray.exit"));
 
@@ -111,6 +113,16 @@ public sealed class TrayHost : ApplicationContext
         _startupTimer.Tick += (_, _) =>
         {
             _startupTimer.Stop();
+
+            // Автозапуск хранит абсолютный путь к exe, поэтому его надо сверить с собой при
+            // каждом старте: иначе после входа в Windows поднимается чужая (обычно старая)
+            // копия, а панель показывает автозапуск включённым. Разбор — в Autostart.cs.
+            CheckAutostart();
+
+            // Итог прошлого обновления: панель могла закрыться «на замену файлов», а замены не
+            // случиться (панель не вышла, мьютекс занят, откат). Раньше об этом не говорил никто:
+            // журнал сценария лежал непрочитанным, а человек считал, что обновился.
+            CheckUpdateOutcome();
 
             // Первый запуск: сначала мастер настройки, потом всё остальное — иначе панель
             // начнёт поднимать сервер в чужой папке и на чужом порту. Окно панели до мастера
@@ -210,6 +222,7 @@ public sealed class TrayHost : ApplicationContext
             _mnuBackups,
             new ToolStripSeparator(),
             _mnuAutostart,
+            _mnuAutostartTake,
             new ToolStripSeparator(),
             _mnuChangelog,
             _mnuExit,
@@ -227,6 +240,17 @@ public sealed class TrayHost : ApplicationContext
         _mnuSettings.Click += (_, _) => OpenSettings();
         _mnuBackups.Click += (_, _) => OpenBackups();
         _mnuAutostart.Click += (_, _) => SetAutostart(!Autostart.IsEnabled());
+        _mnuAutostartTake.Click += (_, _) =>
+        {
+            if (!Autostart.Retarget())
+            {
+                ShowError(Loc.T("err.autostart"));
+                return;
+            }
+
+            _autostartState = Autostart.Inspect();
+            RefreshState();
+        };
         _mnuChangelog.Click += (_, _) => AppVersion.OpenChangelog(_paths.BaseDir);
         _mnuExit.Click += (_, _) => ExitApp();
     }
@@ -817,8 +841,20 @@ public sealed class TrayHost : ApplicationContext
                 : Loc.T("tray.balanceNoData"));
 
         var autostart = Autostart.IsEnabled();
+        var elsewhere = _autostartState.Where == Autostart.Where.Other;
         _mnuAutostart.Checked = autostart;
-        _mnuAutostart.Text = Loc.T(autostart ? "tray.autostartOn" : "tray.autostartOff");
+
+        // При записи на чужую копию «включено» — правда, но не вся: запустится не эта панель.
+        // Поэтому пункт говорит, для кого автозапуск включён, а не просто «включено».
+        _mnuAutostart.Text = Loc.T(elsewhere
+            ? "tray.autostartOtherOn"
+            : autostart ? "tray.autostartOn" : "tray.autostartOff");
+
+        // «Перевести на эту копию» показываем только в одном случае: запись ведёт на другую
+        // ЖИВУЮ копию той же или более новой версии. Всё остальное панель чинит сама при старте,
+        // а отбирать автозапуск у соседней копии молча нельзя — это решение человека.
+        _mnuAutostartTake.Visible = elsewhere;
+        _mnuAutostartTake.Enabled = elsewhere && !_busy;
 
         var enabled = !_busy;
         _mnuStart.Enabled = enabled && !_status.Running && !_status.PortBusyByOther;
@@ -1035,8 +1071,79 @@ public sealed class TrayHost : ApplicationContext
         finally
         {
             _form.ClearBusy();
+            _autostartState = Autostart.Inspect();
+            _form.SetAutostartNote(_autostartState);
             RefreshState();
         }
+    }
+
+    /// <summary>
+    /// Сверяет запись автозапуска с этой копией и чинит её, если она ведёт на отсутствующий
+    /// файл, на более старую копию или под прежним именем. Про живую соседнюю копию панель
+    /// не молчит: без этого человек уверен, что при входе поднимется именно эта панель.
+    /// </summary>
+    private void CheckAutostart()
+    {
+        try
+        {
+            var fix = Autostart.Repair();
+            _autostartState = fix.After;
+            _form.SetAutostartNote(_autostartState);
+
+            if (fix.Changed)
+            {
+                AppLog.Write(_paths, "автозапуск: " + DescribeAutostartFix(fix)
+                    + (fix.Before.Path.Length > 0 ? $", было: {fix.Before.Path}" : ""));
+            }
+            if (fix.After.Where == Autostart.Where.Other)
+            {
+                _tray.ShowBalloonTip(10000, Loc.T("tray.autostartOtherTitle"),
+                    Loc.T("tray.autostartOtherText", fix.After.Path), ToolTipIcon.Warning);
+            }
+        }
+        catch
+        {
+            // Реестр недоступен — панель работает как раньше, без автозапуска.
+        }
+    }
+
+    /// <summary>
+    /// Итог прошлого обновления. Панель закрылась «на замену файлов», а замены могло не
+    /// случиться (панель не вышла, мьютекс занят, откат) — тогда человек обязан узнать об этом,
+    /// иначе он считает, что обновился, и ждёт новых возможностей от старой версии.
+    /// </summary>
+    private void CheckUpdateOutcome()
+    {
+        try
+        {
+            var outcome = UpdateService.StartupNotice(_paths);
+            if (outcome == null || !outcome.Failed) return;
+
+            _tray.ShowBalloonTip(15000, Loc.T("update.title"), outcome.Message, ToolTipIcon.Warning);
+        }
+        catch
+        {
+            // Итог разобрать не удалось — обновление и без того работает как работает.
+        }
+    }
+
+    /// <summary>Что именно сделала починка автозапуска — строкой для журнала (журнал по-русски).</summary>
+    private static string DescribeAutostartFix(Autostart.Fix fix)
+    {
+        var text = fix.Action switch
+        {
+            "dedup" => "убрал вторую запись (прежнее имя), осталась одна",
+            "migrated" => "перенёс запись прежнего имени на эту копию",
+            "normalized" => "дописал --tray в запись (панель открывалась окном)",
+            "missing" => "запись вела на отсутствующий файл — перевёл на эту копию",
+            "older" => "запись вела на более старую копию — перевёл на эту",
+            "failed" => "не удалось записать автозапуск в реестр — осталось как было",
+            _ => fix.Action,
+        };
+
+        return fix.HadDuplicate && fix.Action != "dedup"
+            ? "убрал вторую запись (прежнее имя); " + text
+            : text;
     }
 
     public void ExitApp()

@@ -391,6 +391,16 @@ public sealed class MainForm : Form
         _suppressAutostart = false;
     }
 
+    /// <summary>
+    /// Подсказка у галочки автозапуска. Галочка отвечает на вопрос «автозапуск включён?», и при
+    /// записи на чужую копию она честно стоит — но человеку надо знать, что запустится не эта
+    /// панель: это ровно та путаница, из-за которой после перезагрузки поднималась старая копия.
+    /// </summary>
+    public void SetAutostartNote(Autostart.State state) =>
+        _tips.SetToolTip(_chkAutostart, state.Where == Autostart.Where.Other
+            ? Loc.T("tip.main.autostartOther", state.Path)
+            : Loc.T("tip.main.autostart"));
+
     /// <summary>Показывает в галочке сохранённую настройку (после окна настроек).</summary>
     public void ApplyOpenBrowser(bool enabled)
     {

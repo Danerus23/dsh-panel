@@ -42,8 +42,12 @@ built by the same script:
 and the ILLink package cannot be resolved (the failure is `NU1100`, which does not hint at the cause).
 
 `install.ps1` creates the desktop and Start menu shortcuts (`DSH Panel`, the same name the installer
-uses): `-AppDir <path>`, `-NoDesktop`, `-NoStartMenu`. Ordinary users get the shortcuts from the
-installer; this script is for someone who built the panel themselves.
+uses): `-AppDir <path>`, `-NoDesktop`, `-NoStartMenu`. The Start menu shortcut goes into the same group
+folder as the installer's (`Programs\DSH Panel\DSH Panel.lnk`, because the installer sets
+`DisableProgramGroupPage=yes` with `DefaultGroupName=DSH Panel`), and the script also removes a shortcut
+of the same name left in the root of `Programs` by an older generation of itself — but only when it
+points at this very copy, so somebody else's shortcut is never touched. Ordinary users get the shortcuts
+from the installer; this script is for someone who built the panel themselves.
 
 The project has **no external packages**: `NuGet.config` clears the package sources on purpose, so
 the build uses only the SDK.
@@ -64,8 +68,11 @@ when the running panel locks `app\`), `-Iscc <path>`.
 
 **Inno Setup 7 is required.** What actually decides it: the wizard includes
 `Languages\ChineseSimplified.isl`, and that file only exists in version 7 (6.7.3 stops with
-`Couldn't open include file`, which says nothing about the real cause). The script asks the compiler
-for its version before building and reports what it found:
+`Couldn't open include file`, which says nothing about the real cause). The script does **not** ask the
+compiler for its version — `ISCC` prints it outside the standard output, and parsing that banner would
+only add brittleness. Instead it probes every candidate compiler it found and the criterion is
+`Languages\ChineseSimplified.isl` next to `ISCC.exe`, then reports each candidate and whether it is
+usable:
 
 ```powershell
 winget install --id JRSoftware.InnoSetup.7 -e -s winget
@@ -73,9 +80,9 @@ winget install --id JRSoftware.InnoSetup.7 -e -s winget
 
 The script installs **per user** into `%LOCALAPPDATA%\Programs\DSH Panel`: no administrator rights,
 nothing into `Program Files`, an uninstall entry in HKCU. The payload excludes `status.txt`, `logs\*`,
-`settings.json`, `*.pdb` and `build.txt` — those are reports, logs and machine-specific data that must
-never be shipped. After installation the wizard is offered (`DshTray.exe --onboard`); the desktop
-shortcut and autostart are optional tasks, off by default. The `[Run]` entry uses
+`settings.json`, `*.log`, `*.pdb` and `build.txt` — those are reports, logs and machine-specific data
+that must never be shipped. After installation the wizard is offered (`DshTray.exe --onboard`); the
+desktop shortcut and autostart are optional tasks, off by default. The `[Run]` entry uses
 `runasoriginaluser`, so a panel started from an elevated setup still runs as the ordinary user.
 
 The uninstaller stops a running panel (`taskkill`), removes the autostart value even if the panel
@@ -149,6 +156,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check-encoding.ps1
 # restore: safety copy, key ACLs, zip-slip, links outside, keys from another machine
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check-restore.ps1 -Dll .\dist\panel\DshTray.dll
 
+# autostart: the entry is checked against this copy and repaired; the registry is taken to a
+# throwaway branch, and the check asserts the real HKCU\...\Run was not touched
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check-autostart.ps1 -Exe .\app\DshTray.exe
+
+# the same by hand, on the real registry
+.\app\DshTray.exe --autostart-fix --out autostart.txt
+
+# migration from the previous generation's settings folder: the panel's own file must never be
+# overwritten (the previous folder is substituted with DSH_PANEL_LEGACY_DATA, so the real
+# %APPDATA%\DeepSeekHarness is not even read)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check-migrate.ps1 -Exe .\app\DshTray.exe
+
 # pack a publish folder for release (also called by the CI)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pack-panel.ps1 `
   -Source dist\panel -Destination dist\DshPanel.zip
@@ -192,6 +211,33 @@ that path, while a `.ssh` group is returned into the current user's own `.ssh`.
 The server that serves the web interface **must not be stopped** by the checks: it holds the running
 session.
 
+## Server ownership
+
+The panel may stop only a server it can prove is its own. `ServerController.IsOurs` confirms ownership by
+the process itself, and every condition has to hold at once:
+
+- the number recorded in `server.pid` is exactly this process (`server.pid` alone proves nothing: the file
+  outlives a reboot, and process numbers are reused);
+- the process is alive;
+- it is a `node.exe` image;
+- our port appears in its command line;
+- it is not the panel's own process.
+
+The sign-in link file (`web-url.txt`) is **not** evidence of ownership at all: it holds an address with a
+token, and a single mention of the port in it used to be enough to call somebody else's process “ours” —
+and to stop it. The path to our `bin.js` is deliberately **not** checked either: it legitimately changes
+(a portable Node, a restore, a reinstall of the engine), and a false “foreign” is more expensive — the
+panel would lose the ability to stop **its own** server and would show a permanent “the port is taken by
+another process”. When the process details cannot be read at all (no rights, another account, a protected
+process), the server is counted as foreign: warning is safer than stopping somebody else's process. The
+verdict goes into the application log once per change, and a stale `server.pid` is removed.
+
+With a foreign owner the panel does **nothing**: it never kills it. `Start` refuses with “Port *N* is
+taken by *name* (PID *pid*). Stop it manually.” (`error.portBusy`) and `Stop` cancels in the
+same words, writing the refusal to the log. Ownership is re-checked right before a kill, and `KillTree`
+also compares the process creation time, so a recycled process number cannot make the panel kill somebody
+else's process.
+
 ## Translations
 
 - Dictionaries: `lang\ru.json`, `lang\en.json`, `lang\zh.json`. They are embedded into the `.exe`
@@ -211,8 +257,8 @@ session.
   `DSH_PANEL_LANG` override it for one run. When comparing screenshots, make sure `DSH_PANEL_LANG`
   is not left over in the environment — it wins over `--lang`.
 
-Overrides meant for checks (all optional; `DSH_TRAY_NODE` and `DSH_TRAY_BIN` are listed in the
-README as well, because users need those two):
+Overrides meant for checks (all optional). Two of them — `DSH_TRAY_NODE` and `DSH_TRAY_BIN` — are also
+useful to ordinary users, so they are described in the README; everything else is listed here:
 
 | Variable | What it does |
 | --- | --- |
@@ -220,12 +266,16 @@ README as well, because users need those two):
 | `DSH_PANEL_DATA`, `DSH_PANEL_STATE` | where settings and state live — this is how a second copy is run for tests |
 | `DSH_PANEL_NO_MIGRATE` | `1` disables the one-time migration from `%APPDATA%\DeepSeekHarness`; used by the build self-check and the CI so they never read the builder's own settings |
 | `DSH_PANEL_SSH_DIR` | your own key folder for one run: a restore closes key folders to the owner, so checks must not point at the real `~/.ssh` |
+| `DSH_HOME` | the DSH data folder for one run (`.dsh` by default): the panel and its checks read this one instead of `%USERPROFILE%\.dsh`, so a check never touches the real data |
 | `DSH_TRAY_TZ_OFFSET` | forces the time-zone offset in hours (`7`, `5.5`, `-8`) used to show peak hours — for checking another time zone |
 | `DSH_TRAY_PRICING`, `DSH_TRAY_PRICING_SOURCE` | your own pricing file or pricing page address |
 | `DSH_TRAY_BACKUP` | your own backup folder |
 | `DSH_PANEL_REPO` | the release repository the update check asks (`owner/name`), so the check can be tested against any public repository |
 | `DSH_PANEL_API` | the GitHub API base address; a check points it at a local stub to walk the whole update path offline |
 | `DSH_PANEL_INSTANCE` | the mutex/event name of the “single instance” logic; a check overrides it to run its own panel next to a working one (the wizard check does this) |
+| `DSH_PANEL_RUN_KEY` | the HKCU branch that holds the autostart entry (`Software\Microsoft\Windows\CurrentVersion\Run` by default); `tools\check-autostart.ps1` points it at a throwaway branch, so a check never touches the real `Run` |
+| `DSH_PANEL_LEGACY_DATA` | the previous generation's settings folder (`%APPDATA%\DeepSeekHarness` by default); `tools\check-migrate.ps1` points it at a throwaway folder, so the migration can be checked without reading the builder's own settings |
+| `DSH_PANEL_VARIANT` | `framework` or `selfcontained`, forcing the build variant the update check looks for; for checks only — in normal work the variant is detected from the panel folder |
 | `DSH_PANEL_DONATE` | the donation link shown in the About tab (the shipped constant is empty, so the row stays hidden) |
 | `DSH_TRAY_BALANCE_SCRIPT` | your own fallback script for the balance request |
 
@@ -246,9 +296,13 @@ README as well, because users need those two):
 
 ## Updates and integrity
 
-The panel updates itself from the GitHub release: it downloads `DshPanel.zip` (and
-`dsh-panel-setup.exe`), unpacks it into `%LOCALAPPDATA%\DshPanel\update\<version>` and replaces its
-own files after closing. What is checked:
+The panel updates itself from the GitHub release: it downloads its **own build variant** — `DshPanel.zip`
+for the ordinary build, `DshPanel-selfcontained.zip` for the single-file build with the runtime inside,
+decided by the panel folder itself (`UpdateService.SelfContainedBuild`) — plus `dsh-panel-setup.exe`,
+unpacks it into `%LOCALAPPDATA%\DshPanel\update\<version>` and replaces its own files after closing.
+If the release carries no archive for this variant, the update stops with a straight explanation instead
+of substituting a “similar” build: the framework-dependent one needs an installed runtime, the
+self-contained one must not have it. What is checked:
 
 1. `SHA256SUMS.txt` from the release is **required**: the downloaded archive and installer are
    compared against the published hashes, and a missing sums file stops the update with an
@@ -256,6 +310,17 @@ own files after closing. What is checked:
 2. The version inside the unpacked `DshTray.exe` must equal the release tag.
 3. The previous panel is copied to `update\backup-<version>` first, so an update can be reverted by
    hand, and the replacement script rolls back by itself when `robocopy` fails.
+
+The outcome of a replacement is **not** guessed from the script's exit code. At the next start the panel
+looks at the version in the name of the `update\<version>` folder: a version strictly newer than its own
+means the replacement did not happen (the panel did not exit, the mutex stayed busy, the rollback put the
+previous version back). The person is told about it **once**, with a tray balloon naming the reason, and
+the folder is renamed to `failed-<version>`: the traces stay for inspection and manual repair, but the
+message is not repeated — not at the next start, not after a reboot. Exactly one such folder is kept. A
+version that is not newer is taken as “the replacement happened”: the panel cleans up after itself (the
+folder, the downloaded archive and the sums file; `backup-<version>` is left alone) and honestly writes
+into its log that, if the same version was rebuilt and released again, the files may never have been
+copied at all.
 
 `tools\write-checksums.ps1` produces the file (run by `make-release.ps1` and by the CI on a tag), and
 the release must carry all four assets: `dsh-panel-setup.exe`, `DshPanel.zip`,
@@ -286,12 +351,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\make-release.ps1
 One command does everything that can be automated, and **publishes nothing**: it checks the script
 encoding, refuses to continue if private keys or owner data are found in the project, checks the
 dictionaries, publishes the panel into `dist\panel` (not into `app\`, so a running panel does not get
-in the way), packs both archives with `tools\pack-panel.ps1` (which removes `status.txt`, `*.pdb`,
-`settings.json` and the builder's path from `build.txt`, then **verifies** the result), runs
-`tools\acceptance.ps1` and `tools\check-restore.ps1` against that build, compiles
-`dist\dsh-panel-setup.exe`, cross-checks the versions and cuts `dist\release-notes.md` out of
-`CHANGELOG.md`. Options: `-SkipAcceptance`, `-SkipInstaller`, `-SkipSelfContained`. The exit code is 1
-if any step failed.
+in the way), packs both archives with `tools\pack-panel.ps1` (which removes `status.txt`,
+`settings.json`, `web-url.txt` — the sign-in link, which holds a token —, `*.pdb`, `*.log` and the
+builder's path from `build.txt`, then **verifies** the result), checks the Node
+download addresses (`--node-check`), runs `tools\acceptance.ps1` and `tools\check-restore.ps1` against
+that build, then `tools\check-autostart.ps1` and `tools\check-migrate.ps1`, walks the whole update path
+(`tools\check-update.ps1` and `tools\check-update-apply.ps1`), compiles `dist\dsh-panel-setup.exe`,
+cross-checks the versions, writes `SHA256SUMS.txt` and cuts `dist\release-notes.md` out of
+`CHANGELOG.md`. Options: `-SkipAcceptance`, `-SkipInstaller`, `-SkipSelfContained` and `-SkipUpdate`
+(leaves out both update checks). The exit code is 1 if any step failed.
 
 Publishing is the owner's call and is done with a tag:
 

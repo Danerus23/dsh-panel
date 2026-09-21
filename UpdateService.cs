@@ -20,6 +20,16 @@ public sealed class UpdateCheck
     public string ZipUrl { get; set; } = "";
     public string SetupUrl { get; set; } = "";
 
+    /// <summary>
+    /// Имя сборки выпуска, которая подходит ЭТОЙ панели: DshPanel.zip для обычной сборки
+    /// (рядом лежит DshTray.dll, нужна установленная среда .NET) либо
+    /// DshPanel-selfcontained.zip для сборки одним файлом со средой внутри.
+    /// </summary>
+    public string AssetName { get; set; } = "";
+
+    /// <summary>Наша панель собрана самодостаточной (один .exe, среда .NET внутри).</summary>
+    public bool SelfContained { get; set; }
+
     /// <summary>Ссылка на файл контрольных сумм выпуска (SHA256SUMS.txt), если он опубликован.</summary>
     public string SumsUrl { get; set; } = "";
     public DateTime CheckedAt { get; set; } = DateTime.Now;
@@ -47,15 +57,42 @@ public sealed class UpdateDownload
     public string BackupFolder { get; set; } = "";
     public string ScriptPath { get; set; } = "";
 
-    /// <summary>Аргументы для cmd.exe: сценарий и пути. Пути идут аргументами, а не в теле
-    /// сценария, потому что cmd читает .cmd в кодировке консоли и не-ASCII путь в теле ломается.</summary>
+    /// <summary>Аргументы для cmd.exe: сценарий, пути, имя мьютекса и режим запуска. Пути идут
+    /// аргументами, а не в теле сценария, потому что cmd читает .cmd в кодировке консоли и
+    /// не-ASCII путь в теле ломается (см. WriteScript).</summary>
     public string CommandLine { get; set; } = "";
+}
+
+/// <summary>
+/// Что стало с последним обновлением — панель выясняет это при старте, сверяя свою версию с
+/// версией в папке обновления (см. <see cref="UpdateService.StartupNotice"/>). Раньше итог
+/// замены файлов не читал ни один .cs: журнал сценария (update.log) оставался лежать в
+/// состоянии панели, а человек видел «обновление готово» даже тогда, когда файлы не заменились.
+/// </summary>
+public sealed class UpdateOutcome
+{
+    /// <summary>Обновление НЕ применилось — об этом надо сказать человеку (см. Message).</summary>
+    public bool Failed { get; set; }
+
+    /// <summary>Версия, которая ждала в папке обновления.</summary>
+    public string Version { get; set; } = "";
+
+    /// <summary>Готовая строка для человека (пусто, если показывать нечего). Только через Loc.T.</summary>
+    public string Message { get; set; } = "";
+
+    /// <summary>Причина из журнала сценария — уже переведённая строка ("" — итога в журнале нет).</summary>
+    public string Reason { get; set; } = "";
 }
 
 /// <summary>
 /// Обновление панели с GitHub: проверка выпусков, скачивание сборки и подготовка замены
 /// файлов. Личные данные при этом не трогаются: настройки лежат в %APPDATA%, состояние —
 /// в %LOCALAPPDATA%, а меняются только файлы самой панели.
+///
+/// Какая сборка выпуска нужна — решается по своей папке (<see cref="SelfContainedBuild"/>):
+/// обычной панели — DshPanel.zip, панели одним файлом со средой внутри —
+/// DshPanel-selfcontained.zip. Чужой вариант не подставляется никогда: одна сборка без
+/// установленной среды .NET не запустится, вторая тянет её за собой.
 ///
 /// Адрес репозитория берётся из <see cref="Repository"/>; переменная окружения
 /// DSH_PANEL_REPO подменяет его для проверок.
@@ -86,6 +123,90 @@ public static class UpdateService
             var custom = Environment.GetEnvironmentVariable("DSH_PANEL_API");
             return string.IsNullOrWhiteSpace(custom) ? "https://api.github.com" : custom.Trim().TrimEnd('/');
         }
+    }
+
+    /// <summary>Обычная сборка выпуска: рядом с DshTray.exe лежит DshTray.dll, нужна среда .NET.</summary>
+    public const string FrameworkAsset = "DshPanel.zip";
+
+    /// <summary>Сборка «без .NET»: один DshTray.exe, среда Desktop Runtime внутри.</summary>
+    public const string SelfContainedAsset = "DshPanel-selfcontained.zip";
+
+    /// <summary>
+    /// Вариант сборки этой панели. Решаем по своей папке: у обычной сборки рядом с DshTray.exe
+    /// лежат DshTray.dll, DshTray.deps.json и DshTray.runtimeconfig.json, у сборки одним файлом
+    /// со средой внутри — ничего из этого. Переменная DSH_PANEL_VARIANT (framework либо
+    /// selfcontained) подменяет ответ: ею проверки прогоняют оба варианта на одной сборке,
+    /// на сам путь обновления она больше ни на что не влияет.
+    /// </summary>
+    public static bool SelfContainedBuild
+    {
+        get
+        {
+            var forced = (Environment.GetEnvironmentVariable("DSH_PANEL_VARIANT") ?? "").Trim().ToLowerInvariant();
+            if (forced is "framework" or "frameworkdependent") return false;
+            if (forced is "selfcontained" or "self-contained" or "singlefile") return true;
+            return IsSelfContainedBuild(AppContext.BaseDirectory);
+        }
+    }
+
+    /// <summary>Имя сборки выпуска для варианта. Чужой вариант не подставляем никогда.</summary>
+    public static string AssetNameFor(bool selfContained) => selfContained ? SelfContainedAsset : FrameworkAsset;
+
+    /// <summary>
+    /// Собрана ли папка одним exe со средой внутри. У обычной сборки .NET рядом с DshTray.exe
+    /// есть DshTray.dll и служебные DshTray.deps.json с DshTray.runtimeconfig.json; сборка
+    /// одним файлом их внутрь себя не кладёт — файлов нет, а панель всё равно запускается,
+    /// значит среда внутри неё самой.
+    /// </summary>
+    internal static bool IsSelfContainedBuild(string directory)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return false;
+
+            foreach (var name in new[] { "DshTray.dll", "DshTray.deps.json", "DshTray.runtimeconfig.json" })
+            {
+                if (File.Exists(Path.Combine(directory, name))) return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            // Папку не посмотреть — считаем сборку обычной: её ставит установщик, и это
+            // большинство. Проверка «чего в выпуске нет» ниже всё равно остановит подмену.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Имя мьютекса одной копии панели — то же, что создаёт Program.RunGui
+    /// (Local\DshTray.SingleInstance; DSH_PANEL_INSTANCE меняет имя, этим пользуются проверки).
+    /// Сценарий замены ждёт освобождения этого мьютекса: копия, поднятая слишком рано, видит
+    /// мьютекс занятым и молча завершается — человек остаётся без панели и без объяснения.
+    /// </summary>
+    internal static string InstanceMutexName()
+    {
+        var custom = Environment.GetEnvironmentVariable("DSH_PANEL_INSTANCE");
+        var instance = string.IsNullOrWhiteSpace(custom) ? @"Local\DshTray" : custom.Trim();
+        return instance + ".SingleInstance";
+    }
+
+    /// <summary>
+    /// Запущена ли панель скрыто (значок в трее без окна): так её поднимает автозапуск
+    /// (Autostart пишет в Run «DshTray.exe --tray»). Этот режим передаётся сценарию замены,
+    /// чтобы новая копия поднялась так же: раньше сценарий всегда запускал панель без
+    /// аргументов, то есть окном, и человек, сидевший в трее, получал окно на весь экран.
+    /// </summary>
+    internal static bool StartedHidden()
+    {
+        foreach (var arg in Environment.GetCommandLineArgs())
+        {
+            if (arg.Equals("--tray", StringComparison.OrdinalIgnoreCase)
+                || arg.Equals("--hidden", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+
+        return false;
     }
 
     /// <summary>Последний выпуск: тег, дата, заметки и ссылки на сборки.</summary>
@@ -139,13 +260,21 @@ public static class UpdateService
                 result.PublishedAt = when.ToLocalTime();
             }
 
+            // Какой сборке выпуска мы соответствуем — решаем по своей папке, а не по имени
+            // файла в выпуске. Самодостаточной панели обычная сборка не годится: она без среды
+            // .NET внутри и на машине без установленной среды просто не запустится, а robocopy
+            // отчитается об успехе. Наоборот — тоже: подменять вариант нельзя, о чём ниже.
+            result.SelfContained = SelfContainedBuild;
+            result.AssetName = AssetNameFor(result.SelfContained);
+
             if (root.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
             {
                 foreach (var asset in assets.EnumerateArray())
                 {
                     var assetName = asset.TryGetProperty("name", out var assetNameValue) ? assetNameValue.GetString() ?? "" : "";
                     var assetUrl = asset.TryGetProperty("browser_download_url", out var assetUrlValue) ? assetUrlValue.GetString() ?? "" : "";
-                    if (assetName.Equals("DshPanel.zip", StringComparison.OrdinalIgnoreCase)) result.ZipUrl = assetUrl;
+                    // Берём ровно свою сборку: чужой вариант в ZipUrl не попадает.
+                    if (assetName.Equals(result.AssetName, StringComparison.OrdinalIgnoreCase)) result.ZipUrl = assetUrl;
                     if (assetName.Equals("dsh-panel-setup.exe", StringComparison.OrdinalIgnoreCase)) result.SetupUrl = assetUrl;
                     if (assetName.Equals("SHA256SUMS.txt", StringComparison.OrdinalIgnoreCase)) result.SumsUrl = assetUrl;
                 }
@@ -168,11 +297,12 @@ public static class UpdateService
     /// копируется в backup-&lt;версия&gt;, чтобы обновление можно было откатить руками.
     /// </summary>
     public static UpdateDownload Prepare(UpdateCheck check, AppPaths paths, Action<string> progress = null,
-        bool ignoreNewer = false)
+        bool ignoreNewer = false, bool? startHidden = null)
     {
         var result = new UpdateDownload();
         var staged = "";
         var zipPath = "";
+        var sumsPath = "";
 
         try
         {
@@ -181,7 +311,13 @@ public static class UpdateService
             // ignoreNewer — только для проверки самого пути обновления: она гоняет тот же код
             // на выпуске той же версии, что стоит. Ни одну проверку целостности это не снимает.
             if (!check.Newer && !ignoreNewer) throw new InvalidOperationException(Loc.T("update.alreadyLatest"));
-            if (check.ZipUrl.Length == 0) throw new InvalidOperationException(Loc.T("update.noZip"));
+
+            // Своя сборка выпуска. Вариант не подменяем: обычной сборке нужна установленная
+            // среда .NET, а самодостаточной она не нужна вовсе — «похожая» сборка у человека
+            // либо не запустится, либо потянет за собой установку среды. Если её в выпуске нет —
+            // говорим прямо и останавливаемся.
+            var assetName = check.AssetName.Length > 0 ? check.AssetName : AssetNameFor(SelfContainedBuild);
+            if (check.ZipUrl.Length == 0) throw new InvalidOperationException(Loc.T("update.noVariantAsset", assetName));
 
             // Контрольные суммы обязательны: именно они доказывают, что скачался тот самый
             // архив, а не обрезанный загрузкой или подменённый файл. Хэш панели без своей
@@ -198,14 +334,14 @@ public static class UpdateService
             Directory.CreateDirectory(staged);
 
             progress?.Invoke(Loc.T("update.downloadingSums"));
-            var sumsPath = Path.Combine(updateRoot, "SHA256SUMS.txt");
+            sumsPath = Path.Combine(updateRoot, "SHA256SUMS.txt");
             Download(check.SumsUrl, sumsPath);
             var sums = ReadSums(sumsPath);
 
-            progress?.Invoke(Loc.T("update.downloading", "DshPanel.zip"));
-            zipPath = Path.Combine(updateRoot, "DshPanel-" + version + ".zip");
+            progress?.Invoke(Loc.T("update.downloading", assetName));
+            zipPath = Path.Combine(updateRoot, Path.GetFileNameWithoutExtension(assetName) + "-" + version + ".zip");
             var zipHash = Download(check.ZipUrl, zipPath);
-            VerifyHash("DshPanel.zip", zipHash, sums);
+            VerifyHash(assetName, zipHash, sums);
 
             progress?.Invoke(Loc.T("update.unpacking"));
             ZipFile.ExtractToDirectory(zipPath, staged, overwriteFiles: true);
@@ -229,19 +365,37 @@ public static class UpdateService
             }
 
             progress?.Invoke(Loc.T("update.staging"));
+
+            // Копия прежней версии — не украшение: это единственный откат, который есть у
+            // сценария. Раньше её неудача не мешала объявить обновление готовым, и человек
+            // получал панель без пути назад. Теперь без копии обновление не готовим.
             result.BackupFolder = CopyCurrent(paths.BaseDir, backup);
+            if (result.BackupFolder.Length == 0 || !File.Exists(Path.Combine(result.BackupFolder, "DshTray.exe")))
+            {
+                result.BackupFolder = "";
+                throw new InvalidOperationException(Loc.T("update.noBackup", backup));
+            }
+
             // Пути уходят в командный файл и в командную строку: хвостовой «\» там ломает
             // кавычки ("C:\...\DSH Panel\" — cmd съедает закрывающую), поэтому срезаем его.
             var target = SafePath(paths.BaseDir);
             var stagedSafe = SafePath(staged);
             var backupSafe = SafePath(backup);
 
-            // Путь к журналу выбирает сам сценарий, поэтому сначала пишем его, потом нормализуем.
-            result.ScriptPath = WriteScript(target, stagedSafe, backupSafe, updateRoot, out var logPath);
+            // Режим запуска: скрыто (значок в трее) или окном — чтобы новая копия поднялась
+            // так же, как работала прежняя. Ключ --tray для скрытого запуска понимает Program.
+            var hidden = startHidden ?? StartedHidden();
+
+            // Путь к журналу выбирает сценарий, поэтому сначала пишем его, потом нормализуем.
+            // Шапку журнала (версия, папка панели, папка сборки, режим) пишет сама панель:
+            // путь с «&», «(», «)» или «%» в строке echo сценария рвёт строку на команды.
+            result.ScriptPath = WriteScript(stagedSafe, backupSafe, updateRoot, InstanceMutexName(), hidden, out var logPath);
             var logSafe = SafePath(logPath);
+            WriteLogHeader(logPath, target, stagedSafe, version, hidden);
 
             result.CommandLine = "\"\"" + result.ScriptPath + "\" \"" + Environment.ProcessId + "\" \"" +
-                  target + "\" \"" + stagedSafe + "\" \"" + backupSafe + "\" \"" + logSafe + "\"\"";
+                  target + "\" \"" + stagedSafe + "\" \"" + backupSafe + "\" \"" + logSafe + "\" \"" +
+                  InstanceMutexName() + "\" \"" + (hidden ? "tray" : "window") + "\"\"";
             result.StagedFolder = staged;
             result.Version = version;
             result.Ok = true;
@@ -251,9 +405,16 @@ public static class UpdateService
             result.Error = error.Message;
 
             // За собой убираем: без этого в %LOCALAPPDATA%\DshPanel\update копились бы
-            // обрезанные загрузки и распакованные папки неудавшихся обновлений.
+            // обрезанные загрузки, скачанный архив и файл сумм от неудавшихся обновлений.
+            // Копию прежней версии (backup-*) не трогаем: её могло не быть вовсе, а если она
+            // есть — это готовый откат, и удалять его на неудаче подготовки незачем.
             TryDeleteFolder(staged);
             TryDeleteFile(zipPath);
+            TryDeleteFile(sumsPath);
+
+            // Об этом стоит знать и в журнале панели: в окне человек видит строку ошибки,
+            // а причина (нет места, файл занят) ищется уже по журналу.
+            if (paths != null) AppLog.Write(paths, "обновление не подготовлено: " + error.Message);
         }
 
         return result;
@@ -284,17 +445,6 @@ public static class UpdateService
     }
 
     /// <summary>
-    /// Сценарий замены файлов. Тело намеренно состоит только из ASCII, а все пути приходят
-    /// аргументами (%~1…%~5): cmd.exe читает .cmd в кодировке консоли (на русской Windows —
-    /// cp866), и не-ASCII путь, вписанный в тело, превращается в несуществующий — панель
-    /// закрывалась, а обновление молча не применялось.
-    ///
-    /// Порядок: дождаться выхода панели (по её PID, а не попыткой записи файла, иначе exe
-    /// успевал замениться раньше dll), скопировать, проверить код robocopy (0..7 — успех,
-    /// 8 и больше — ошибка), при ошибке вернуть файлы из копии и в любом случае запустить
-    /// панель заново: человек не должен остаться без окна и значка.
-    /// </summary>
-    /// <summary>
     /// Путь без хвостового разделителя. Нужен там, где путь подставляется в командный файл
     /// в кавычках: «C:\…\DSH Panel\» ломает разбор — cmd считает «\"» экранированной
     /// кавычкой и передаёт robocopy остаток строки вместе с путём. Корень диска («C:\»)
@@ -306,7 +456,36 @@ public static class UpdateService
         return trimmed.EndsWith(":") ? trimmed + "\\" : trimmed;
     }
 
-    private static string WriteScript(string appDir, string staged, string backup, string updateRoot, out string logPath)
+    /// <summary>
+    /// Сценарий замены файлов. Тело намеренно состоит только из ASCII, а все данные приходят
+    /// аргументами (%~1…%~7): cmd.exe читает .cmd в кодировке консоли (на русской Windows —
+    /// cp866), и не-ASCII путь, вписанный в тело, превращается в несуществующий — панель
+    /// закрывалась, а обновление молча не применялось.
+    ///
+    /// Пути и имя мьютекса не попадают ни в текст команды PowerShell, ни в строки echo: у
+    /// «powershell -Command "…" значение» хвост дописывается к самой команде (проверено: значение
+    /// с «&» или «%» ломает разбор и даёт ложное «мьютекс занят»), а «&», «(», «)» и «%» внутри
+    /// echo рвут строку на несколько команд. Поэтому значения уходят в PowerShell через
+    /// окружение (set «DSH_UPD_…» перед вызовом), а пути пишет в журнал сама панель
+    /// (<see cref="WriteLogHeader"/>), сценарий туда только дописывает.
+    ///
+    /// Порядок: дождаться выхода панели (по её PID, а не попыткой записи файла, иначе exe
+    /// успевал замениться раньше dll), дождаться освобождения мьютекса одной копии,
+    /// скопировать, проверить код robocopy (0..7 — успех, 8 и больше — ошибка), при ошибке
+    /// вернуть файлы из копии, запустить панель в том же режиме, в каком она работала
+    /// (%~7: tray — скрыто, как автозапуск; window — с окном), и проверить, что поднялась
+    /// именно новая копия из папки панели.
+    ///
+    /// Панель поднимается только там, где файлы на месте: после удачной замены и после удачного
+    /// отката. Если панель не вышла вовремя, мьютекс занят или его не удалось проверить, откат
+    /// невозможен или не удался — файлы не трогаются (или не восстанавливаются) и ничего не
+    /// запускается: полузаменённую папку поднимать нельзя, а лишняя копия — это второй значок
+    /// в трее. В каждой ветке в журнал идёт строка «update result: …» (последняя) — по ней
+    /// панель при следующем запуске рассказывает человеку, чем кончилось обновление
+    /// (см. <see cref="StartupNotice"/>); код возврата сценария признаком успеха не является.
+    /// </summary>
+    private static string WriteScript(string staged, string backup, string updateRoot, string mutexName,
+        bool startHidden, out string logPath)
     {
         var script = Path.Combine(updateRoot, "update.cmd");
         logPath = Path.Combine(updateRoot, "update.log");
@@ -315,24 +494,67 @@ public static class UpdateService
         {
             "@echo off",
             "rem DSH Panel self-update. ASCII only: cmd reads this file in the OEM code page.",
-            "rem Paths come as arguments: %~1 pid, %~2 target, %~3 staged, %~4 backup, %~5 log.",
+            "rem Args: %~1 pid, %~2 target, %~3 staged, %~4 backup, %~5 log, %~6 mutex, %~7 mode.",
+            "rem The last two have defaults; the other five must come from the printed command.",
             "setlocal EnableExtensions",
             "set \"PID=%~1\"",
             "set \"TARGET=%~2\"",
             "set \"STAGED=%~3\"",
             "set \"BACKUP=%~4\"",
             "set \"LOG=%~5\"",
-            "echo update started > \"%LOG%\"",
-            "echo target: %TARGET% >> \"%LOG%\"",
+            "set \"MUTEX=%~6\"",
+            "set \"MODE=%~7\"",
+            "if \"%MUTEX%\"==\"\" set \"MUTEX=Local\\DshTray.SingleInstance\"",
+            "if \"%MODE%\"==\"\" set \"MODE=window\"",
+            "rem Without the paths there is nothing to do: say so instead of copying into nowhere.",
+            "if \"%TARGET%\"==\"\" (echo usage: update.cmd pid target staged backup log mutex mode & exit /b 1)",
+            "if \"%STAGED%\"==\"\" (echo usage: update.cmd pid target staged backup log mutex mode & exit /b 1)",
+            "if \"%LOG%\"==\"\" (echo usage: update.cmd pid target staged backup log mutex mode & exit /b 1)",
+            "rem The header (version, target, staged, mode) was written into the log by the panel:",
+            "rem a path with &, ( ) or % inside a batch echo line breaks the line. Here we append.",
             "",
-            "rem Wait for the panel to exit: about two minutes at most.",
+            "rem Wait for the panel to exit: about two minutes at most. Nothing is copied while",
+            "rem it is alive: a half-replaced folder cannot be started. The pause is real one second",
+            "rem (ping -n 2): ping -n 1 on loopback returns at once, and the wait would be seconds.",
             "for /L %%i in (1,1,120) do (",
-            "  tasklist /FI \"PID eq %PID%\" 2>nul | find \"%PID%\" >nul || goto ready",
-            "  ping -n 1 -w 1000 127.0.0.1 >nul",
+            "  tasklist /FI \"PID eq %PID%\" 2>nul | find \"%PID%\" >nul || goto exited",
+            "  ping -n 2 -w 1000 127.0.0.1 >nul",
             ")",
-            "echo warning: the panel did not exit in time >> \"%LOG%\"",
+            "echo warning: the panel with pid %PID% did not exit in time >> \"%LOG%\"",
+            "echo nothing was copied: replacing files of a running panel breaks it >> \"%LOG%\"",
+            "echo update result: not-applied-panel-running >> \"%LOG%\"",
+            "exit /b 1",
             "",
-            ":ready",
+            ":exited",
+            "",
+            "rem The single-instance mutex must be free before the new copy starts: a copy started",
+            "rem too early sees the mutex taken and exits at once, leaving the person without a panel.",
+            "rem The check itself may fail (no PowerShell, broken name) — that is not \"busy\", and the",
+            "rem log must say what really happened. Exit codes: 0 free, 1 busy, 2 could not check.",
+            "rem The wait is about a minute: 60 checks with a real one second pause between them.",
+            "rem The name goes through the environment: inside the -Command text an apostrophe or an",
+            "rem ampersand would break the command, and PowerShell would report nonsense about it.",
+            "set \"DSH_UPD_MUTEX=%MUTEX%\"",
+            "for /L %%i in (1,1,60) do (",
+            "  powershell -NoProfile -ExecutionPolicy Bypass -Command \"$n = $env:DSH_UPD_MUTEX; $m = $null; try { $m = [System.Threading.Mutex]::OpenExisting($n); try { $got = $m.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }; if ($got) { exit 0 } else { exit 1 } } catch [System.Threading.WaitHandleCannotBeOpenedException] { exit 0 } catch { [Console]::Error.WriteLine('mutex check failed: ' + $_.Exception.Message); exit 2 } finally { if ($m -ne $null) { $m.Dispose() } }\" 2>> \"%LOG%\"",
+            "  if errorlevel 2 goto mutex-unknown",
+            "  if not errorlevel 1 goto free",
+            "  ping -n 2 -w 1000 127.0.0.1 >nul",
+            ")",
+            "echo warning: the single-instance mutex was still held after about a minute >> \"%LOG%\"",
+            "echo nothing was copied: another panel instance is running >> \"%LOG%\"",
+            "echo update result: not-applied-mutex >> \"%LOG%\"",
+            "exit /b 1",
+            "",
+            ":mutex-unknown",
+            "rem The check did not work at all: do not copy (a live panel may be holding the mutex),",
+            "rem but do not blame \"another instance\" either — the reason is written above.",
+            "echo warning: the single-instance mutex could not be checked: see the line above >> \"%LOG%\"",
+            "echo nothing was copied: replacing files of a possibly running panel breaks it >> \"%LOG%\"",
+            "echo update result: mutex-check-failed >> \"%LOG%\"",
+            "exit /b 1",
+            "",
+            ":free",
             "robocopy \"%STAGED%\" \"%TARGET%\" /E /NFL /NDL /NJH /NJS /NP >> \"%LOG%\" 2>&1",
             "set \"RC=%ERRORLEVEL%\"",
             "echo robocopy exit code: %RC% >> \"%LOG%\"",
@@ -341,16 +563,306 @@ public static class UpdateService
             "goto start",
             "",
             ":rollback",
+            "rem A rollback needs the whole previous version: a folder without DshTray.exe is not a",
+            "rem safety copy, and restoring from it would mix versions in the panel folder.",
+            "if not exist \"%BACKUP%\\DshTray.exe\" goto no-backup",
             "echo update failed, restoring the previous version >> \"%LOG%\"",
-            "if exist \"%BACKUP%\\DshTray.exe\" robocopy \"%BACKUP%\" \"%TARGET%\" /E /NFL /NDL /NJH /NJS /NP >> \"%LOG%\" 2>&1",
+            "robocopy \"%BACKUP%\" \"%TARGET%\" /E /NFL /NDL /NJH /NJS /NP >> \"%LOG%\" 2>&1",
+            "if errorlevel 8 goto restore-failed",
+            "echo update result: rolled-back >> \"%LOG%\"",
+            "goto failed",
+            "",
+            ":restore-failed",
+            "rem The copy is there, but putting it back did not work: start nothing (the panel folder",
+            "rem may be half replaced) and keep both the copy and the staged build for manual repair.",
+            "echo the rollback did not work: the previous version was NOT restored >> \"%LOG%\"",
+            "echo nothing was started: the panel folder may be half replaced >> \"%LOG%\"",
+            "echo the safety copy and the staged build were left in place >> \"%LOG%\"",
+            "echo update result: failed-restore >> \"%LOG%\"",
+            "exit /b 1",
+            "",
+            ":no-backup",
+            "rem Nothing to roll back to: say so instead of pretending the rollback worked, and start",
+            "rem nothing. The staged build stays where it is for manual repair.",
+            "echo no usable safety copy of the previous version: nothing to roll back to >> \"%LOG%\"",
+            "echo nothing was started: the panel folder may be half replaced >> \"%LOG%\"",
+            "echo the staged build was left in place >> \"%LOG%\"",
+            "echo update result: failed-no-backup >> \"%LOG%\"",
+            "exit /b 1",
+            "",
+            ":failed",
+            "rem Only reached after a rollback that worked: the previous version is in place again, so",
+            "rem the panel may be started.",
+            "echo the update was not applied, the previous version was restored >> \"%LOG%\"",
+            "if not exist \"%TARGET%\\DshTray.exe\" goto failed-no-exe",
+            "if /i \"%MODE%\"==\"tray\" (start \"\" \"%TARGET%\\DshTray.exe\" --tray) else (start \"\" \"%TARGET%\\DshTray.exe\")",
+            "exit /b 1",
+            "",
+            ":failed-no-exe",
+            "echo warning: there is no DshTray.exe in the target folder, nothing was started >> \"%LOG%\"",
+            "exit /b 1",
             "",
             ":start",
-            "if exist \"%TARGET%\\DshTray.exe\" start \"\" \"%TARGET%\\DshTray.exe\"",
+            "if /i \"%MODE%\"==\"tray\" (start \"\" \"%TARGET%\\DshTray.exe\" --tray) else (start \"\" \"%TARGET%\\DshTray.exe\")",
+            "",
+            "rem Make sure the panel that came up is the one from the target folder. The path goes",
+            "rem through the environment, and PowerShell compares the process path itself: &, ( ) and",
+            "rem % in it are harmless here, unlike in find/findstr, which split such a path apart.",
+            "set \"DSH_UPD_PROC=%TARGET%\\DshTray.exe\"",
+            "powershell -NoProfile -Command \"$want = $env:DSH_UPD_PROC; for ($i = 0; $i -lt 20; $i++) { foreach ($p in @(Get-Process DshTray -ErrorAction SilentlyContinue)) { $path = ''; try { $path = [string]$p.Path } catch { $path = '' }; if ($path -ieq $want) { exit 0 } }; Start-Sleep -Seconds 1 }; exit 1\" 2>> \"%LOG%\"",
+            "if not errorlevel 1 set \"SEEN=1\"",
+            "if defined SEEN (",
+            "  echo update result: applied >> \"%LOG%\"",
+            "  echo the panel was restarted from the target folder >> \"%LOG%\"",
+            ") else (",
+            "  echo warning: files were replaced, but the panel from the target folder did not come up >> \"%LOG%\"",
+            "  echo update result: applied-no-panel >> \"%LOG%\"",
+            ")",
             "del \"%~f0\"",
         };
 
         File.WriteAllLines(script, lines, new System.Text.UTF8Encoding(false));
         return script;
+    }
+
+    /// <summary>
+    /// Шапка журнала замены: версия, папка панели, папка сборки и режим запуска. Пишет её сама
+    /// панель, а не сценарий: путь с «&», «(», «)» или «%» внутри строки echo разбирается cmd как
+    /// несколько команд, и в журнал попадала бы обрезанная строка с ошибкой вместо пути. Здесь
+    /// путь ложится в файл как есть, без участия cmd. Сценарий в этот журнал только дописывает.
+    /// </summary>
+    private static void WriteLogHeader(string logPath, string target, string staged, string version, bool hidden)
+    {
+        try
+        {
+            var header = new System.Text.StringBuilder();
+            header.AppendLine("update started " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            header.AppendLine("version: " + version);
+            header.AppendLine("target: " + target);
+            header.AppendLine("staged: " + staged);
+            header.AppendLine("mode: " + (hidden ? "tray" : "window"));
+            File.WriteAllText(logPath, header.ToString(), new System.Text.UTF8Encoding(false));
+        }
+        catch
+        {
+            // Журнал не записался — сценарий всё равно допишет в него свои строки; причину
+            // отказа человек увидит по маркеру в журнале панели.
+        }
+    }
+
+    /// <summary>Строка итога, которую сценарий замены пишет в update.log последней.</summary>
+    internal const string ResultMarkerPrefix = "update result: ";
+
+    /// <summary>
+    /// Итог замены из журнала сценария: то, что стоит после «update result: » в последней
+    /// такой строке. Пусто — сценарий до итога не дошёл (его не запускали, машину выключили).
+    /// </summary>
+    internal static string ResultMarker(string logText)
+    {
+        var marker = "";
+        if (string.IsNullOrEmpty(logText)) return marker;
+
+        foreach (var raw in logText.Replace("\r", "").Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith(ResultMarkerPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                marker = line[ResultMarkerPrefix.Length..].Trim();
+            }
+        }
+
+        return marker;
+    }
+
+    /// <summary>
+    /// Ключ Loc с причиной по итогу сценария — им объясняют человеку неудачу, поэтому вызывается
+    /// только для ветки «версия в папке новее нашей». Маркер «applied» в этой ветке означает,
+    /// что заменились файлы не той папки, из которой панель запущена (или выпуск пересобран под
+    /// тем же номером, а номер папки оставлен новым).
+    /// </summary>
+    internal static string ReasonKeyFor(string marker)
+    {
+        return (marker ?? "").Trim().ToLowerInvariant() switch
+        {
+            "applied" => "update.reasonStillOld",
+            "applied-no-panel" => "update.reasonNoPanel",
+            "rolled-back" => "update.reasonRolledBack",
+            "failed-restore" => "update.reasonRestoreFailed",
+            "failed-no-backup" => "update.reasonNoBackup",
+            "not-applied-panel-running" => "update.reasonPanelRunning",
+            "not-applied-mutex" => "update.reasonMutexBusy",
+            "mutex-check-failed" => "update.reasonMutexUnknown",
+            _ => "update.reasonUnknown",
+        };
+    }
+
+    /// <summary>
+    /// Что стало с последним обновлением. Панель зовёт это при старте: сценарий замены оставляет
+    /// в папке обновления скачанную сборку (update\&lt;версия&gt;) и журнал update.log, а сам
+    /// ничего не рассказывает.
+    ///
+    /// Решение принимается по версии в имени папки, а не по маркеру сценария:
+    ///
+    /// * версия в папке СТРОГО новее нашей — обновление не применилось (замена не состоялась,
+    ///   откат вернул прежнюю версию, файлы не скопировались). Об этом человеку говорят ОДИН раз,
+    ///   после чего папка переименовывается в failed-&lt;версия&gt;: она остаётся для разбора и
+    ///   ручной починки, но повторно о ней уже не сообщается — ни при следующем запуске, ни
+    ///   после перезагрузки;
+    /// * версия не новее — считаем, что замена состоялась, и убираем за собой (папку, скачанный
+    ///   архив, файл сумм; backup-&lt;версия&gt; не трогаем). При этом в журнал панели честно
+    ///   пишется, что при пересборке выпуска под тем же номером замены могло и не быть: код
+    ///   robocopy 0..7 означает «нечего копировать» не реже, чем «скопировано». Человека этим
+    ///   не тревожим — версия у него та же, что в выпуске.
+    ///
+    /// Возвращает null, если папки обновления нет или подготовленной сборки в ней не осталось.
+    /// Всё, что нашлось, уходит в журнал панели (AppLog); строку для человека из Message
+    /// показывать надо только при Failed = true.
+    /// </summary>
+    public static UpdateOutcome StartupNotice(AppPaths paths)
+    {
+        try
+        {
+            var root = Path.Combine(AppPaths.StateDir, "update");
+            if (!Directory.Exists(root)) return null;
+
+            var stagedVersion = "";
+            var stagedFolder = "";
+            foreach (var folder in Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly))
+            {
+                var name = Path.GetFileName(folder);
+
+                // backup-<версия> — копия прежней панели для отката, failed-<версия> — уже
+                // рассказанное неудавшееся обновление. Ни то, ни другое не «подготовленная сборка».
+                if (name.StartsWith("backup-", StringComparison.OrdinalIgnoreCase)) continue;
+                if (name.StartsWith("failed-", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!File.Exists(Path.Combine(folder, "DshTray.exe"))) continue;
+
+                var version = Clean(name);
+                if (version.Length == 0) continue;
+                if (stagedVersion.Length == 0 || IsNewer(version, stagedVersion))
+                {
+                    stagedVersion = version;
+                    stagedFolder = folder;
+                }
+            }
+
+            if (stagedVersion.Length == 0) return null;
+
+            var logPath = Path.Combine(root, "update.log");
+            var logText = "";
+            try
+            {
+                if (File.Exists(logPath)) logText = File.ReadAllText(logPath);
+            }
+            catch
+            {
+                // Журнал не прочитать — о причине скажем «неизвестно», а не выдумаем её.
+            }
+
+            var marker = ResultMarker(logText);
+            var reason = Loc.T(ReasonKeyFor(marker));
+
+            if (IsNewer(stagedVersion, AppVersion.Short))
+            {
+                if (paths != null)
+                {
+                    AppLog.Write(paths, "обновление " + stagedVersion + " не применилось: " + reason
+                                       + "; итог сценария: " + (marker.Length > 0 ? marker : "нет"));
+                }
+
+                // Переименовываем папку: следы остаются, а повторного сообщения не будет.
+                KeepFailedFolder(root, stagedFolder, stagedVersion, paths);
+
+                return new UpdateOutcome
+                {
+                    Failed = true,
+                    Version = stagedVersion,
+                    Reason = reason,
+                    Message = Loc.T("update.notApplied", stagedVersion, reason),
+                };
+            }
+
+            // Версия в папке обновления не новее нашей: держать сборку незачем. Но «не новее» —
+            // это ещё не доказательство замены: тот же номер мог быть пересобран и выпущен снова,
+            // и тогда robocopy не скопировал ничего (код 0..7). Пишем это в журнал честно.
+            if (paths != null)
+            {
+                AppLog.Write(paths, "обновление " + stagedVersion + " применилось"
+                                   + (marker.Length > 0 ? " (итог сценария: " + marker + ")" : "")
+                                   + "; если выпуск был пересобран под тем же номером, замены файлов могло и не быть");
+            }
+
+            CleanupUpdateFolder(root, stagedFolder);
+            return new UpdateOutcome { Failed = false, Version = stagedVersion };
+        }
+        catch (Exception error)
+        {
+            if (paths != null) AppLog.Write(paths, "состояние обновления прочитать не удалось: " + error.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Папка неудавшегося обновления остаётся для разбора и ручной починки, но под именем
+    /// failed-&lt;версия&gt;: так следующая проверка видит в update\ только подготовленные сборки,
+    /// и сообщение о провале не повторяется при каждом запуске и после каждой перезагрузки.
+    /// Держим ровно одну такую папку — прежние убираем, чтобы каталог не рос.
+    /// </summary>
+    private static void KeepFailedFolder(string root, string stagedFolder, string version, AppPaths paths)
+    {
+        var kept = Path.Combine(root, "failed-" + version);
+
+        try
+        {
+            foreach (var other in Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly))
+            {
+                var name = Path.GetFileName(other);
+                if (name.StartsWith("failed-", StringComparison.OrdinalIgnoreCase)) TryDeleteFolder(other);
+            }
+
+            if (Directory.Exists(stagedFolder)) Directory.Move(stagedFolder, kept);
+        }
+        catch (Exception error)
+        {
+            // Не переименовалась (папку держит кто-то другой) — сообщение просто повторится
+            // в следующий раз; это видно в журнале.
+            if (paths != null) AppLog.Write(paths, "папку обновления " + stagedFolder + " переименовать не удалось: " + error.Message);
+        }
+
+        // Скачанный архив и файл сумм для разбора и починки не нужны, а весят много (архив
+        // «без .NET» — сотни мегабайт). Саму папку failed-* и журнал оставляем на месте.
+        CleanupArchives(root);
+    }
+
+    /// <summary>
+    /// Убирает за обновившейся панелью скачанную сборку (её папку), архивы и файл сумм.
+    /// Копию прежней версии (backup-&lt;версия&gt;) не трогаем: ею человек откатывается руками.
+    /// </summary>
+    private static void CleanupUpdateFolder(string root, string stagedFolder)
+    {
+        TryDeleteFolder(stagedFolder);
+        CleanupArchives(root);
+    }
+
+    /// <summary>Скачанные архивы выпусков и файл сумм: после замены они не нужны.</summary>
+    private static void CleanupArchives(string root)
+    {
+        try
+        {
+            foreach (var file in Directory.GetFiles(root, "*", SearchOption.TopDirectoryOnly))
+            {
+                var name = Path.GetFileName(file);
+                if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                    || name.Equals("SHA256SUMS.txt", StringComparison.OrdinalIgnoreCase))
+                {
+                    TryDeleteFile(file);
+                }
+            }
+        }
+        catch
+        {
+            // Не убралось — не беда: место освободит следующее обновление.
+        }
     }
 
     /// <summary>Копия текущей панели перед заменой: чтобы обновление можно было откатить.</summary>
@@ -374,7 +886,8 @@ public static class UpdateService
         }
         catch
         {
-            // Копию сделать не удалось — обновление не отменяем, но скажем об этом.
+            // Копию сделать не удалось — обновление не готовим: откатываться будет некуда
+            // (об этом Prepare говорит человеку через update.noBackup).
             return "";
         }
     }

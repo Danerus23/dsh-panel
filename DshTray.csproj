@@ -24,7 +24,7 @@
     <!-- Номер версии задаётся один раз здесь; FileVersion выводим из него, чтобы две
          строки не разъехались при подъёме версии. Порядок важен: $(Version) должен
          быть объявлен раньше, иначе MSBuild подставит пустоту. -->
-    <Version>1.20.2</Version>
+    <Version>1.20.3</Version>
     <FileVersion>$(Version).0</FileVersion>
     <NeutralLanguage>ru-RU</NeutralLanguage>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -50,6 +50,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="README.ru.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="README.zh.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <!-- История версий едет вместе с панелью: её открывает пункт меню в трее. -->

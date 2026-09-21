@@ -83,7 +83,9 @@ Then press **Start**: the panel starts the server and opens the browser with the
 Everything stays in your user profile: the installer puts the app into
 `%LOCALAPPDATA%\Programs\DSH Panel` (no `Program Files`, no administrator rights), and the portable
 zip leaves no traces outside its own folder. Both use the data folders below; deleting the app folder
-(or uninstalling) removes the program, the data folders stay until you delete them.
+(or uninstalling) removes the program, and the data folders stay until you delete them — the
+uninstaller clears only what it can recreate itself (the update staging and the portable Node inside
+the state folder).
 
 ## Build from source
 
@@ -116,8 +118,9 @@ against Microsoft's signature. Step by step details are in [docs/DEVELOPMENT.md]
 | `DshTray.exe` | open the panel |
 | `--tray` | start minimized to the tray (used by autostart) |
 | `--onboard` | run the first-time wizard again |
-| `--status [--out file]` | print the server state, peak hours and balance |
+| `--status [--out file]` | print the server state, peak hours and balance, where the autostart entry points and the state of the backups |
 | `--env-check [--out file]` | print what the panel found: node, the `dsh` package, the key storage, the port |
+| `--autostart-fix [--out file]` | check the autostart entry against this copy and repair it (the panel does the same at every start) |
 | `--lang-check` | print the same labels in all three languages (translation check) |
 | `--layout-check` | check that no text is clipped in the windows in the current language |
 | `--server-start` / `--server-restart` / `--server-stop` | control the server from a script (`--open` opens the browser too) |
@@ -156,8 +159,10 @@ can stay away from your real `~/.ssh`).
 | `keys/` | **only if you asked for it**: the key folders you listed |
 | `engine/` | only in a full backup: the DSH engine and Node |
 
-The archive is verified after writing: the file count and the first 64 MB of checksums are compared
-against the inventory. When keys are packed, the archive is a secret — never share it.
+A backup can be checked after writing — with **Verify** in the backups window, with `--backup-check`, or
+during a restore: the file count and the first 64 MB of checksums are compared against the inventory.
+Nothing is verified automatically right after writing. When keys are packed, the archive is a secret —
+never share it.
 
 Before a restore the panel writes `dsh-before-restore-<date>.zip` next to your backups (the newest
 three are kept), stops its own server — DSH files must not be busy — and puts files with the same

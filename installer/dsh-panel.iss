@@ -68,6 +68,13 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ShowLanguageDialog=yes
 UsePreviousLanguage=no
 
+; Прежний выбор ЗАДАЧ тоже не запоминаем: по умолчанию (UsePreviousTasks=yes) Inno помнит
+; его по AppId. Иначе следующая установка — в том числе тихая, которой панель ставит
+; обновление, — восстановила бы когда-то отмеченный autostart и вернула бы автозапуск,
+; который человек уже снял галочкой в панели. Свежее высказывание человека — это состояние
+; реестра Run, и его переносит запись с Check: AutostartWasSetCheck.
+UsePreviousTasks=no
+
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -183,18 +190,42 @@ Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Registry]
+; Автозапуск. Задача autostart остаётся необязательной и по умолчанию снятой: отметил —
+; запись появилась. Но если запись уже была (панель пишет имя DSHPanel, прежние версии —
+; DeepSeekHarness, Autostart.cs:13-14), её адрес переводится на установленную копию:
+; намерение «автозапуск включён» принадлежит человеку, а не прежней папке сборки.
+;
+; Записей две, и обе пишут одно и то же значение — так и задумано. Условия у них разные:
+; «человек отметил задачу» читает сам Inno родным параметром Tasks, а «запись уже была» —
+; переменную AutostartWasSet, снятую в InitializeSetup, через Check-функцию. Одной записью
+; это не выражается: Check принимает только имя функции (проверено пробной сборкой на
+; 7.1.0), поэтому составное условие пришлось бы собирать самому. Порядок и дубль безвредны:
+; ValueData у записей одинаковый, вторая запись просто переписывает то же самое.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; \
     ValueName: "DSHPanel"; ValueData: """{app}\{#AppExeName}"" --tray"; \
     Flags: uninsdeletevalue; Tasks: autostart
-; Ту же запись панель пишет сама галочкой «Запускать при входе в Windows», поэтому при
-; удалении убираем её безусловно: иначе в автозапуске останется ссылка на удалённый exe.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; \
+    ValueName: "DSHPanel"; ValueData: """{app}\{#AppExeName}"" --tray"; \
+    Flags: uninsdeletevalue; Check: AutostartWasSetCheck
+; Прежнее имя: намерение уже перенесено в DSHPanel строкой выше, а самой записи быть не
+; должно — иначе по входу в Windows первой поднимается старая копия из папки сборки, и
+; установленная панель стоит без дела. deletevalue убирает её при установке,
+; uninsdeletevalue — ещё и при удалении.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; \
+    ValueName: "DeepSeekHarness"; Flags: deletevalue uninsdeletevalue
+; Ту же запись DSHPanel панель пишет сама галочкой «Запускать при входе в Windows»,
+; поэтому при удалении убираем её безусловно — и своё имя, и прежнее: иначе в автозапуске
+; останется ссылка на удалённый exe.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; \
     ValueName: "DSHPanel"; Flags: uninsdeletevalue
 
 [Run]
-; runasoriginaluser: если установщик запущен «от администратора», панель всё равно должна
-; стартовать от обычного пользователя — иначе она поднимет сервер и поставит Node с правами
-; администратора.
+; Панель должна подняться с правами того, кто запустил установщик, то есть обычными: иначе
+; она подняла бы сервер и поставила Node с правами администратора. Справка Inno 7
+; оговаривает: если установщик запущен через «Запустить от имени администратора» или из уже
+; повышенного процесса, этот флаг не действует — вернуть исходного пользователя Windows не
+; даёт; при postinstall это и так поведение по умолчанию, а PrivilegesRequired=lowest
+; означает, что сам установщик прав не просит.
 Filename: "{app}\{#AppExeName}"; Parameters: "--onboard"; Description: "{cm:launch}"; \
     Flags: nowait postinstall skipifsilent runasoriginaluser
 
@@ -277,11 +308,113 @@ begin
   end;
 end;
 
+{ --- автозапуск и ярлык прежней генерации ---------------------------------------- }
+
+var
+  { Была ли запись автозапуска на машине ДО установки. Снимаем состояние один раз, в
+    InitializeSetup: когда Inno доходит до [Registry], эту ветку правит уже сам установщик, и
+    по ней не понять, что было раньше. }
+  AutostartWasSet: Boolean;
+
+{ Существует ли непустая запись автозапуска с таким именем. Пустое значение записью не
+  считаем — панель в Autostart.cs:25 смотрит ровно так же. }
+function AutostartValueExists(const valueName: String): Boolean;
+var
+  value: String;
+begin
+  Result := RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run',
+    valueName, value) and (Trim(value) <> '');
+end;
+
+{ Была ли запись автозапуска на машине до установки. Обёртка нужна потому, что параметр Check
+  в [Registry] принимает ИМЯ ФУНКЦИИ, а не переменную: с `Check: AutostartWasSet` компилятор
+  отвечает «Required function or procedure 'AutostartWasSet' not found» — проверено пробной
+  сборкой на 7.1.0. }
+function AutostartWasSetCheck: Boolean;
+begin
+  Result := AutostartWasSet;
+end;
+
+{ Строка в одинарных кавычках для PowerShell: одиночную кавычку удваиваем, иначе путь с
+  апострофом (C:\Users\O'Brien\…) сломал бы команду. }
+function PsQuote(const value: String): String;
+var
+  safe: String;
+begin
+  safe := value;
+  StringChangeEx(safe, '''', '''''', True);
+  Result := '''' + safe + '''';
+end;
+
+{ Убрать ярлык прежней генерации «DeepSeek Harness.lnk» с рабочего стола и из меню «Пуск»:
+  он ведёт на старую папку сборки, и человек по нему запускает не то, что поставил. Чужое не
+  трогаем — ярлык удаляется, только если его цель DshTray.exe. Цель ярлыка читает PowerShell
+  через WScript.Shell: разобрать .lnk средствами самого Inno нечем. Права администратора не
+  нужны: и рабочий стол, и меню «Пуск» лежат в профиле этого же пользователя, как и ветка
+  HKCU, которую правит [Registry] при PrivilegesRequired=lowest. Общие ярлыки — рабочий стол
+  и «Программы» всех пользователей — намеренно не трогаем: они принадлежат всей машине и без
+  прав администратора всё равно недоступны. }
+procedure RemoveLegacyShortcuts;
+var
+  paths: TArrayOfString;
+  shortcutName, targetLike, script, powershellPath: String;
+  code, index: Integer;
+begin
+  shortcutName := 'DeepSeek Harness.lnk';
+  targetLike := '*\DshTray.exe';
+
+  SetArrayLength(paths, 3);
+  paths[0] := ExpandConstant('{userdesktop}\') + shortcutName;
+  paths[1] := ExpandConstant('{userprograms}\') + shortcutName;
+  { Ярлык мог оказаться и внутри группы установщика — заодно проверяем и её. }
+  paths[2] := ExpandConstant('{group}\') + shortcutName;
+
+  { Один запуск PowerShell на все пути: у ярлыка цель иначе не узнать, а COM-объект
+    WScript.Shell поднимается один раз. }
+  script := '$paths = @(';
+  for index := 0 to GetArrayLength(paths) - 1 do
+  begin
+    if index > 0 then script := script + ',';
+    script := script + PsQuote(paths[index]);
+  end;
+  script := script + '); foreach ($p in $paths) { ' +
+    'if (Test-Path -LiteralPath $p) { $ok = $false; ' +
+    'try { $s = (New-Object -ComObject WScript.Shell).CreateShortcut($p); ' +
+    '$ok = ($s.TargetPath -like ' + PsQuote(targetLike) + ') } ' +
+    'catch { $ok = $false }; ' +
+    'if ($ok) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue } } }';
+
+  { Где лежит PowerShell: НЕ в папке System32 — там такого файла нет, а константа sys указывает
+    именно на неё. Движок Windows PowerShell 5.1 стоит в System32\WindowsPowerShell\v1.0, и
+    прежняя генерация звала его оттуда же. Голое имя — запасной путь через PATH: если и его
+    нет, уборка не состоится, но установку это не сорвёт. Фигурные скобки в этом комментарии
+    писать нельзя — он закрылся бы на первой из них. }
+  powershellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  if not FileExists(powershellPath) then
+  begin
+    Log('Уборка ярлыка прежней генерации: нет файла ' + powershellPath + ', беру powershell.exe из PATH');
+    powershellPath := 'powershell.exe';
+  end;
+
+  { Отказ запуска и ненулевой код не срывают установку (чужое мы и не должны удалять), но и
+    молчать о них нельзя: иначе неудавшаяся уборка снова станет незаметной. Пишем в журнал
+    установки — он есть при /LOG, а в тихой установке окон всё равно быть не должно. }
+  if not Exec(powershellPath,
+       '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + script + '"',
+       '', SW_HIDE, ewWaitUntilTerminated, code) then
+    Log('Уборка ярлыка прежней генерации: не удалось запустить ' + powershellPath)
+  else if code <> 0 then
+    Log('Уборка ярлыка прежней генерации: ' + powershellPath + ' вернул код ' + IntToStr(code));
+end;
+
 function InitializeSetup: Boolean;
 begin
   { Никаких вопросов до мастера: что ставить, человек отмечает галочками на странице задач
     (Node.js и среда .NET стоят там первыми и уже отмечены). Установка идёт в конце, когда
-    окно установки видно. }
+    окно установки видно.
+
+    Здесь же — единственное место, где видно состояние реестра ДО правок установщика. }
+  AutostartWasSet := AutostartValueExists('DSHPanel') or AutostartValueExists('DeepSeekHarness');
   Result := True;
 end;
 
@@ -516,6 +649,11 @@ begin
   end;
 
   if CurStep <> ssPostInstall then Exit;
+
+  { Ярлык прежней генерации убираем сразу после копирования файлов: он ведёт на старую папку
+    сборки, и человек по нему запускает не то, что поставил. Свои ярлыки установщик уже
+    разложил — имена разные, чужое не задеваем. }
+  RemoveLegacyShortcuts;
 
   { Среда .NET: она внутри установщика, и ставим её здесь — окно установки в этот момент видно,
     и человек понимает, что идёт работа. Права среда спросит сама (UAC), это неизбежно:

@@ -6,7 +6,10 @@
 #
 # Обычному человеку ярлыки ставит установщик (installer\dsh-panel-setup.exe);
 # этот скрипт — для того, кто собрал панель сам и хочет те же ярлыки без установщика.
-# Имена ярлыков совпадают с установщиком, иначе на одну программу их будет два.
+# Место и имена ярлыков обязаны совпадать с установщиком (его раздел [Icons]), иначе на
+# одну программу их будет два: установщик кладёт ярлык меню «Пуск» в подпапку группы
+# («Программы\DSH Panel\DSH Panel.lnk»), потому что у него DisableProgramGroupPage=yes
+# и DefaultGroupName=DSH Panel.
 #
 # Варианты:
 #   -AppDir <путь>   где лежит DshTray.exe (по умолчанию .\app)
@@ -50,6 +53,31 @@ function New-Shortcut {
     return $Path
 }
 
+# Убрать ярлык, если он НАШ. Чужое не трогаем: сверяем цель с нашей копией ($exe), а не только
+# имя файла — на машине может стоять другая копия DshTray.exe (прежний запуск с другим -AppDir,
+# установленная панель), и её ярлык не наш. Сравнение без учёта регистра, как принято в Windows.
+# (Установщик для ярлыка прежней генерации проверяет мягче — по имени цели: у него другая задача,
+# убрать ярлык прежней генерации, чей путь сегодня уже не существует.)
+# Нужно это для ярлыка, который прежняя версия ЭТОГО скрипта клала в корень «Программ»: после
+# переезда в подпапку группы он остался бы вторым ярлыком на ту же программу.
+function Remove-OwnShortcut {
+    param([string]$Path, [string]$Target)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+
+    $shell = New-Object -ComObject WScript.Shell
+    try { $current = $shell.CreateShortcut($Path).TargetPath } catch { return $false }
+    if (-not $current) { return $false }
+    if ($current -ne $Target) {
+        # Write-Host, а не строка в поток вывода: иначе сообщение попало бы в результат функции.
+        Write-Host ('Ярлык ведёт на другую копию — оставлен: {0}' -f $Path)
+        return $false
+    }
+
+    Remove-Item -LiteralPath $Path -Force
+    return $true
+}
+
 $created = @()
 
 if (-not $NoDesktop) {
@@ -58,8 +86,14 @@ if (-not $NoDesktop) {
 }
 
 if (-not $NoStartMenu) {
-    $created += New-Shortcut -Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'DSH Panel.lnk') `
+    # Та же подпапка, что у установщика ({group} = «Программы\DSH Panel»).
+    $programsDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'DSH Panel'
+    $created += New-Shortcut -Path (Join-Path $programsDir 'DSH Panel.lnk') `
         -Target $exe -Icon $icon -Description 'DSH Panel — панель управления локальным сервером DeepSeek Harness'
+
+    # Ярлык прежнего места (корень «Программ») убираем — иначе на одну программу их два.
+    $stale = Join-Path ([Environment]::GetFolderPath('Programs')) 'DSH Panel.lnk'
+    if (Remove-OwnShortcut -Path $stale -Target $exe) { 'Убран ярлык прежнего места: {0}' -f $stale }
 }
 
 'Готово. Создано:'
