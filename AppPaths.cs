@@ -464,9 +464,20 @@ public sealed class AppSettings
     [JsonPropertyName("updatePageUrl")]
     public string UpdatePageUrl { get; set; } = "";
 
-    /// <summary>Заметки выпуска (выжимка из CHANGELOG) — их читает человек перед обновлением.</summary>
+    /// <summary>Заметки выпуска — их читает человек перед обновлением. Это ВЫБРАННЫЙ блок
+    /// (на языке интерфейса) и обрезанный по пределу показа: готовый текст для окна.</summary>
     [JsonPropertyName("updateNotes")]
     public string UpdateNotes { get; set; } = "";
+
+    /// <summary>
+    /// Тело выпуска, из которого выбирается блок языка: все три языка и машинные метки.
+    /// Обычное тело лежит как пришло из релиза; тело длиннее предела — уже разобранные и
+    /// безопасно обрезанные блоки (см. UpdateService.RawNotes). Хранится, чтобы заметки
+    /// можно было пересобрать на другом языке: язык интерфейса меняется в любой момент,
+    /// а проверка обновлений бывает не чаще раза в сутки.
+    /// </summary>
+    [JsonPropertyName("updateNotesRaw")]
+    public string UpdateNotesRaw { get; set; } = "";
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -595,6 +606,7 @@ public sealed class AppSettings
         UpdatePublished = loaded.UpdatePublished;
         UpdatePageUrl = loaded.UpdatePageUrl;
         UpdateNotes = loaded.UpdateNotes;
+        UpdateNotesRaw = loaded.UpdateNotesRaw;
 
         return true;
     }

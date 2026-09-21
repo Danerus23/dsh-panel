@@ -7,6 +7,17 @@
 # Зачем отдельным скриптом: тот же сторожок нужен и в конвейере выпуска, и в CI, и человеку,
 # который просто правит текст. Одна реализация на всех — иначе они расходятся.
 #
+# ЧЕГО НЕ ПОКРЫВАЕТ (важно не переоценить вердикт):
+#   * смотрит ТОЛЬКО текстовые расширения ($textExtensions ниже) — PNG, ZIP и прочие двоичные
+#     файлы не читаются вовсе, поэтому про картинки и архивы вердикт не говорит НИЧЕГО. Именно
+#     поэтому настоящее имя машины в снимке однажды нашёл OCR, а не эта проверка;
+#   * «индекс git» здесь — не только отслеживаемые файлы: новый файл, ещё не добавленный в
+#     индекс, тоже сканируется, пока он не в .gitignore (список берётся `git ls-files --cached
+#     --others --exclude-standard`);
+#   * запасной обход папки (когда git недоступен) идёт по всему каталогу и может задеть чужие
+#     рабочие деревья в `_build` — сравнивать его вердикт с вердиктом по индексу нельзя.
+# Своё покрытие скрипт печатает в выводе, чтобы вердикт не читался шире, чем он есть.
+#
 # Важно: имя автора (Danerus23) в репозитории законно — это копирайт, владелец репозитория и
 # издатель в установщике. Личным считается именно ПУТЬ к папке пользователя и имя машины.
 
@@ -33,15 +44,18 @@ if ($markers.Count -eq 0) {
     exit 0
 }
 
-# Список файлов: из индекса git, если репозиторий есть (это ровно то, что опубликуется),
-# иначе — обход папки с исключением мест сборки.
+# Список файлов: всё, что уедет в публичный репозиторий, — отслеживаемое И новое, ещё не
+# добавленное в индекс (но не игнорируемое). Иначе вердикт молчал бы про самые свежие правки:
+# make-release.ps1 зовёт проверку ДО коммита. Если git недоступен — обход папки.
 $skip = @('app', 'app-staging', 'dist', 'bin', 'obj', '.git', '.nuget', '.appdata', '.dotnet-home', 'logs')
 $list = @()
+$fromGit = $false
 
 if ((Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $Root '.git'))) {
-    $tracked = @(& git -C $Root ls-files 2>$null)
-    if ($LASTEXITCODE -eq 0 -and $tracked.Count -gt 0) {
-        $list = $tracked | ForEach-Object { Join-Path $Root $_ }
+    $files = @(& git -C $Root ls-files --cached --others --exclude-standard 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $files.Count -gt 0) {
+        $list = $files | ForEach-Object { Join-Path $Root $_ }
+        $fromGit = $true
     }
 }
 
@@ -52,9 +66,15 @@ if ($list.Count -eq 0) {
 }
 
 $found = @()
+$scanned = 0
+$skippedBinary = 0
 foreach ($file in $list) {
     if (-not (Test-Path -LiteralPath $file)) { continue }
-    if ($textExtensions -notcontains ([IO.Path]::GetExtension($file).ToLowerInvariant())) { continue }
+    if ($textExtensions -notcontains ([IO.Path]::GetExtension($file).ToLowerInvariant())) {
+        $skippedBinary++
+        continue
+    }
+    $scanned++
 
     $relative = $file.Substring($Root.Length).TrimStart('\')
     $number = 0
@@ -72,6 +92,14 @@ foreach ($file in $list) {
         }
     }
 }
+
+$coverage = if ($fromGit) {
+    'git ls-files --cached --others --exclude-standard — отслеживаемое и новое, не игнорируемое'
+} else {
+    'обход папки (git недоступен), включая чужие рабочие деревья'
+}
+Write-Host ('Охват: прочитано текстовых файлов — ' + $scanned + ' (' + $coverage + ').')
+Write-Host ('Вне охвата: двоичных файлов — ' + $skippedBinary + ' (PNG, ZIP и прочее внутрь не смотрим).')
 
 if ($found.Count -gt 0) {
     Write-Host ''

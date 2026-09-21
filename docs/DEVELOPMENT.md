@@ -89,6 +89,29 @@ The uninstaller stops a running panel (`taskkill`), removes the autostart value 
 created it itself, and deletes only what can be recreated (`…\DshPanel\update`, `…\DshPanel\node`) —
 settings and backups in `%APPDATA%\DshPanel` are left alone.
 
+It is our own `taskkill` that closes a running panel: it runs at the start of file copying
+(`CurStepChanged`, step `ssInstall`). `CloseApplications=yes` is the second half — it lets Inno see the
+running panel through the Restart Manager (verified by a probe: the panel shows up there as a holder)
+and, in an ordinary install, list it among the applications to close. `RestartApplications=no`, so the
+panel is not started twice — the last page starts it, a silent run does not. `AppMutex` was **removed**
+in 1.21.0
+on purpose: Inno checks a mutex at startup and shows an **undismissable** “the panel is already
+running” box *before* `[Code]` — that is, before our own `taskkill` — and a `winget upgrade` would
+stall on a window nobody closes (a hang in an automatic run, code 5 “cancelled by the user” on
+“Cancel”). The `[UninstallRun]` `taskkill` is still there. **Honest note: installing over a running
+panel has not been checked on a live machine** — that reading comes from the Inno documentation and
+the script, so it deserves one run in a VM.
+
+A silent install must show **no window at all**, and two things were in the way. Inno's “This will
+install…” prompt ignores `/SILENT` and `/VERYSILENT`: it is switched off by `DisableStartupPrompt=yes`
+and, belt-and-braces, by `/SP-` in the silent switches of the winget manifest (Inno's own help
+contradicts itself on which of the two matters, so both are set). A `MsgBox` from `[Code]` is not
+suppressed by `/SUPPRESSMSGBOXES` either, so every message in `[Code]` goes through the `SayOrLog`
+helper: a window for the person in front of the screen, a line in the install log (`/LOG`, and in
+winget's report) for a non-interactive run. A new message goes through it too. `UsePreviousTasks=no`
+keeps Inno from restoring a previous task choice, which a silent install would otherwise use to bring
+back an autostart the person had already switched off.
+
 The `.iss` and the `.ps1` are UTF-8 **with BOM** (Cyrillic text, Inno Setup and PowerShell 5.1);
 editing tools may drop the BOM — `tools\check-encoding.ps1` verifies and repairs this.
 
@@ -110,6 +133,27 @@ The runtime check (`HasDotNet8Desktop`) looks at the **installation folders**
 the registry: the registry key is not always written, and on a machine with the runtime installed the
 old registry-only check reported “no runtime” forever. `{commonpf}` is Program Files (x86) in Inno —
 the 64-bit folder is `{commonpf64}`. The panel reports the same fact in `--env-check`.
+
+## Panel registration
+
+The installer writes the version into the “Programs and features” entry once, at install time, while
+the panel updates itself — so that list drifts, and **winget** compares its own version with the
+recorded one and may offer an “upgrade” to a release older than the running panel (the panel would
+then offer to update right back). At every start the panel therefore corrects one value in its own
+entry: `DisplayVersion` under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{7F3C6A21-9D4E-4B8A-9C1F-2E5D8B7A4C11}_is1`
+(`PanelRegistration.RefreshVersion`, called from `TrayHost`; the same GUID `installer\dsh-panel.iss`
+uses as `AppId` and `tools\check-installed.ps1` looks for). The value written is the short version
+number, without the `+<commit>` build suffix (`AppVersion.Short`).
+
+The guards, all verified against `PanelRegistration.cs`: the key must exist (a portable build has no
+entry), the entry must introduce itself as exactly `DSH Panel`, and **nothing but `DisplayVersion` is
+touched and the entry is never created** — a foreign row in that list is never edited. A **check
+run** (the panel started with an overridden `DSH_PANEL_DATA`, `DSH_PANEL_STATE` or
+`DSH_PANEL_INSTANCE`) returns immediately and leaves the machine's entry alone: the acceptance suite
+and the wizard check raise a real tray panel, and without this guard they would edit the owner's list.
+That check-run marker is the same one `Autostart` uses. A key locked by policy or missing rights is
+not an error either: the old version simply stays, and the panel works as usual.
 
 ## Acceptance
 
@@ -172,8 +216,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check-migrate.ps1 -E
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\pack-panel.ps1 `
   -Source dist\panel -Destination dist\DshPanel.zip
 
-# cut the current version's section out of CHANGELOG.md (the release notes the update window shows)
+# assemble the release body from the three histories (CHANGELOG.md, .en.md, .zh.md) into three
+# machine-marked language blocks — the same script the pipeline and the CI call
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\release-notes.ps1 -Out dist\release-notes.md
+
+# the assembled body itself: three blocks, the right marker order, the version, no HTML, and a
+# second run producing the same bytes (touches nothing and goes nowhere)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check-notes.ps1
+
+# winget manifests: version from <Version>, SHA-256 from the PUBLISHED release (`-Validate` also
+# runs `winget validate`); refuses a local sum and a tag that disagrees with the version
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\winget-manifest.ps1 -ReleaseTag vX.Y.Z -Validate
+
+# rebuild the README collage docs\demo.png from docs\screenshots\en (four frames)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\make-demo-collage.ps1
 
 # where the panel would download Node from, and whether those addresses answer (name patterns differ:
 # the MSI is node-v24.21.0-x64.msi, the portable archive is node-v24.21.0-win-x64.zip — guessing this
@@ -201,7 +257,17 @@ desktop, so it is not part of the CI.
 `--lang ru|en|zh`: pictures must differ between languages wherever text is translated and must match
 only for windows that are not translated yet. For the public screenshots take them with an isolated
 profile **and a free port** (`--port 3901` plus `serverPort` in that profile's `settings.json`):
-otherwise the picture shows somebody's running server, its PID and that the port is busy.
+otherwise the picture shows somebody's running server, its PID and that the port is busy. The recipe
+must also point `DSH_PANEL_RUN_KEY` at a throwaway branch: the “Start at Windows sign-in” checkbox is
+drawn from the **real** `HKCU\...\Run` (`MainForm.ApplyAutostart` ← `Autostart.IsEnabled`), so without
+that override the picture carries the state of the machine it was taken on, not of the demo profile.
+
+The README showcase is the collage `docs/demo.png` — four frames (panel, settings, backups, tray
+menu) — and `tools\make-demo-collage.ps1` builds it from `docs\screenshots\en`: **rebuild it after
+re-shooting the screenshots**, otherwise the README keeps showing windows of the previous version.
+The demo backup used for the restore frame has to be anonymised **by hand**: the panel always writes
+`Environment.MachineName` and the user name into the backup manifest, and there is no CLI switch to
+anonymise it.
 
 `tools\check-restore.ps1` runs in a sandbox folder (`-Work`, default `_build\restore-test`), refuses
 port 3080 and cleans up after itself even when a check fails. It covers, among others, the case of an
@@ -257,8 +323,9 @@ else's process.
   `DSH_PANEL_LANG` override it for one run. When comparing screenshots, make sure `DSH_PANEL_LANG`
   is not left over in the environment — it wins over `--lang`.
 
-Overrides meant for checks (all optional). Two of them — `DSH_TRAY_NODE` and `DSH_TRAY_BIN` — are also
-useful to ordinary users, so they are described in the README; everything else is listed here:
+Overrides meant for checks (all optional). `DSH_TRAY_NODE` and `DSH_TRAY_BIN` are also useful to
+ordinary users, so the README names them — as it in fact names most of the list below; this table is
+where each one is explained:
 
 | Variable | What it does |
 | --- | --- |
@@ -276,17 +343,45 @@ useful to ordinary users, so they are described in the README; everything else i
 | `DSH_PANEL_RUN_KEY` | the HKCU branch that holds the autostart entry (`Software\Microsoft\Windows\CurrentVersion\Run` by default); `tools\check-autostart.ps1` points it at a throwaway branch, so a check never touches the real `Run` |
 | `DSH_PANEL_LEGACY_DATA` | the previous generation's settings folder (`%APPDATA%\DeepSeekHarness` by default); `tools\check-migrate.ps1` points it at a throwaway folder, so the migration can be checked without reading the builder's own settings |
 | `DSH_PANEL_VARIANT` | `framework` or `selfcontained`, forcing the build variant the update check looks for; for checks only — in normal work the variant is detected from the panel folder |
-| `DSH_PANEL_DONATE` | the donation link shown in the About tab (the shipped constant is empty, so the row stays hidden) |
+| `DSH_PANEL_DONATE` | the link shown in the About tab, overriding the shipped one (`AppLinks.DonateUrl` = `https://app.lava.top/3686297587`, so the row is shown; an empty link keeps the row hidden) |
 | `DSH_TRAY_BALANCE_SCRIPT` | your own fallback script for the balance request |
+
+An overridden `DSH_PANEL_DATA`, `DSH_PANEL_STATE` or `DSH_PANEL_INSTANCE` also marks the run as **a
+check** in the panel itself: such a run never repairs the real `HKCU\...\Run` and never corrects the
+version in “Programs and features” (`PanelRegistration.IsCheckRun`; the same marker `Autostart` uses).
+Without that, the acceptance suite — which really does raise a tray panel — would edit the owner's
+registry. `DSH_PANEL_RUN_KEY` is the narrower override for the same purpose.
 
 ## Version and changelog
 
 - The version lives in one place: `<Version>` in `DshTray.csproj` (SemVer). `1.0.1` is a fix,
   `1.1.0` a new capability, `2.0.0` a breaking change.
-- History lives in `CHANGELOG.md` (`## x.y.z`), sections “Добавлено / Изменено / Исправлено”.
-  `build.ps1` warns when the section for the current version is missing, and the release notes are cut
-  from that section (`tools\release-notes.ps1`) — the update window in the panel shows them, so a
-  release without the section has no changelog to display.
+- History lives in **three** files: `CHANGELOG.md` (`## x.y.z`, sections “Добавлено / Изменено /
+  Исправлено”) is the source of truth and the only file with the full history; `CHANGELOG.en.md` and
+  `CHANGELOG.zh.md` are kept **from 1.21.0 onwards**, and for older versions they have no section at
+  all. “Version history” in the tray menu opens the file for the interface language and falls back to
+  `CHANGELOG.md` only when that file is missing (`AppVersion.HistoryFor`) — so on a translated
+  interface it shows the translated history, which simply does not reach back before 1.21.0, and the
+  hint above the update notes says the full history is `CHANGELOG.md` next to the panel
+  (`update.notesHint`). All three ship next to the panel, because the menu opens them from there: they
+  are `CopyToOutputDirectory` items in `DshTray.csproj`, so they travel into both archives and into
+  the installer. `build.ps1` warns when the section for the current version is missing from
+  `CHANGELOG.md`.
+- The release body is assembled from all three by `tools\release-notes.ps1`: three blocks —
+  `## English`, `## Русский`, `## 中文` — each wrapped in machine markers
+  (`<!-- dsh-notes:en -->` … `<!-- /dsh-notes:en -->`, then `ru`, then `zh`). There is deliberately
+  **no HTML** in the body: a panel older than 1.21.0 stores and shows the raw body, so `<details>` or
+  `<summary>` would reach the person as tag soup. A version whose translation has no section gets the
+  Russian one, and the script says so instead of shipping an empty block.
+- The update window shows **one** block, chosen by the interface language at display time
+  (`UpdateService.PickNotes`). `settings.json` keeps the raw body on purpose, so switching the
+  language re-picks the block instead of waiting for the next update check. No block for that
+  language → English; no markers at all (a release made before 1.21.0) → the whole body, as before.
+  `tools\check-notes.ps1` checks the assembled body: each of the three marker pairs exactly once and
+  in order, the right section inside each block (for 1.21.0 and newer a missing translation is a
+  release error; for older versions the check asserts that the Russian section was substituted
+  honestly), the version equal to `<Version>`, no HTML tags, and a second run producing exactly the
+  same bytes.
 - The exact build time goes into the `build.txt` stamp next to the panel: the number says what it
   is, the stamp says when. `tools\check-versions.ps1` cross-checks the version in the project, the
   panel, the stamp, `appversion.iss`, the setup and the archive.
@@ -349,7 +444,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\make-release.ps1
 ```
 
 One command does everything that can be automated, and **publishes nothing**: it checks the script
-encoding, refuses to continue if private keys or owner data are found in the project, checks the
+encoding, refuses to continue if private keys or owner data are found in the text files that would go
+to the repository — `tools\check-personal.ps1` reads the tracked files **and the new, not yet added
+ones** (`git ls-files --cached --others --exclude-standard`), but it does not look inside binary files
+such as PNG, so screenshots stay outside its verdict — checks the
 dictionaries, publishes the panel into `dist\panel` (not into `app\`, so a running panel does not get
 in the way), packs both archives with `tools\pack-panel.ps1` (which removes `status.txt`,
 `settings.json`, `web-url.txt` — the sign-in link, which holds a token —, `*.pdb`, `*.log` and the
@@ -357,23 +455,31 @@ builder's path from `build.txt`, then **verifies** the result), checks the Node
 download addresses (`--node-check`), runs `tools\acceptance.ps1` and `tools\check-restore.ps1` against
 that build, then `tools\check-autostart.ps1` and `tools\check-migrate.ps1`, walks the whole update path
 (`tools\check-update.ps1` and `tools\check-update-apply.ps1`), compiles `dist\dsh-panel-setup.exe`,
-cross-checks the versions, writes `SHA256SUMS.txt` and cuts `dist\release-notes.md` out of
-`CHANGELOG.md`. Options: `-SkipAcceptance`, `-SkipInstaller`, `-SkipSelfContained` and `-SkipUpdate`
+cross-checks the versions, writes `SHA256SUMS.txt`, assembles `dist\release-notes.md` from the three
+histories (`tools\release-notes.ps1`) and checks it (`tools\check-notes.ps1`). Options:
+`-SkipAcceptance`, `-SkipInstaller`, `-SkipSelfContained` and `-SkipUpdate`
 (leaves out both update checks). The exit code is 1 if any step failed.
 
 Publishing is the owner's call and is done with a tag:
 
-1. bump `<Version>` in `DshTray.csproj`, add the `CHANGELOG.md` section, commit;
-2. `git tag vX.Y.Z` and `git push origin main --tags`.
+1. bump `<Version>` in `DshTray.csproj`, add the section to each of the three histories
+   (`CHANGELOG.md`, `CHANGELOG.en.md`, `CHANGELOG.zh.md`), commit;
+2. `git tag vX.Y.Z` and `git push origin main --tags`;
+3. after the release is published, regenerate the winget manifest (see the next section).
 
 The `build` workflow (`.github/workflows/build.yml`) builds the panel on every push and on pull
 requests with the **same scripts** as a local build (`build.ps1`, `tools\pack-panel.ps1`,
-`installer\build-installer.ps1`, `tools\check-versions.ps1`, `tools\write-checksums.ps1`). On a `v*`
-tag it also installs Inno Setup 7, compiles the installer, verifies that the tag matches `<Version>`
+`tools\check-lang.mjs`, `tools\check-encoding.ps1`, `tools\check-personal.ps1`). Compiling the installer
+(`installer\build-installer.ps1`), cross-checking the versions
+(`tools\check-versions.ps1`), writing `SHA256SUMS.txt` (`tools\write-checksums.ps1`) and assembling and
+checking the release body (`tools\release-notes.ps1`, `tools\check-notes.ps1`) are gated by
+`if: startsWith(github.ref, 'refs/tags/v')`, so they happen **only on a `v*` tag**. On a `v*`
+tag, accordingly, it also installs Inno Setup 7, compiles the installer, verifies that the tag matches `<Version>`
 (a tag newer than the project version makes `UpdateService` fail for everyone with
 `update.versionMismatch`), and creates or updates the release with four assets —
 `dsh-panel-setup.exe`, `DshPanel.zip`, `DshPanel-selfcontained.zip`, `SHA256SUMS.txt` — taking the
-release body from the `CHANGELOG.md` section. Writing permissions are granted only to the release
+release body assembled from the three histories (`tools\release-notes.ps1`, checked by
+`tools\check-notes.ps1`). Writing permissions are granted only to the release
 job; the rest of the workflow runs read-only.
 
 Actions are pinned **by commit SHA**, not by a moving major tag (`@v4`): the owner of an action can
@@ -391,6 +497,30 @@ If the release was created by hand, upload the files into it instead of creating
 gh release upload vX.Y.Z dist\dsh-panel-setup.exe dist\DshPanel.zip dist\DshPanel-selfcontained.zip --clobber
 ```
 
+## Winget package
+
+`winget\` holds three manifests of schema **1.12.0** — `Danerus23.DSHPanel.yaml`,
+`Danerus23.DSHPanel.installer.yaml` and `Danerus23.DSHPanel.locale.en-US.yaml`: an Inno installer
+(`InstallerType: inno`), `Scope: user`, **no dependencies** (the .NET Desktop Runtime 8 is already
+inside the setup, and declaring `Microsoft.DotNet.DesktopRuntime.8` would add a system-wide UAC
+prompt in front of this user-scoped package), and `RequireExplicitUpgrade: true` — otherwise
+`winget upgrade --all` would pull the panel, whose own updater runs far more often than this
+manifest, while an explicit `winget upgrade Danerus23.DSHPanel` still works.
+
+`tools\winget-manifest.ps1` fills the manifests in and checks them. The version comes from
+`<Version>`; the SHA-256 comes **from the published release** (`-ReleaseTag v<version>`, i.e. the
+`SHA256SUMS.txt` asset), because the installer is built by CI and its bytes differ from a local build
+in `dist\`. A local sum is refused unless `-AllowLocalSum` is passed (for debugging the script, never
+for a release), and a tag that disagrees with `<Version>` is an error: the sum would be taken from one
+release while the link pointed at another. `-Validate` also runs `winget validate` over the folder.
+
+The manifest in the repository deliberately describes the **last published** release, so it lags one
+version behind `<Version>` and that is normal. Order of work: publish the release, then re-run the
+script (`-ReleaseTag v<version> -Validate`) and send the result to `microsoft/winget-pkgs` as a pull
+request — the first PR needs the CLA signed in a browser. No code signing is needed for winget. What
+makes this work in practice is `PanelRegistration` above: without the corrected `DisplayVersion`,
+winget would compare its own version with a stale one and offer a downgrade.
+
 ## Checking an installed panel
 
 ```powershell
@@ -400,7 +530,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\check-installed.ps1
 Run this on a machine where the panel was installed by the setup (a clean VM, for instance): it
 checks that the panel and its uninstaller are in place, that the entry in “Programs and features”
 exists, runs the dictionary, environment and layout checks against the **installed** copy and then
-the whole stranger-style acceptance. Default folder is `%LOCALAPPDATA%\Programs\DSH Panel`,
+the whole stranger-style acceptance. It finds the entry by the `AppId` GUID and asserts its
+`DisplayName`; the `DisplayVersion` inside it is kept current by the panel itself at startup
+(`PanelRegistration`, above), not by this check. Default folder is `%LOCALAPPDATA%\Programs\DSH Panel`,
 override with `-AppDir <path>`.
 
 ## Test doubles and fixtures

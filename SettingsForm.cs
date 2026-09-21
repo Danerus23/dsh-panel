@@ -53,6 +53,7 @@ public sealed class SettingsForm : Form
     private readonly Button _btnUpdatePage = new();
     private readonly Label _lblUpdateNotes = new();
     private readonly TextBox _txtUpdateNotes = new();
+    private readonly Label _lblUpdateNotesHint = new();
     private readonly ProgressBar _barUpdate = new();
     private readonly Label _lblUpdateState = new();
 
@@ -114,6 +115,7 @@ public sealed class SettingsForm : Form
     private readonly Label _lblAboutLicense = new();
     private readonly Label _lblAboutCopyright = new();
     private readonly Label _lblAboutHint = new();
+    private readonly Label _lblAboutDonateNote = new();
 
     private PricingCheckResult _result;
     private bool _busy;
@@ -553,6 +555,17 @@ public sealed class SettingsForm : Form
             _lnkAboutDonate.Size = new Size(360, 22);
             _lnkAboutDonate.LinkClicked += (_, _) => ShowLink(AppLinks.Donate);
             page.Controls.Add(_lnkAboutDonate);
+
+            // Пояснение рядом со ссылкой: почему донаты вообще есть и на что они идут. Ширина
+            // задана (AutoSize = false) — так строка переносится, а проверка вёрстки умеет
+            // сверить, хватает ли высоты и не шире ли метки самое длинное слово.
+            _lblAboutDonateNote.AutoSize = false;
+            _lblAboutDonateNote.ForeColor = Faint;
+            _lblAboutDonateNote.Text = Loc.T("about.donateNote");
+            _lblAboutDonateNote.Location = new Point(16, 302);
+            _lblAboutDonateNote.Size = new Size(560, 60);
+            _lblAboutDonateNote.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            page.Controls.Add(_lblAboutDonateNote);
         }
 
         FillLanguages();
@@ -618,9 +631,25 @@ public sealed class SettingsForm : Form
         _txtUpdateNotes.BackColor = Color.White;
         _txtUpdateNotes.BorderStyle = BorderStyle.FixedSingle;
         _txtUpdateNotes.Location = new Point(16, 168);
-        _txtUpdateNotes.Size = new Size(560, 190);
-        _txtUpdateNotes.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        // Высота задана числом, а Anchor у неё только верхний: низ поля не тянется вниз.
+        // Так подсказка и полоса прогресса под ним не могут оказаться поверх текста ни при
+        // каком размере окна — низ окна занят ими, и они не зависят от размера поля.
+        _txtUpdateNotes.Size = new Size(560, 168);
+        _txtUpdateNotes.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         page.Controls.Add(_txtUpdateNotes);
+
+        // Подсказка — между полем заметок (до 336) и полосой прогресса (368): своей строкой,
+        // без наложения. Координаты посчитаны от САМОГО УЗКОГО окна (страница 546px высотой):
+        // подсказка 340…358, полоса 368…380, состояние 388…448 — всё внутри 546. Обе нижние
+        // метки и полоса привязаны к низу, поэтому запас не меняется при растягивании окна.
+        // Проверяет это --layout-check: подсказка видима, значит её текст измеряется, и
+        // CheckOverlaps видит её рядом с полем заметок.
+        _lblUpdateNotesHint.ForeColor = Muted;
+        _lblUpdateNotesHint.Text = Loc.T("update.notesHint");
+        _lblUpdateNotesHint.Location = new Point(16, 340);
+        _lblUpdateNotesHint.Size = new Size(560, 18);
+        _lblUpdateNotesHint.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+        page.Controls.Add(_lblUpdateNotesHint);
 
         _barUpdate.Location = new Point(16, 368);
         _barUpdate.Size = new Size(560, 12);
@@ -650,11 +679,29 @@ public sealed class SettingsForm : Form
             ? Loc.T("update.checkedAt", _settings.UpdateCheckedAt.Value.ToString("dd.MM.yyyy HH:mm"))
             : Loc.T("update.notChecked");
 
-        _txtUpdateNotes.Text = _settings.UpdateNotes.Length > 0 ? _settings.UpdateNotes : Loc.T("update.noNotes");
+        var notes = NotesForDisplay();
+        _txtUpdateNotes.Text = notes.Length > 0 ? notes : Loc.T("update.noNotes");
         _btnUpdatePage.Enabled = _settings.UpdatePageUrl.Length > 0;
 
         // Кнопка обновления включается только после проверки: без неё неизвестно, что скачивать.
         _btnUpdateInstall.Enabled = UpdateService.IsNewer(_settings.UpdateLatest, AppVersion.Short);
+    }
+
+    /// <summary>
+    /// Заметки для показа на ТЕКУЩЕМ языке интерфейса. Блок выбирается здесь, при показе, а не
+    /// тогда, когда пришёл ответ GitHub: язык можно сменить в любой момент, а проверка
+    /// обновлений бывает не чаще раза в сутки — без этого в поле висел бы прежний язык, хотя
+    /// подсказка обещает язык интерфейса. Сырое тело для этого и хранится в настройках.
+    ///
+    /// Если сырого тела нет (настройки от панели до 1.21.0, где лежал готовый блок), показываем
+    /// то, что есть: меток в старом значении нет, и разбор вернёт его же целиком.
+    /// </summary>
+    private string NotesForDisplay()
+    {
+        var raw = _settings.UpdateNotesRaw;
+        return raw.Length > 0
+            ? UpdateService.PickNotesForPanel(raw, Loc.Language)
+            : _settings.UpdateNotes;
     }
 
     /// <summary>Спрашивает GitHub и запоминает ответ, чтобы он был виден и при следующем открытии.</summary>
@@ -674,7 +721,8 @@ public sealed class SettingsForm : Form
                 _settings.UpdateLatest = check.Latest;
                 _settings.UpdatePublished = check.PublishedAt == default ? "" : check.PublishedAt.ToString("yyyy-MM-dd");
                 _settings.UpdatePageUrl = check.PageUrl;
-                _settings.UpdateNotes = check.Notes.Length > 8000 ? check.Notes[..8000] : check.Notes;
+                _settings.UpdateNotesRaw = UpdateService.RawNotes(check.Notes);
+                _settings.UpdateNotes = UpdateService.PickNotesForPanel(_settings.UpdateNotesRaw, Loc.Language);
                 _settings.Save(_paths.SettingsPath);
             }
 

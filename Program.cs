@@ -511,7 +511,12 @@ internal static class Program
                 if (update.Notes.Length > 0)
                 {
                     report.AppendLine(Loc.T("update.notes"));
-                    foreach (var line in update.Notes.Replace("\r", "").Split('\n').Take(30)) report.AppendLine("  " + line);
+
+                    // Тело релиза несёт три блока на трёх языках с машинными метками (см.
+                    // UpdateService.PickNotes). В консольном отчёте показываем блок на языке
+                    // отчёта (ключ --lang): метки и чужие языки там только мешают.
+                    var notes = UpdateService.PickNotes(update.Notes, Loc.Language);
+                    foreach (var line in notes.Replace("\r", "").Split('\n').Take(30)) report.AppendLine("  " + line);
                 }
             }
             else if (update.Error.Length > 0)
@@ -524,7 +529,12 @@ internal static class Program
             settings.UpdateLatest = update.Latest;
             settings.UpdatePublished = update.PublishedAt == default ? "" : update.PublishedAt.ToString("yyyy-MM-dd");
             settings.UpdatePageUrl = update.PageUrl;
-            settings.UpdateNotes = update.Notes.Length > 8000 ? update.Notes[..8000] : update.Notes;
+
+            // Тело выпуска — на случай смены языка интерфейса (заметки пересобираются в окне),
+            // выбранный блок — для показа прямо сейчас. Обрезка у обоих своя; тело длиннее
+            // предела хранится уже разобранным на блоки (см. UpdateService.RawNotes).
+            settings.UpdateNotesRaw = UpdateService.RawNotes(update.Notes);
+            settings.UpdateNotes = UpdateService.PickNotesForPanel(settings.UpdateNotesRaw, Loc.Language);
             settings.Save(paths.SettingsPath);
 
             WriteReport(report.ToString(), options.OutPath);
@@ -839,6 +849,196 @@ internal static class Program
             if (!sumsOk) problems++;
             report.AppendLine($"Контрольные суммы {(sumsOk ? "ок" : "БЕДА")}: разобрано {sums.Count} из 3 записей");
 
+            // Заметки к выпуску на языке интерфейса. Тело релиза несёт три блока с машинными
+            // маркерами; таблица кейсов проверяет выбор блока и — отдельно — что старые выпуски
+            // без маркеров вовсе (до 1.21.0) показываются целиком, как раньше. Пропустить этот
+            // случай нельзя: иначе человек с выпуском 1.20.3 увидел бы пустое окно «Что нового».
+            //
+            // Форма тел — как у настоящего тела 1.21.0 после tools\release-notes.ps1: заголовок
+            // языка обычным текстом, затем пара машинных маркеров. HTML-тегов в теле нет — панели
+            // прежних версий показывают тело как есть и увидели бы их.
+            var notesBody1 = "## English\n\n<!-- dsh-notes:en -->\nONE en\n<!-- /dsh-notes:en -->\n\n" +
+                             "## Русский\n\n<!-- dsh-notes:ru -->\nОДИН ru\n<!-- /dsh-notes:ru -->\n\n" +
+                             "## 中文\n\n<!-- dsh-notes:zh -->\n一 zh\n<!-- /dsh-notes:zh -->";
+            var notesBody2 = "## English\n\n<!-- dsh-notes:en -->\nTWO en\n<!-- /dsh-notes:en -->\n\n" +
+                             "## 中文\n\n<!-- dsh-notes:zh -->\n二 zh\n<!-- /dsh-notes:zh -->";
+            var notesBody3 = "## English\n\n<!-- dsh-notes:en -->\nTHREE en\n<!-- /dsh-notes:en -->\n\n" +
+                             "## Русский\n\n<!-- dsh-notes:ru -->\nТРИ ru\n<!-- /dsh-notes:ru -->";
+            // Тело без маркеров — так выглядят ВСЕ выпуски до 1.21.0: показывается целиком,
+            // как показывала панель раньше. Синтетическая строка, а не тело 1.20.3: важно
+            // структурное свойство «маркеров нет».
+            var notesBodyOld = "### Исправлено\n\n- **Ссылка на панель** — правилась вручную.";
+            // Битые маркеры: закрывающий без открывающего, затем открывающий без закрывающего.
+            var notesBodyBroken = "<!-- /dsh-notes:en -->\nтекст до\n<!-- dsh-notes:en -->\nхвост без закрытия";
+            // Метка ПОСРЕДИ строки: панель такую границей не считает (и release-notes.ps1 так не
+            // пишет). Здесь есть и парный маркер в неверном месте — внутри той же строки, где уже
+            // идёт текст. Кейс настоящий: если разбор начнёт опознавать метку в любом месте строки,
+            // строка «текст <!-- dsh-notes:ru --> внутри» откроет блок ru — и вернётся не тело.
+            var notesBodyInline = "текст <!-- dsh-notes:en --> внутри\nСТРОКА\n<!-- /dsh-notes:en -->\nru-текст";
+            // Пример метки внутри ограждённого блока кода. Тело — недоверенный текст: такую
+            // историю можно написать руками на странице выпуска. Разбор обязан пропустить блок
+            // кода целиком, иначе объявит пример блоком ru и отбросит настоящий перевод.
+            var notesBodyFenced = "<!-- dsh-notes:en -->\nEN вступление\n\n```\n<!-- dsh-notes:ru -->\nПРИМЕР из блока кода\n<!-- /dsh-notes:ru -->\n```\n\nEN хвост\n<!-- /dsh-notes:en -->\n\n" +
+                                  "<!-- dsh-notes:ru -->\nНАСТОЯЩИЙ ru\n<!-- /dsh-notes:ru -->";
+            // Инвариант «обрезка ПОСЛЕ выбора блока»: английский блок длиннее предела показа,
+            // русский — короче. Русский обязан выжить и остаться целым: если обрезать тело до
+            // выбора, длинный английский вытеснил бы короткий перевод и человек прочитал бы
+            // чужой язык (или пустоту).
+            var notesBodyLong = "<!-- dsh-notes:en -->\n" + new string('A', 9000) +
+                                "\n<!-- /dsh-notes:en -->\n\n<!-- dsh-notes:ru -->\nКОРОТКИЙ ru\n<!-- /dsh-notes:ru -->";
+
+            var notesCases = new (string Name, string Body, string Language, string Expected)[]
+            {
+                ("все три блока — по языку", notesBody1, "en", "ONE en"),
+                ("все три блока — по языку", notesBody1, "ru", "ОДИН ru"),
+                ("все три блока — по языку", notesBody1, "zh", "一 zh"),
+                ("нет ru — английский", notesBody2, "ru", "TWO en"),
+                ("нет zh — английский", notesBody3, "zh", "THREE en"),
+                ("маркеров нет — тело целиком", notesBodyOld, "en", notesBodyOld),
+                ("маркеров нет — тело целиком", notesBodyOld, "zh", notesBodyOld),
+                ("битые маркеры — тело целиком", notesBodyBroken, "en", notesBodyBroken),
+                ("маркер посреди строки — тело целиком", notesBodyInline, "en", notesBodyInline),
+                ("метка в блоке кода — не граница", notesBodyFenced, "ru", "НАСТОЯЩИЙ ru"),
+                ("метка в блоке кода — английский цел", notesBodyFenced, "en", "EN вступление\n\n```\n<!-- dsh-notes:ru -->\nПРИМЕР из блока кода\n<!-- /dsh-notes:ru -->\n```\n\nEN хвост"),
+            };
+
+            foreach (var item in notesCases)
+            {
+                var picked = UpdateService.PickNotes(item.Body, item.Language);
+                var ok = string.Equals(picked, item.Expected, StringComparison.Ordinal);
+                if (!ok) problems++;
+                report.AppendLine($"Заметки {(ok ? "ок" : "БЕДА")}: {item.Name}, язык {item.Language} — " +
+                                  (ok ? "выбрано верно" : $"выбрано «{picked}»"));
+            }
+
+            // Отдельно — предел показа: он режет УЖЕ ВЫБРАННЫЙ блок, а не тело. Тело здесь
+            // длиннее 8000, выбранный блок — короче, поэтому предел не должен его тронуть.
+            var longPicked = UpdateService.PickNotesForPanel(notesBodyLong, "ru");
+            var longOk = string.Equals(longPicked, "КОРОТКИЙ ru", StringComparison.Ordinal);
+            if (!longOk) problems++;
+            report.AppendLine($"Заметки {(longOk ? "ок" : "БЕДА")}: обрезка после выбора блока (тело {notesBodyLong.Length} знаков, " +
+                              $"выбранный блок {longPicked.Length})");
+
+            // И тот же предел наоборот: выбранный блок длиннее предела — обрезан ровно по нему.
+            var cutPicked = UpdateService.PickNotesForPanel("<!-- dsh-notes:ru -->\n" + new string('Я', 9000) +
+                                                            "\n<!-- /dsh-notes:ru -->", "ru");
+            var cutOk = cutPicked.Length == 8000;
+            if (!cutOk) problems++;
+            report.AppendLine($"Заметки {(cutOk ? "ок" : "БЕДА")}: выбранный блок обрезан по пределу показа ({cutPicked.Length} знаков)");
+
+            // Сырое тело — то, что кладётся в настройки: оно тоже под пределом, но своим.
+            // Первый случай — тело без маркеров (так выглядят выпуски до 1.21.0): оно обязано
+            // остаться собой, только обрезанным, и PickNotes вернёт его целиком, как раньше.
+            // Второй — та же обрезка ровно на границе суррогатной пары: разорванная пара уехала
+            // бы в settings.json как «\uFFFD», поэтому разрез отступает на знак назад.
+            var rawBody = UpdateService.RawNotes(new string('R', 25000));
+            var rawOk = rawBody.Length == 20000 &&
+                        string.Equals(UpdateService.PickNotes(rawBody, "ru"), rawBody, StringComparison.Ordinal);
+            if (!rawOk) problems++;
+            report.AppendLine($"Заметки {(rawOk ? "ок" : "БЕДА")}: сырое тело без маркеров обрезано по своему пределу и осталось целым ({rawBody.Length} знаков)");
+
+            var emojiBody = new string('R', 19999) + char.ConvertFromUtf32(0x1F600) + new string('y', 274);
+            var rawEmoji = UpdateService.RawNotes(emojiBody);
+            var emojiOk = rawEmoji.Length <= 20000 && !HasLonelySurrogate(rawEmoji);
+            if (!emojiOk) problems++;
+            report.AppendLine($"Заметки {(emojiOk ? "ок" : "БЕДА")}: предельная обрезка не разорвала суррогатную пару ({rawEmoji.Length} знаков)");
+
+            // Тело длиннее предела СЫРОГО тела, и закрывающий маркер английского блока остался
+            // за ним. Разбор идёт до обрезки, поэтому у выбора языка есть блок — человек читает
+            // свой перевод, а не всё английское тело с обрывком маркера.
+            var overLimitBody = "<!-- dsh-notes:en -->\n" + new string('A', 21000) +
+                                "\n<!-- /dsh-notes:en -->\n\n<!-- dsh-notes:ru -->\nНАСТОЯЩИЙ РУССКИЙ ТЕКСТ\n<!-- /dsh-notes:ru -->";
+            var rawOver = UpdateService.RawNotes(overLimitBody);
+            var overPicked = UpdateService.PickNotes(rawOver, "ru");
+            var overOk = rawOver.Length <= 20000 &&
+                         string.Equals(overPicked, "НАСТОЯЩИЙ РУССКИЙ ТЕКСТ", StringComparison.Ordinal) &&
+                         !HasLonelySurrogate(rawOver);
+            if (!overOk) problems++;
+            report.AppendLine($"Заметки {(overOk ? "ок" : "БЕДА")}: тело длиннее предела — блок выбран после разбора (тело {rawOver.Length} знаков, выбран {overPicked.Length})");
+
+            // Ограждение кода, через которое проходит срез блока. Разрезанное пополам, оно
+            // уводит закрывающий маркер «в код», при повторном разборе не находится ни одного
+            // блока — и русский человек читает английское тело (находка перепроверки). Кейс
+            // проверяет и предел, и то, что перевод остался доступен.
+            var notesBodyFencedLong = "<!-- dsh-notes:en -->\nintro\n```\n" + new string('B', 20000) +
+                                      "\n```\nend\n<!-- /dsh-notes:en -->\n\n<!-- dsh-notes:ru -->\nНАСТОЯЩИЙ РУССКИЙ ТЕКСТ\n<!-- /dsh-notes:ru -->";
+            var fencedRaw = UpdateService.RawNotes(notesBodyFencedLong);
+            var fencedPicked = UpdateService.PickNotes(fencedRaw, "ru");
+            var fencedOk = fencedRaw.Length <= 20000 &&
+                           string.Equals(fencedPicked, "НАСТОЯЩИЙ РУССКИЙ ТЕКСТ", StringComparison.Ordinal);
+            if (!fencedOk) problems++;
+            report.AppendLine($"Заметки {(fencedOk ? "ок" : "БЕДА")}: ограждение кода пережило срез — перевод на месте (тело {fencedRaw.Length} знаков, выбран {fencedPicked.Length})");
+
+            // Ограждение внутри САМОГО перевода: русский обязан прочитать русское начало, а не
+            // английский текст. Хвост за ограждением отбрасывается — резать ограждение нельзя.
+            var notesBodyFencedRu = "<!-- dsh-notes:en -->\nENGLISH TEXT\n<!-- /dsh-notes:en -->\n\n" +
+                                    "<!-- dsh-notes:ru -->\nРУССКИЙ НАЧАЛО\n```\n" + new string('Р', 20000) +
+                                    "\n```\nРУССКИЙ ХВОСТ\n<!-- /dsh-notes:ru -->";
+            var fencedRuRaw = UpdateService.RawNotes(notesBodyFencedRu);
+            var fencedRuPicked = UpdateService.PickNotes(fencedRuRaw, "ru");
+            var fencedRuOk = fencedRuRaw.Length <= 20000 &&
+                             fencedRuPicked.StartsWith("РУССКИЙ НАЧАЛО", StringComparison.Ordinal) &&
+                             !string.Equals(fencedRuPicked, "ENGLISH TEXT", StringComparison.Ordinal);
+            if (!fencedRuOk) problems++;
+            report.AppendLine($"Заметки {(fencedRuOk ? "ок" : "БЕДА")}: ограждение внутри перевода — русский текст читается (тело {fencedRuRaw.Length} знаков, выбран {fencedRuPicked.Length})");
+
+            // Ограждение в каждом из трёх блоков: язык выбирается и после пересборки.
+            var notesBodyFencedThree = "<!-- dsh-notes:en -->\nНАЧАЛО en\n```\n" + new string('E', 5000) + "\n```\nХВОСТ en\n<!-- /dsh-notes:en -->\n\n" +
+                                       "<!-- dsh-notes:ru -->\nНАЧАЛО ru\n```\n" + new string('Р', 5000) + "\n```\nХВОСТ ru\n<!-- /dsh-notes:ru -->\n\n" +
+                                       "<!-- dsh-notes:zh -->\nНАЧАЛО zh\n```\n" + new string('中', 5000) + "\n```\nХВОСТ zh\n<!-- /dsh-notes:zh -->";
+            var fencedThreeRaw = UpdateService.RawNotes(notesBodyFencedThree);
+            var fencedThreeOk = fencedThreeRaw.Length <= 20000 && fencedThreeRaw.Length > 0;
+            foreach (var language in new[] { "en", "ru", "zh" })
+            {
+                var picked = UpdateService.PickNotes(fencedThreeRaw, language);
+                if (picked.Length == 0 || picked.Length >= fencedThreeRaw.Length) fencedThreeOk = false;
+            }
+            if (!fencedThreeOk) problems++;
+            report.AppendLine($"Заметки {(fencedThreeOk ? "ок" : "БЕДА")}: ограждения в трёх блоках — каждый язык читается (тело {fencedThreeRaw.Length} знаков)");
+
+            // Блоков больше, чем предел делит на «запас»: запасного пути «обрезать сырое тело»
+            // при найденных метках быть не должно, а русский блок обязан выжить целиком.
+            var manyBody = new System.Text.StringBuilder("<!-- dsh-notes:ru -->\nНАСТОЯЩИЙ РУССКИЙ ТЕКСТ\n<!-- /dsh-notes:ru -->\n");
+            for (var index = 0; index < 319; index++)
+            {
+                manyBody.Append("\n<!-- dsh-notes:x").Append(index).Append(" -->\nблок ").Append(index).Append(' ').Append('.', 20)
+                        .Append("\n<!-- /dsh-notes:x").Append(index).Append(" -->\n");
+            }
+            var manyRaw = UpdateService.RawNotes(manyBody.ToString());
+            var manyPicked = UpdateService.PickNotes(manyRaw, "ru");
+            var manyOk = manyRaw.Length <= 20000 &&
+                         string.Equals(manyPicked, "НАСТОЯЩИЙ РУССКИЙ ТЕКСТ", StringComparison.Ordinal);
+            if (!manyOk) problems++;
+            report.AppendLine($"Заметки {(manyOk ? "ок" : "БЕДА")}: 320 блоков — предел держится, русский блок выжил (тело {manyRaw.Length} знаков, выбран {manyPicked.Length})");
+
+            // Длинные имена блоков: «обвязка» считается по настоящим маркерам, поэтому предел
+            // остаётся пределом и здесь (в прежней правке имя в 5000 знаков его пробивало).
+            var longName = new string('a', 5000);
+            var longerName = new string('b', 5000);
+            var notesBodyLongNames = "<!-- dsh-notes:" + longName + " -->\nтекст\n<!-- /dsh-notes:" + longName + " -->\n\n" +
+                                     "<!-- dsh-notes:" + longerName + " -->\nтекст\n<!-- /dsh-notes:" + longerName + " -->";
+            var longNamesRaw = UpdateService.RawNotes(notesBodyLongNames);
+            var longNamesOk = longNamesRaw.Length <= 20000 && longNamesRaw.Length > 0 && !HasLonelySurrogate(longNamesRaw);
+            if (!longNamesOk) problems++;
+            report.AppendLine($"Заметки {(longNamesOk ? "ок" : "БЕДА")}: длинные имена блоков — предел держится (тело {longNamesRaw.Length} знаков)");
+
+            // Имя длиннее самого предела: блок не влезает даже пустым — он отбрасывается, а не
+            // заменяется обрезкой сырого тела.
+            var hugeName = new string('c', 25000);
+            var notesBodyHugeName = "<!-- dsh-notes:" + hugeName + " -->\nтекст\n<!-- /dsh-notes:" + hugeName + " -->";
+            var hugeNameRaw = UpdateService.RawNotes(notesBodyHugeName);
+            var hugeNameOk = hugeNameRaw.Length <= 20000 && !HasLonelySurrogate(hugeNameRaw);
+            if (!hugeNameOk) problems++;
+            report.AppendLine($"Заметки {(hugeNameOk ? "ок" : "БЕДА")}: имя блока длиннее предела — предел держится (тело {hugeNameRaw.Length} знаков)");
+
+            // «<!--» в СЕРЕДИНЕ строки: оборванный комментарий не должен уехать в настройки —
+            // правило одно для любого места строки, а не только для её начала.
+            var notesBodyHalfComment = new string('x', 19990) + "<!--" + new string('y', 100);
+            var halfCommentRaw = UpdateService.RawNotes(notesBodyHalfComment);
+            var halfCommentOk = halfCommentRaw.Length <= 20000 && !HasOpenComment(halfCommentRaw);
+            if (!halfCommentOk) problems++;
+            report.AppendLine($"Заметки {(halfCommentOk ? "ок" : "БЕДА")}: оборванный «<!--» в середине строки не сохранён (тело {halfCommentRaw.Length} знаков)");
+
             var icons = new[] { ServerVisual.Running, ServerVisual.Stopped, ServerVisual.BusyOther };
             foreach (var visual in icons)
             {
@@ -858,6 +1058,41 @@ internal static class Program
 
         WriteReport(report.ToString(), options.OutPath);
         return 0;
+    }
+
+    /// <summary>
+    /// Есть ли в тексте комментарий «&lt;!--» без закрывающего «--&gt;»: такой обрывок не
+    /// должен попадать в settings.json — заметки обязаны оставаться целым текстом.
+    /// </summary>
+    private static bool HasOpenComment(string text)
+    {
+        var open = text.LastIndexOf("<!--", StringComparison.Ordinal);
+        if (open < 0) return false;
+
+        return text.LastIndexOf("-->", StringComparison.Ordinal) < open;
+    }
+
+    /// <summary>
+    /// Есть ли в строке одинокий суррогат UTF-16: старший без младшего следом или младший без
+    /// старшего перед ним. Такую строку System.Text.Json запишет в settings.json как «\uFFFD»,
+    /// то есть значение не переживёт запись и чтение.
+    /// </summary>
+    private static bool HasLonelySurrogate(string text)
+    {
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (char.IsHighSurrogate(text[index]))
+            {
+                if (index + 1 >= text.Length || !char.IsLowSurrogate(text[index + 1])) return true;
+                index++;
+            }
+            else if (char.IsLowSurrogate(text[index]))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Код ответа на запрос HEAD: «200», «404» или текст ошибки. Для --node-check.</summary>

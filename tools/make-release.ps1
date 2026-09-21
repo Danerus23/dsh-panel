@@ -10,7 +10,8 @@
 #   5) складывает оба варианта в dist\DshPanel.zip и dist\DshPanel-selfcontained.zip;
 #   6) собирает установщик dist\dsh-panel-setup.exe;
 #   7) проверяет, что версии в комплекте сходятся (tools\check-versions.ps1);
-#   8) вырезает из CHANGELOG.md раздел текущей версии в dist\release-notes.md;
+#   8) собирает тело выпуска из всех трёх историй (CHANGELOG.md, CHANGELOG.en.md,
+#      CHANGELOG.zh.md) в dist\release-notes.md;
 #   9) проверяет, что в проект не затесались личные ключи и данные владельца;
 #  10) печатает, что осталось сделать руками (репозиторий, тег, выпуск).
 #
@@ -228,6 +229,13 @@ try {
             -Version $version -Out (Join-Path $dist 'release-notes.md')
     }
 
+    # Без этой проверки заметки уедут в выпуск «как получилось»: панель покажет пустое окно
+    # «Что нового» (маркеров нет) или русский текст человеку с английским интерфейсом.
+    Step 'Проверка заметок к выпуску' {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\check-notes.ps1') `
+            -Version $version
+    }
+
     Write-Host ''
     Write-Host '=== Что готово' -ForegroundColor Cyan
     Get-ChildItem -LiteralPath $dist -File -ErrorAction SilentlyContinue | ForEach-Object {
@@ -244,16 +252,20 @@ catch {
 if (-not $failed) {
     Write-Host ''
     Write-Host '=== Что осталось сделать руками' -ForegroundColor Yellow
-    Write-Host ('  1. Поднять версию: DshTray.csproj (<Version>) и раздел в CHANGELOG.md — сейчас ' + $version + '.')
+    Write-Host ('  1. Поднять версию: <Version> в DshTray.csproj и раздел в КАЖДОЙ из трёх историй —')
+    Write-Host ('     CHANGELOG.md, CHANGELOG.en.md, CHANGELOG.zh.md. Сейчас ' + $version + '.')
     Write-Host '  2. Закоммитить и отправить:'
     Write-Host '       git add -A; git commit -m "..."; git push origin main'
     Write-Host '  3. Выпуск — тегом (тег обязан совпасть с версией проекта):'
     Write-Host ('       git tag -a v' + $version + ' -m "DSH Panel ' + $version + '"; git push origin v' + $version)
     Write-Host '     Тег запускает сборку в GitHub Actions: она сама соберёт установщик, сверит тег'
     Write-Host '     с версией проекта и приложит к выпуску dsh-panel-setup.exe, DshPanel.zip,'
-    Write-Host '     DshPanel-selfcontained.zip и SHA256SUMS.txt. Заметки берутся из CHANGELOG.md —'
-    Write-Host '     их показывает окно обновлений в панели.'
-    Write-Host '     Проверить уже опубликованный выпуск: tools\verify-release.ps1 -Tag v' + $version
+    Write-Host '     DshPanel-selfcontained.zip и SHA256SUMS.txt. Заметки собираются из всех трёх'
+    Write-Host '     историй — их показывает окно обновлений в панели.'
+    Write-Host ('     Проверить уже опубликованный выпуск: tools\verify-release.ps1 -Tag v' + $version)
+    Write-Host '  4. ПОСЛЕ публикации — пересобрать манифест winget под выпущенную версию и отправить'
+    Write-Host '     его в microsoft/winget-pkgs отдельным pull request:'
+    Write-Host ('       tools\winget-manifest.ps1 -ReleaseTag v' + $version + ' -Validate')
 }
 
 exit $(if ($failed) { 1 } else { 0 })

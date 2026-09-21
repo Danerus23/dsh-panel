@@ -44,11 +44,19 @@ PrivilegesRequired=lowest
 
 ; Панель — постоянно живущий процесс в трее. Если она работает, установщик обязан её закрыть:
 ; иначе после переустановки остаётся жить прежняя копия (со старым кодом), и все нажатия
-; «Запустить» уходят в неё. AppMutex называет мьютекс, который создаёт сама панель
-; (Program.cs: InstanceName() + ".SingleInstance"), CloseApplications закрывает её перед
-; установкой, RestartApplications=no — чтобы панель не поднялась дважды: её запускает
-; последняя страница установщика.
-AppMutex=Local\DshTray.SingleInstance
+; «Запустить» уходят в неё. Закрывает её наш собственный taskkill в [Code]
+; (CurStepChanged, шаг ssInstall — в самом начале копирования файлов), а CloseApplications=yes
+; добавляет к этому родной механизм Inno: работающая панель видна ему через Restart Manager,
+; и в обычной установке он перечисляет её среди закрываемых приложений.
+; (RestartApplications=no — чтобы панель не поднялась дважды: её запускает последняя
+; страница установщика, а в тихом прогоне не запускает вовсе).
+;
+; AppMutex здесь СОЗНАТЕЛЬНО не задан. Inno проверяет мьютекс при запуске и на занятый
+; показывает НЕПОДАВЛЯЕМОЕ окно «панель уже работает, закройте её» — ещё до [Code], то есть
+; раньше нашего taskkill. Для `winget upgrade` это ровно тот случай: панель в трее почти
+; всегда работает, и тихая установка поверх неё встала бы на окне, которого никто не закроет
+; (в автоматическом прогоне — зависание, при «Cancel» — код 5, «отменено пользователем»).
+; Без AppMutex этой проверки нет, а закрытием занимается наш taskkill (см. выше).
 CloseApplications=yes
 RestartApplications=no
 OutputDir=..\dist
@@ -74,6 +82,14 @@ UsePreviousLanguage=no
 ; который человек уже снял галочкой в панели. Свежее высказывание человека — это состояние
 ; реестра Run, и его переносит запись с Check: AutostartWasSetCheck.
 UsePreviousTasks=no
+
+; Приглашение «This will install… Do you want to continue?» в неинтерактивной установке означает
+; зависание: закрыть его некому (так ставит своё обновление сама панель и так её ставит winget).
+; Ставим директиву явно, хотя справка Inno противоречит сама себе: на странице директивы написано,
+; что значение по умолчанию «yes», а на странице про /SILENT — что приглашение остаётся и снимается
+; только ключом /SP-. Опираться на противоречивую справку нельзя, поэтому закрываем вопрос двумя
+; способами сразу: этой директивой и ключом /SP- в тихих ключах манифеста winget.
+DisableStartupPrompt=yes
 
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
@@ -474,6 +490,29 @@ begin
   Result := HasDotNet8Desktop;
 end;
 
+{ Показать сообщение человеку или — в тихой установке — записать его в журнал.
+
+  Зачем не MsgBox напрямую: MsgBox из [Code] входит в список окон, которые
+  /SUPPRESSMSGBOXES НЕ глушит (справка Inno перечисляет их прямо). В /SILENT и даже
+  /VERYSILENT такое окно всё равно показывается, а в неинтерактивном прогоне его никто не
+  закроет: `winget install`/`upgrade` встал бы на нём насмерть. Показываем окно только
+  тогда, когда человек у экрана; в тихом прогоне текст уходит в журнал установки — его
+  человек прочитает там (журнал есть при /LOG, и он же остаётся у winget в отчёте).
+
+  Существование окна при этом не теряется, а ЖДЁТ человека: тот же текст человек увидит
+  потом в панели — она говорит, чего ей не хватает (среда .NET, Node).
+
+  Текст берём уже развёрнутым (константу с префиксом cm: разворачивает вызывающий),
+  потому что ExpandConstant в журнал не попадает: там она осталась бы как есть. Фигурные
+  скобки в этом комментарии писать нельзя — комментарий закроется на первой из них. }
+procedure SayOrLog(const text: String; const kind: TMsgBoxType);
+begin
+  if WizardSilent then
+    Log('Сообщение установщика (окно подавлено, тихий режим): ' + text)
+  else
+    MsgBox(text, kind, MB_OK);
+end;
+
 { Ставит среду .NET из файла внутри установщика. Вызывается в конце установки: окно в этот
   момент видно, и человек понимает, что идёт работа. Права администратора среда спрашивает
   сама (UAC) — это неизбежно, она ставится для всей машины. }
@@ -489,7 +528,7 @@ begin
 
     if not HasMicrosoftSignature(runtimePath) then
     begin
-      MsgBox(ExpandConstant('{cm:dotnetNoSignature}'), mbError, MB_OK);
+      SayOrLog(ExpandConstant('{cm:dotnetNoSignature}'), mbError);
       Exit;
     end;
 
@@ -501,17 +540,17 @@ begin
       { Код 0 или 3010 (нужна перезагрузка) — установка прошла; самой среды в реестре и папках
         может ещё не быть, поэтому ждём её появления. }
       if not WaitDotNet8(240) then
-        MsgBox(ExpandConstant('{cm:dotnetMissing}'), mbInformation, MB_OK);
+        SayOrLog(ExpandConstant('{cm:dotnetMissing}'), mbInformation);
     end
     else
-      MsgBox(ExpandConstant('{cm:dotnetMissing}'), mbInformation, MB_OK);
+      SayOrLog(ExpandConstant('{cm:dotnetMissing}'), mbInformation);
   except
     { Распаковать не удалось (мало места во временной папке) — скажем, где взять среду. }
-    MsgBox(ExpandConstant('{cm:dotnetMissing}'), mbInformation, MB_OK);
+    SayOrLog(ExpandConstant('{cm:dotnetMissing}'), mbInformation);
   end;
 #else
   { Установщик собран без среды внутри (сборка без интернета): о ней только сообщаем. }
-  MsgBox(ExpandConstant('{cm:dotnetMissing}'), mbInformation, MB_OK);
+  SayOrLog(ExpandConstant('{cm:dotnetMissing}'), mbInformation);
 #endif
 end;
 
@@ -614,7 +653,7 @@ begin
 
   if not started then
   begin
-    MsgBox(ExpandConstant('{cm:restoreFailed}'), mbError, MB_OK);
+    SayOrLog(ExpandConstant('{cm:restoreFailed}'), mbError);
     Exit;
   end;
 
@@ -628,9 +667,9 @@ begin
   end;
 
   if code = 0 then
-    MsgBox(ExpandConstant('{cm:restoreDone}') + #13#10#13#10 + tail, mbInformation, MB_OK)
+    SayOrLog(ExpandConstant('{cm:restoreDone}') + #13#10#13#10 + tail, mbInformation)
   else
-    MsgBox(ExpandConstant('{cm:restoreFailedTail}') + #13#10#13#10 + tail, mbError, MB_OK);
+    SayOrLog(ExpandConstant('{cm:restoreFailedTail}') + #13#10#13#10 + tail, mbError);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -671,7 +710,7 @@ begin
       иначе установщик ругался «Node.js ставит сама панель, а ей нужен .NET», хотя среду
       только что поставили (это и увидел владелец на приёмке). }
     if not WaitDotNet8(60) then
-      MsgBox(ExpandConstant('{cm:nodeNoDotNet}'), mbInformation, MB_OK)
+      SayOrLog(ExpandConstant('{cm:nodeNoDotNet}'), mbInformation)
     else
     begin
       report := ExpandConstant('{tmp}\node-report.txt');
@@ -692,9 +731,9 @@ begin
         end;
 
         if text <> '' then
-          MsgBox(ExpandConstant('{cm:nodeFailed}') + #13#10#13#10 + text, mbError, MB_OK)
+          SayOrLog(ExpandConstant('{cm:nodeFailed}') + #13#10#13#10 + text, mbError)
         else
-          MsgBox(ExpandConstant('{cm:nodeFailed}'), mbError, MB_OK);
+          SayOrLog(ExpandConstant('{cm:nodeFailed}'), mbError);
       end;
     end;
   end;
@@ -705,7 +744,7 @@ begin
   { Панель без среды выполнения не запустится, а накат делает именно она. }
   if not HasDotNet8Desktop then
   begin
-    MsgBox(ExpandConstant('{cm:restoreNoDotNet}'), mbError, MB_OK);
+    SayOrLog(ExpandConstant('{cm:restoreNoDotNet}'), mbError);
     Exit;
   end;
 

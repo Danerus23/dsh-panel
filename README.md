@@ -54,6 +54,8 @@
   secret.
 - **Three languages.** English, Russian and 中文 — picked from your system language, switchable in
   Settings and applied immediately.
+- **Updates.** The panel updates itself from GitHub releases: it downloads its own build variant,
+  requires the published `SHA256SUMS.txt` and shows what is new.
 
 ## Requirements
 
@@ -82,7 +84,8 @@ Then press **Start**: the panel starts the server and opens the browser with the
 
 Everything stays in your user profile: the installer puts the app into
 `%LOCALAPPDATA%\Programs\DSH Panel` (no `Program Files`, no administrator rights), and the portable
-zip leaves no traces outside its own folder. Both use the data folders below; deleting the app folder
+zip installs nothing — it only creates the data folders below and, if you ask for it, the autostart
+entry. Both variants keep their data in the folders below; deleting the app folder
 (or uninstalling) removes the program, and the data folders stay until you delete them — the
 uninstaller clears only what it can recreate itself (the update staging and the portable Node inside
 the state folder).
@@ -95,8 +98,10 @@ cd dsh-panel
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\make-release.ps1
 ```
 
-The script builds the panel, runs every check, builds the installer and writes the release files into
-`dist/`. What it needs besides the source: .NET SDK 8, Node.js (for the checks that talk to the
+The script builds the panel, runs every automatic check it can, builds the installer and writes the
+release files into `dist/`. Three checks deliberately stay out of it — `tools\check-installed.ps1`
+(installs the panel), `tools\check-onboarding.ps1` (needs a desktop) and `tools\verify-release.ps1`
+(goes to GitHub); `AGENTS.md` lists which they are and why. What it needs besides the source: .NET SDK 8, Node.js (for the checks that talk to the
 GitHub stub) and [Inno Setup 7](https://jrsoftware.org/isdl.php) — the installer is built with it.
 The .NET Desktop Runtime that goes inside the installer is downloaded during the build and checked
 against Microsoft's signature. Step by step details are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
@@ -108,7 +113,7 @@ against Microsoft's signature. Step by step details are in [docs/DEVELOPMENT.md]
 | Panel settings, peak-hour windows | `%APPDATA%\DshPanel\` |
 | Logs, `server.pid`, the sign-in link | `%LOCALAPPDATA%\DshPanel\` |
 | Backups (folder is changeable in the window) | `Documents\DeepSeekHarness-Backups` |
-| DSH data — yours, the panel only reads it | `%USERPROFILE%\.dsh` |
+| DSH data — yours: the panel reads it, and writes into it only when you restore a backup | `%USERPROFILE%\.dsh` |
 | Autostart entry | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
 
 ## Command line
@@ -128,7 +133,7 @@ against Microsoft's signature. Step by step details are in [docs/DEVELOPMENT.md]
 | `--backup [--full]` | make a backup without the window (`--full` adds the engine and Node) |
 | `--backup-check [--from file] [--out file]` | verify a backup: without `--from` the newest one is used |
 | `--restore [--from file] [--keys] [--no-engine]` | restore from a backup: data, panel settings and the engine; `--keys` brings keys back too |
-| `--hidden` | same as `--tray`: start minimized to the tray (used by autostart) |
+| `--hidden` | same as `--tray`: start minimized to the tray (an alias kept for autostart entries written by older versions) |
 | `--no-safety` | on restore, skip the safety copy of the current state |
 | `--no-settings` | on restore, leave the panel settings alone |
 | `--update-check [--out file]` | ask GitHub whether a newer version exists (the Updates tab shows the same) |
@@ -187,6 +192,10 @@ MIT — see [LICENSE](LICENSE).
 
 Every window is available in English, Russian and 中文 — they are taken on a separate profile, so
 no personal paths or data are in them.
+
+![Four windows at a glance: the panel, settings, backups and the tray menu.](docs/demo.png)
+
+Four windows at a glance: the panel, settings, backups and the tray menu.
 
 | | English | Русский | 中文 |
 | --- | --- | --- | --- |

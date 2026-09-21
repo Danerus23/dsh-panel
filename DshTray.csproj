@@ -24,7 +24,7 @@
     <!-- Номер версии задаётся один раз здесь; FileVersion выводим из него, чтобы две
          строки не разъехались при подъёме версии. Порядок важен: $(Version) должен
          быть объявлен раньше, иначе MSBuild подставит пустоту. -->
-    <Version>1.20.3</Version>
+    <Version>1.21.0</Version>
     <FileVersion>$(Version).0</FileVersion>
     <NeutralLanguage>ru-RU</NeutralLanguage>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -55,8 +55,16 @@
     <None Update="README.zh.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <!-- История версий едет вместе с панелью: её открывает пункт меню в трее. -->
+    <!-- История версий едет вместе с панелью: её открывает пункт меню в трее.
+         Английская и китайская истории ведутся с 1.21.0 — они рядом, а полную историю
+         до неё несёт только CHANGELOG.md. -->
     <None Update="CHANGELOG.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="CHANGELOG.en.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="CHANGELOG.zh.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="dsh-tray.ico">

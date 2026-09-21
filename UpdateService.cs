@@ -969,6 +969,459 @@ public static class UpdateService
         }
     }
 
+    /// <summary>
+    /// Текст заметок к выпуску на языке интерфейса. Тело релиза несёт три блока с машинными
+    /// маркерами («&lt;!-- dsh-notes:en --&gt;» … «&lt;!-- /dsh-notes:en --&gt;»): английский,
+    /// русский и китайский (см. tools\release-notes.ps1). Правила: блок по языку; нет его — английский;
+    /// маркеров нет вовсе (выпуски до 1.21.0) — тело целиком, как показывала панель раньше.
+    /// Кривой или незакрытый маркер — тоже тело целиком: пустое окно человеку хуже, чем лишние
+    /// строки. Метки внутри ограждённых блоков (``` и ~~~) за маркеры не считаются.
+    /// </summary>
+    public static string PickNotes(string body, string language)
+    {
+        if (string.IsNullOrEmpty(body)) return body ?? "";
+
+        var blocks = NotesBlocks(body);
+        if (blocks.Count == 0) return body;
+
+        var wanted = (language ?? "").Trim().ToLowerInvariant();
+        if (wanted.Length > 0 && blocks.TryGetValue(wanted, out var own) && own.Length > 0) return own;
+        if (blocks.TryGetValue("en", out var english) && english.Length > 0) return english;
+
+        // Маркеры есть, а понятного текста в них нет: показываем тело как есть.
+        return body;
+    }
+
+    /// <summary>
+    /// Сырое тело релиза, каким его стоит запомнить до показа. В настройках лежит именно
+    /// оно, а не выбранный блок: язык интерфейса меняется, и заметки обязаны пересобраться
+    /// в окне (см. SettingsForm.FillUpdates), а не ждать следующей проверки обновлений
+    /// (она бывает не чаще раза в сутки).
+    ///
+    /// Предел здесь — про размер settings.json, и он заметно больше предела показа: тело
+    /// несёт три языка сразу. Тело, помещающееся в предел, хранится как пришло. Тело длиннее
+    /// СНАЧАЛА разбирается на блоки, и в настройки едут только сами блоки: обрезка «как
+    /// получилось» рвала бы маркер, у разбора осталось бы ноль блоков, и
+    /// <see cref="PickNotes"/> отдал бы всё тело — на русском интерфейсе английское.
+    /// Блок входит целиком, если влезает; иначе его содержимое режется по безопасной границе
+    /// (<see cref="CutBlock"/>); если резать нечего — блок отбрасывается. Порядок блоков
+    /// задаёт приоритет: русский как источник истины выживает первым. Размер считается по
+    /// настоящей длине маркеров, а не по оценке, поэтому предел держится и на телах с
+    /// длинными именами блоков. Текст вне блоков ничего не теряет: когда блоки найдены,
+    /// PickNotes тело не отдаёт вообще.
+    ///
+    /// Предел показа — отдельное правило, оно живёт в <see cref="PickNotesForPanel"/>.
+    /// </summary>
+    public static string RawNotes(string body)
+    {
+        var text = body ?? "";
+        if (text.Length <= NotesBodyLimit) return text;
+
+        var blocks = NotesBlocks(text);
+        if (blocks.Count == 0) return CutNotes(text, NotesBodyLimit);
+
+        var order = NotesOrder(blocks);
+
+        // «Обвязка» блока — маркеры с двух сторон и пустая строка между блоками — считается по
+        // настоящей строке маркеров: длинное имя блока иначе съедало бы предел, и он переставал
+        // быть пределом. Блок, на который не остаётся даже места под маркеры, отбрасывается.
+        var busy = 0;
+        var chosen = new List<string>();
+        foreach (var language in order)
+        {
+            // Пустой блок для показа неотличим от отсутствующего: PickNotes такие пропускает.
+            if (blocks[language].Length == 0) continue;
+
+            var cost = NotesBlock(language, "").Length + (chosen.Count == 0 ? 0 : NotesGap.Length);
+            if (busy + cost > NotesBodyLimit) continue;
+
+            busy += cost;
+            chosen.Add(language);
+        }
+
+        if (chosen.Count == 0) return "";
+
+        // Доли содержимого: сперва целиком влезающие блоки (по приоритету), затем остаток
+        // поровну между теми, кому целиком не хватило. Так короткий перевод ничего не теряет
+        // и не отнимает место у длинного, а у каждого языка остаётся своя часть.
+        var pool = NotesBodyLimit - busy;
+        var limits = new int[chosen.Count];
+        var whole = new bool[chosen.Count];
+        var open = 0;
+        for (var index = 0; index < chosen.Count; index++)
+        {
+            var content = blocks[chosen[index]];
+            if (content.Length > pool)
+            {
+                open++;
+                continue;
+            }
+
+            limits[index] = content.Length;
+            whole[index] = true;
+            pool -= content.Length;
+        }
+
+        if (open > 0)
+        {
+            var share = pool / open;
+            for (var index = 0; index < chosen.Count; index++)
+            {
+                if (!whole[index]) limits[index] = share;
+            }
+        }
+
+        // Сборка с проверкой: NotesBlocks узнаёт маркер только вне ограждения, поэтому мало
+        // сложить блоки обратно — собранное обязано разбираться заново ровно так, как задумано.
+        // Неподтвердившийся блок отбрасываем: пустое значение честнее тела не на своём языке.
+        var stored = "";
+        for (var index = 0; index < chosen.Count; index++)
+        {
+            var content = CutBlock(blocks[chosen[index]], limits[index]);
+            if (content.Length == 0) continue;
+
+            var block = NotesBlock(chosen[index], content);
+            var trial = stored.Length == 0 ? block : stored + NotesGap + block;
+            if (!NotesReads(trial, chosen[index], content)) continue;
+
+            stored = trial;
+        }
+
+        return stored;
+    }
+
+    /// <summary>
+    /// Порядок блоков при пересборке длинного тела: сперва русский (источник истины — он
+    /// выживает первым), затем языки панели, затем остальные по алфавиту. На выбор языка при
+    /// показе порядок не влияет: он нужен только для приоритета и повторяемости settings.json.
+    /// </summary>
+    private static List<string> NotesOrder(Dictionary<string, string> blocks)
+    {
+        var order = new List<string>();
+        foreach (var known in new[] { "ru", "en", "zh" })
+        {
+            if (blocks.ContainsKey(known)) order.Add(known);
+        }
+
+        var rest = new List<string>();
+        foreach (var key in blocks.Keys)
+        {
+            if (!order.Exists(taken => string.Equals(taken, key, StringComparison.OrdinalIgnoreCase))) rest.Add(key);
+        }
+        rest.Sort(StringComparer.OrdinalIgnoreCase);
+        order.AddRange(rest);
+        return order;
+    }
+
+    /// <summary>
+    /// Содержимое блока, урезанное по пределу так, чтобы его снова разобрал
+    /// <see cref="NotesBlocks"/>: ограждение ``` или ~~~ не разрезано пополам (разрезанное
+    /// уводит закрывающий маркер «в код», у разбора получается ноль блоков, и на русском
+    /// интерфейсе показывается английское тело), комментарий «&lt;!--» не оборван, суррогатная
+    /// пара UTF-16 цела. Резать нечего — вернётся пустая строка, и блок отбрасывается.
+    /// </summary>
+    private static string CutBlock(string content, int limit)
+    {
+        if (limit <= 0) return "";
+
+        // Безопасное место ищем и для содержимого, которое в предел влезает целиком: оно могло
+        // остаться с незакрытым ограждением (NotesBlocks собирает текст из строк и потом
+        // обрезает пробелы краёв — отступ первой строки от этого меняется).
+        var cut = SafeCut(content, Math.Min(limit, content.Length), fences: true);
+        return cut > 0 ? content[..cut].TrimEnd() : "";
+    }
+
+    /// <summary>
+    /// Обрезка заметок, в которых меток нет (так выглядят выпуски до 1.21.0): они показываются
+    /// целиком, но и такое тело нельзя рвать посередине суррогатной пары или открытого
+    /// комментария «&lt;!--». Ограждения здесь не учитываются: разбирать на блоки нечего.
+    /// </summary>
+    private static string CutNotes(string text, int limit)
+    {
+        if (limit <= 0) return "";
+        if (text.Length <= limit) return text;
+
+        var cut = SafeCut(text, limit, fences: false);
+        return cut > 0 ? text[..cut].TrimEnd() : "";
+    }
+
+    /// <summary>
+    /// Ближайшее к пределу место, на котором текст можно оборвать: не разрезав суррогатную
+    /// пару UTF-16 (разрезанная уезжает в settings.json как «\uFFFD»), не оставив открытый
+    /// комментарий «&lt;!-- … --&gt;» и — когда <paramref name="fences"/> — не оставив
+    /// незакрытое ограждение ``` или ~~~. Ноль значит «безопасного места нет».
+    /// </summary>
+    private static int SafeCut(string text, int limit, bool fences)
+    {
+        var cut = Math.Min(limit, text.Length);
+        while (cut > 0)
+        {
+            if (char.IsHighSurrogate(text[cut - 1]))
+            {
+                cut--;  // низ пары остался за пределом — режем до неё
+                continue;
+            }
+
+            if (CommentOpen(text, cut))
+            {
+                var open = text.LastIndexOf("<!--", cut - 1, StringComparison.Ordinal);
+                cut = open > 0 ? open : 0;
+                continue;
+            }
+
+            if (fences && FenceOpen(text, cut, out var openedAt))
+            {
+                cut = openedAt > 0 ? openedAt : 0;   // последнее непарное открытие отбрасываем
+                continue;
+            }
+
+            break;
+        }
+
+        return cut;
+    }
+
+    /// <summary>
+    /// Открыт ли в префиксе комментарий «&lt;!--» без закрывающего «--&gt;». Считается по
+    /// последнему открытию и последнему закрытию: комментарий может тянуться через строки,
+    /// а префикс может обрываться внутри самой метки.
+    /// </summary>
+    private static bool CommentOpen(string text, int length)
+    {
+        if (length <= 0) return false;
+
+        var open = text.LastIndexOf("<!--", length - 1, StringComparison.Ordinal);
+        if (open < 0) return false;
+        if (open + 4 > length) return true;
+
+        var close = text.LastIndexOf("-->", length - 1, StringComparison.Ordinal);
+        if (close < 0 || close + 3 > length) return true;
+
+        return close < open;
+    }
+
+    /// <summary>
+    /// Открыто ли ограждение (``` или ~~~) к позиции <paramref name="length"/> и где оно
+    /// началось. Строка-ограждение читается только целиком: незавершённая последняя строка
+    /// нового ограждения не открывает, но уже открытое не закрывает — так же читает её и
+    /// Markdown, и <see cref="NotesBlocks"/>.
+    /// </summary>
+    private static bool FenceOpen(string text, int length, out int openedAt)
+    {
+        openedAt = -1;
+        var fence = ' ';
+        var fenceLength = 0;
+        var index = 0;
+
+        while (index < length)
+        {
+            var newline = text.IndexOf('\n', index);
+            var end = newline < 0 || newline > length ? length : newline;
+            var line = text[index..end];
+
+            if (fence != ' ')
+            {
+                if (IsFenceEnd(line, fence, fenceLength))
+                {
+                    fence = ' ';
+                    fenceLength = 0;
+                }
+            }
+            else if (IsFenceStart(line, out var marker, out var run))
+            {
+                fence = marker;
+                fenceLength = run;
+                openedAt = index;
+            }
+
+            if (end >= length) break;
+            index = end + 1;
+        }
+
+        return fence != ' ';
+    }
+
+    /// <summary>Один блок в том виде, в каком он ложится в настройки: маркеры и текст между ними.</summary>
+    private static string NotesBlock(string language, string content) =>
+        "<!-- dsh-notes:" + language + " -->\n" + content + "\n<!-- /dsh-notes:" + language + " -->";
+
+    /// <summary>Пустая строка между блоками в настройках.</summary>
+    private const string NotesGap = "\n\n";
+
+    /// <summary>
+    /// Читается ли собранный текст так, как задумано: нужный блок на месте и с тем же текстом.
+    /// Проверка настоящая, а не «мы же его сами собрали»: NotesBlocks видит маркер только вне
+    /// ограждения, и разъехавшееся ограждение увело бы маркер в код.
+    /// </summary>
+    private static bool NotesReads(string text, string language, string content)
+    {
+        var blocks = NotesBlocks(text);
+        return blocks.TryGetValue(language, out var parsed) &&
+               string.Equals(parsed, content, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Тот же выбор языка, но для окна панели: текст обрезается по прежнему пределу в 8000
+    /// знаков, чтобы заметки не раздували settings.json. Обрезка идёт ПОСЛЕ выбора блока —
+    /// иначе длинный английский блок вытеснил бы короткий блок другого языка.
+    /// </summary>
+    public static string PickNotesForPanel(string body, string language)
+    {
+        var notes = PickNotes(body, language);
+        return notes.Length > NotesLimit ? notes[..NotesLimit] : notes;
+    }
+
+    /// <summary>Сколько знаков заметок согласна хранить панель в settings.json.</summary>
+    private const int NotesLimit = 8000;
+
+    /// <summary>Сколько знаков СЫРОГО тела релиза панель согласна хранить в settings.json.</summary>
+    private const int NotesBodyLimit = 20000;
+
+    /// <summary>
+    /// Разбирает тело релиза на блоки по маркерам. Маркер обязан стоять один на всей строке
+    /// (так его пишет release-notes.ps1): иначе слова о маркерах внутри самих заметок сбивали бы
+    /// разбор. Незакрытая пара в словарь не попадает, повторный маркер ничего не переписывает.
+    ///
+    /// ОГРАЖДЁННЫЕ БЛОКИ (``` и ~~~) разбор не видит. Тело — недоверенный текст: он приходит
+    /// с GitHub и его можно поправить руками на странице выпуска. История, которая рассказывает
+    /// про формат заметок и показывает пример метки в ограждённом блоке, иначе объявила бы
+    /// пример настоящим блоком — и настоящий перевод был бы отброшен.
+    /// </summary>
+    private static Dictionary<string, string> NotesBlocks(string body)
+    {
+        var blocks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var open = "";
+        var content = new List<string>();
+
+        // Ограждение: ``` или ~~~ (не меньше трёх), в том числе с языком после них.
+        var fence = ' ';
+        var fenceLength = 0;
+
+        foreach (var line in body.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        {
+            var trimmed = line.Trim();
+
+            if (fence != ' ')
+            {
+                // Внутри ограждённого блока. Меткой не считается НИ ОДНА строка блока — ни
+                // закрывающее ограждение, ни строки между ними. Само ограждение — часть текста
+                // заметок, поэтому в открытый блок оно попадает наравне с содержимым.
+                if (IsFenceEnd(line, fence, fenceLength)) fence = ' ';
+                if (open.Length > 0) content.Add(line);
+                if (fence == ' ') fenceLength = 0;
+                continue;
+            }
+
+            if (IsFenceStart(line, out var marker, out var run))
+            {
+                // Ограждение внутри открытого блока — часть его текста (так его читает и
+                // Markdown), поэтому открытый блок НЕ трогаем: содержимое кода в заметках
+                // законно, а вот метка внутри него — нет.
+                fence = marker;
+                fenceLength = run;
+                if (open.Length > 0) content.Add(line);
+                continue;
+            }
+
+            var language = "";
+
+            if (trimmed.StartsWith("<!--", StringComparison.Ordinal) &&
+                trimmed.EndsWith("-->", StringComparison.Ordinal) && trimmed.Length > 7)
+            {
+                var inner = trimmed[4..^3].Trim();
+                if (inner.StartsWith("dsh-notes:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var name = inner["dsh-notes:".Length..].Trim().ToLowerInvariant();
+                    if (name.Length > 0) language = name;
+                }
+                else if (inner.StartsWith("/dsh-notes:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var name = inner["/dsh-notes:".Length..].Trim().ToLowerInvariant();
+                    // Закрывающий маркер без открывающего — просто строка текста, а не граница.
+                    if (open.Length > 0 && name == open)
+                    {
+                        if (!blocks.ContainsKey(open)) blocks[open] = string.Join("\n", content).Trim();
+                        open = "";
+                        content.Clear();
+                    }
+                    continue;
+                }
+            }
+
+            if (language.Length > 0)
+            {
+                // Открывающий маркер: предыдущий блок остался незакрытым — он не считается.
+                open = language;
+                content.Clear();
+                continue;
+            }
+
+            if (open.Length > 0) content.Add(line);
+        }
+
+        return blocks;
+    }
+
+    /// <summary>
+    /// Начало строки: сколько в ней пробелов (табуляция — за четыре) и что идёт следом.
+    /// Нужно ограждениям: Markdown допускает у начала блока не больше трёх пробелов, а
+    /// с большим отступом ограждение — это уже код внутри списка, а не граница блока.
+    /// </summary>
+    private static int FenceIndent(string line, out string rest)
+    {
+        var spaces = 0;
+        var index = 0;
+        while (index < line.Length)
+        {
+            if (line[index] == ' ') spaces++;
+            else if (line[index] == '\t') spaces += 4;
+            else break;
+            index++;
+        }
+
+        rest = line[index..].TrimEnd();
+        return spaces;
+    }
+
+    /// <summary>
+    /// Открывает ли строка ограждённый блок кода. Разметка Markdown: не больше трёх пробелов
+    /// отступа, три и больше символов «`» или «~», после них — что угодно (обычно язык).
+    /// Смешанные символы (```~) началом не считаются: так же читает их и Markdown.
+    /// </summary>
+    private static bool IsFenceStart(string line, out char marker, out int run)
+    {
+        marker = ' ';
+        run = 0;
+
+        if (FenceIndent(line, out var rest) > 3) return false;
+        if (rest.Length < 3) return false;
+
+        var first = rest[0];
+        if (first != '`' && first != '~') return false;
+
+        var length = 0;
+        while (length < rest.Length && rest[length] == first) length++;
+        if (length < 3) return false;
+
+        marker = first;
+        run = length;
+        return true;
+    }
+
+    /// <summary>
+    /// Закрывает ли строка открытый ограждённый блок: тот же символ и не короче открывшего.
+    /// Хвост после ограждения допускается — Markdown его игнорирует.
+    /// </summary>
+    private static bool IsFenceEnd(string line, char marker, int run)
+    {
+        var indent = FenceIndent(line, out var rest);
+        if (indent > 3 || rest.Length < run || rest[0] != marker) return false;
+
+        var length = 0;
+        while (length < rest.Length && rest[length] == marker) length++;
+        return length >= run;
+    }
+
     /// <summary>«v1.21.0» → «1.21.0»: теги на GitHub обычно с буквой.</summary>
     private static string Clean(string version)
     {

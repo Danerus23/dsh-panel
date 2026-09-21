@@ -16,7 +16,19 @@
 #   4. installer\appversion.iss совпадает с csproj;
 #   5. версия dsh-panel-setup.exe совпадает с csproj;
 #   6. версии внутри архивов (build.txt в DshPanel.zip) совпадают с csproj;
-#   7. если задана папка копий — в каждой копии опись читается и её версии записаны.
+#   7. манифест winget согласован САМ С СОБОЙ (см. ниже);
+#   8. если задана папка копий — в каждой копии опись читается и её версии записаны.
+#
+# Про пункт 7 отдельно. Версия манифеста НЕ обязана совпадать с <Version> проекта
+# в момент сборки: манифест обновляют ПОСЛЕ публикации выпуска, когда CI уже собрал свой
+# установщик и его SHA-256 отличается от локального. Поэтому здесь ловится не расхождение
+# с проектом, а противоречия ВНУТРИ манифеста:
+#   * PackageVersion в трёх файлах одна и та же;
+#   * InstallerUrl указывает на тот же тег v<PackageVersion>, а InstallerSha256 — 64 hex;
+#   * ReleaseNotesUrl ведёт на тег v<PackageVersion>;
+#   * все три файла называют один PackageIdentifier и правильные ManifestType.
+# Такую ошибку (версия от одного выпуска, сумма от другого) иначе видно только тогда,
+# когда пакет уже не ставится у людей.
 #
 # Код возврата 0 — всё сходится; 1 — расхождение (печатает, где именно).
 
@@ -24,6 +36,7 @@ param(
     [string]$Project = '',
     [string]$Dist = '',
     [string]$Backups = '',
+    [string]$Winget = '',
     [switch]$Quiet
 )
 
@@ -31,6 +44,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Project) { $Project = Join-Path $root 'DshTray.csproj' }
 if (-not $Dist) { $Dist = Join-Path $root 'dist' }
+if (-not $Winget) { $Winget = Join-Path $root 'winget' }
 
 $problems = New-Object System.Collections.Generic.List[string]
 $lines = New-Object System.Collections.Generic.List[string]
@@ -48,6 +62,21 @@ function Assert-Same([string]$what, [string]$found, [string]$expected) {
 
     Say ('  БЕДА ' + $what + ': ' + $found + ', ожидалось ' + $expected)
     $problems.Add($what)
+}
+
+# Читает одно поле манифеста и сообщает, если строки нет или их несколько.
+function Get-ManifestField([string]$name, [string]$path, [string]$pattern, [string]$what) {
+    $matches = [regex]::Matches((Get-Content -LiteralPath $path -Raw -Encoding UTF8), $pattern)
+    if ($matches.Count -eq 0) {
+        Say ('  БЕДА ' + $name + ': нет строки ' + $what)
+        $problems.Add($name + ': нет ' + $what)
+        return ''
+    }
+    if ($matches.Count -gt 1) {
+        Say ('  БЕДА ' + $name + ': строка ' + $what + ' встречается ' + $matches.Count + ' раз')
+        $problems.Add($name + ': ' + $what + ' повторяется')
+    }
+    return $matches[0].Groups[1].Value.Trim()
 }
 
 # --- 1. базовый номер ---------------------------------------------------------
@@ -137,7 +166,109 @@ else {
     Say '  --   DshPanel.zip нет — шаг пропущен'
 }
 
-# --- 7. версии в резервных копиях (для комплекта на чистую машину) -------------
+# --- 7. согласованность манифеста winget --------------------------------------
+#
+# Манифест — данные для winget, и он правится отдельным шагом ПОСЛЕ выпуска. Поэтому
+# сверяем его сам с собой, а не с версией проекта. Папки winget может не быть вовсе
+# (её нет в старых копиях) — тогда шаг пропускается, а не валит проверку.
+
+if (-not (Test-Path -LiteralPath $Winget)) {
+    Say ('  --   папки ' + $Winget + ' нет — шаг манифеста пропущен')
+}
+else {
+    $manifestNames = @(
+        'Danerus23.DSHPanel.yaml',
+        'Danerus23.DSHPanel.installer.yaml',
+        'Danerus23.DSHPanel.locale.en-US.yaml'
+    )
+    $manifests = @{}
+
+    foreach ($name in $manifestNames) {
+        $path = Join-Path $Winget $name
+        if (-not (Test-Path -LiteralPath $path)) {
+            Say ('  БЕДА манифест winget: нет файла ' + $name)
+            $problems.Add('манифест winget: нет ' + $name)
+            continue
+        }
+
+        $manifests[$name] = @{
+            Id = Get-ManifestField $name $path '(?m)^PackageIdentifier:\s*(\S+)\s*$' 'PackageIdentifier'
+            Version = Get-ManifestField $name $path '(?m)^PackageVersion:\s*(\S+)\s*$' 'PackageVersion'
+            Type = Get-ManifestField $name $path '(?m)^ManifestType:\s*(\S+)\s*$' 'ManifestType'
+        }
+    }
+
+    $versionManifest = 'Danerus23.DSHPanel.yaml'
+    $installerManifest = 'Danerus23.DSHPanel.installer.yaml'
+    $localeManifest = 'Danerus23.DSHPanel.locale.en-US.yaml'
+
+    if ($manifests.ContainsKey($versionManifest)) {
+        $manifestVersion = $manifests[$versionManifest].Version
+        $manifestId = $manifests[$versionManifest].Id
+        Say ('  ок   манифест winget: ' + $manifestId + ' ' + $manifestVersion)
+
+        # Внутри одного манифеста версия обязана встречаться ровно один раз и быть номером выпуска.
+        if ($manifestVersion -notmatch '^\d+\.\d+\.\d+') {
+            Say ('  БЕДА манифест winget: PackageVersion не похожа на номер выпуска: ' + $manifestVersion)
+            $problems.Add('манифест winget: PackageVersion')
+        }
+
+        foreach ($name in @($installerManifest, $localeManifest)) {
+            if (-not $manifests.ContainsKey($name)) { continue }
+            Assert-Same ('манифест ' + $name + ' (PackageVersion)') $manifests[$name].Version $manifestVersion
+            Assert-Same ('манифест ' + $name + ' (PackageIdentifier)') $manifests[$name].Id $manifestId
+        }
+
+        Assert-Same 'манифест version (ManifestType)' $manifests[$versionManifest].Type 'version'
+        if ($manifests.ContainsKey($installerManifest)) {
+            Assert-Same 'манифест installer (ManifestType)' $manifests[$installerManifest].Type 'installer'
+        }
+        if ($manifests.ContainsKey($localeManifest)) {
+            Assert-Same 'манифест defaultLocale (ManifestType)' $manifests[$localeManifest].Type 'defaultLocale'
+        }
+
+        if ($manifests.ContainsKey($installerManifest)) {
+            $installerPath = Join-Path $Winget $installerManifest
+            $url = Get-ManifestField $installerManifest $installerPath '(?m)^\s*InstallerUrl:\s*(\S+)\s*$' 'InstallerUrl'
+            $sum = Get-ManifestField $installerManifest $installerPath '(?m)^\s*InstallerSha256:\s*(\S+)\s*$' 'InstallerSha256'
+
+            if ($sum -and $sum -notmatch '^[0-9A-Fa-f]{64}$') {
+                Say ('  БЕДА манифест winget: InstallerSha256 не 64 hex: ' + $sum)
+                $problems.Add('манифест winget: InstallerSha256')
+            }
+            elseif ($sum) {
+                Say ('  ок   манифест winget: InstallerSha256 — 64 hex')
+            }
+
+            if ($url -and -not ($url -match ('/download/v' + [regex]::Escape($manifestVersion) + '/'))) {
+                Say ('  БЕДА манифест winget: InstallerUrl указывает не на тег v' + $manifestVersion + ': ' + $url)
+                $problems.Add('манифест winget: InstallerUrl')
+            }
+            elseif ($url) {
+                Say ('  ок   манифест winget: InstallerUrl — тег v' + $manifestVersion)
+            }
+
+            if ($url -and -not ($url -match '/dsh-panel-setup\.exe$')) {
+                Say ('  БЕДА манифест winget: InstallerUrl указывает не на dsh-panel-setup.exe: ' + $url)
+                $problems.Add('манифест winget: имя файла в InstallerUrl')
+            }
+        }
+
+        if ($manifests.ContainsKey($localeManifest)) {
+            $localePath = Join-Path $Winget $localeManifest
+            $notes = Get-ManifestField $localeManifest $localePath '(?m)^ReleaseNotesUrl:\s*(\S+)\s*$' 'ReleaseNotesUrl'
+            if ($notes -and -not ($notes -match ('/releases/tag/v' + [regex]::Escape($manifestVersion) + '$'))) {
+                Say ('  БЕДА манифест winget: ReleaseNotesUrl указывает не на тег v' + $manifestVersion + ': ' + $notes)
+                $problems.Add('манифест winget: ReleaseNotesUrl')
+            }
+            elseif ($notes) {
+                Say ('  ок   манифест winget: ReleaseNotesUrl — тег v' + $manifestVersion)
+            }
+        }
+    }
+}
+
+# --- 8. версии в резервных копиях (для комплекта на чистую машину) -------------
 
 if ($Backups -and (Test-Path -LiteralPath $Backups)) {
     $archives = Get-ChildItem -LiteralPath $Backups -Filter *.zip | Sort-Object Name

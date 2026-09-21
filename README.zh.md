@@ -47,6 +47,8 @@
 - **不问就不打包密钥。** 「把密钥和证书打包进备份」默认关闭；一旦勾选，指定的目录就会进入归档，
   这个归档也就成了机密。
 - **三种语言。** 中文、English 和 Русский —— 跟随系统语言，可在「设置」里切换，立即生效。
+- **更新。** 面板会从 GitHub 发行版自我更新：下载与自己匹配的构建版本，要求存在已发布的
+  `SHA256SUMS.txt`，并显示更新内容。
 
 ## 系统要求
 
@@ -71,7 +73,8 @@
 接下来点 **「启动」**：面板会拉起服务器，并用登录链接打开浏览器。
 
 所有内容都留在用户配置目录里：安装程序把程序装到 `%LOCALAPPDATA%\Programs\DSH Panel`
-（不碰 `Program Files`，也不需要管理员权限），便携版解压后不会在自己的文件夹之外留下任何东西。
+（不碰 `Program Files`，也不需要管理员权限），便携版什么都不安装——它只会创建下面列出的数据
+目录，以及在你要求时写入开机自启动项。
 数据放在下面列出的目录中；删除程序（或在「程序和功能」里卸载）只会移除面板本身，数据目录会一直
 保留，直到你自己删掉——卸载时只清理面板能自行重建的内容：更新暂存目录和状态目录中自带的
 Node。
@@ -84,7 +87,10 @@ cd dsh-panel
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\make-release.ps1
 ```
 
-脚本会构建面板、跑完全部检查、做出安装程序，并把发行文件放进 `dist/`。除源码外还需要：.NET SDK 8、
+脚本会构建面板、跑完它能跑的全部自动检查、做出安装程序，并把发行文件放进 `dist/`。有三项检查
+有意不包含在内——`tools\check-installed.ps1`（会安装面板）、`tools\check-onboarding.ps1`（需要
+桌面）和 `tools\verify-release.ps1`（要访问 GitHub）；具体是哪几项、为什么，见 `AGENTS.md`。
+除源码外还需要：.NET SDK 8、
 Node.js（用于那些要和 GitHub 桩服务打交道的检查）以及 [Inno Setup 7](https://jrsoftware.org/isdl.php)
 ——安装程序由它来打包。塞进安装程序里的那个 .NET 运行库在构建时下载，并按 Microsoft 的签名校验。
 分步细节见 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)。
@@ -96,7 +102,7 @@ Node.js（用于那些要和 GitHub 桩服务打交道的检查）以及 [Inno S
 | 面板设置、峰值时段 | `%APPDATA%\DshPanel\` |
 | 日志、`server.pid`、登录链接 | `%LOCALAPPDATA%\DshPanel\` |
 | 备份（目录可以在窗口里改） | `文档\DeepSeekHarness-Backups` |
-| DSH 数据 —— 属于你，面板只读不写 | `%USERPROFILE%\.dsh` |
+| DSH 数据 —— 属于你：面板会读取它，只有恢复备份时才会写入 | `%USERPROFILE%\.dsh` |
 | 开机自启动项 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` |
 
 ## 命令行
@@ -116,7 +122,7 @@ Node.js（用于那些要和 GitHub 桩服务打交道的检查）以及 [Inno S
 | `--backup [--full]` | 不开窗口直接做备份（`--full` 连引擎和 Node 一起打包） |
 | `--backup-check [--from 文件] [--out 文件]` | 校验备份（不带 `--from` 就检查最新的那份） |
 | `--restore [--from 文件] [--keys] [--no-engine]` | 从备份还原：数据、面板设置和引擎；`--keys` 连密钥一起还原 |
-| `--hidden` | 与 `--tray` 相同：启动时最小化到托盘（自启动使用） |
+| `--hidden` | 与 `--tray` 相同：启动时最小化到托盘（保留此别名，用于旧版本写入的自启动项） |
 | `--no-safety` | 恢复时不创建当前状态的安全备份 |
 | `--no-settings` | 恢复时不动面板设置 |
 | `--update-check [--out 文件]` | 向 GitHub 查询有没有更新的版本（「更新」标签页显示的是同一结果） |
@@ -170,6 +176,10 @@ MIT —— 见 [LICENSE](LICENSE)。
 ## 界面截图
 
 所有窗口都有中文、英文和俄文三种版本。截图是在单独的配置下拍摄的，因此画面里没有个人路径和数据。
+
+![四个窗口一览：面板、设置、备份和托盘菜单。](docs/demo.png)
+
+四个窗口一览：面板、设置、备份和托盘菜单。
 
 | | English | Русский | 中文 |
 | --- | --- | --- | --- |

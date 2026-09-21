@@ -5,7 +5,8 @@ namespace DshTray;
 /// <summary>
 /// Версия панели и история изменений. Номер версии задаётся в DshTray.csproj (SemVer),
 /// а точное время сборки — в штампе build.txt: номер про смысл, штамп про время.
-/// CHANGELOG.md лежит рядом с панелью и едет вместе с ней в установщик и в архив.
+/// Историй три: CHANGELOG.md (русская, источник истины) и переводы CHANGELOG.en.md,
+/// CHANGELOG.zh.md. Все они лежат рядом с панелью и едут вместе с ней в установщик и в архив.
 /// </summary>
 internal static class AppVersion
 {
@@ -34,10 +35,35 @@ internal static class AppVersion
         catch { return false; }
     }
 
-    /// <summary>Открывает историю версий блокнотом: он есть на любой Windows.</summary>
+    /// <summary>
+    /// История для языка интерфейса: CHANGELOG.en.md или CHANGELOG.zh.md, если файл есть,
+    /// иначе CHANGELOG.md. Запасной вариант — русская история, и это честно: переводы ведутся
+    /// с 1.21.0, полная история до неё есть только в ней. Ставить на перевод, которого нет,
+    /// нельзя — человек остался бы без истории вовсе.
+    /// </summary>
+    public static string HistoryFor(string baseDir)
+    {
+        var language = (Loc.Language ?? "").Trim().ToLowerInvariant();
+        if (language == "en" || language == "zh")
+        {
+            var translated = Path.Combine(baseDir, "CHANGELOG." + language + ".md");
+            try
+            {
+                if (File.Exists(translated)) return translated;
+            }
+            catch
+            {
+                // Путь не проверить — показываем русскую историю, она есть всегда.
+            }
+        }
+
+        return PathIn(baseDir);
+    }
+
+    /// <summary>Открывает историю версий на языке интерфейса блокнотом: он есть на любой Windows.</summary>
     public static void OpenChangelog(string baseDir)
     {
-        var path = PathIn(baseDir);
+        var path = HistoryFor(baseDir);
         if (!File.Exists(path))
         {
             MessageBox.Show(Loc.T("err.historyMissing", path),

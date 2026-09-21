@@ -124,6 +124,14 @@ public sealed class TrayHost : ApplicationContext
             // журнал сценария лежал непрочитанным, а человек считал, что обновился.
             CheckUpdateOutcome();
 
+            // Версия в «Программах и компонентах»: панель обновляет себя сама, установщик писал
+            // версию один раз — без этой сверки список программ врёт, а winget может предложить
+            // «обновление» на выпуск старее работающего. Разбор — в PanelRegistration.cs.
+            if (PanelRegistration.RefreshVersion())
+            {
+                AppLog.Write(_paths, "версия в списке программ обновлена: " + AppVersion.Short);
+            }
+
             // Первый запуск: сначала мастер настройки, потом всё остальное — иначе панель
             // начнёт поднимать сервер в чужой папке и на чужом порту. Окно панели до мастера
             // не показываем: мастер должен открыться на чистом экране, а не поверх панели.
@@ -686,7 +694,10 @@ public sealed class TrayHost : ApplicationContext
                 Settings.UpdateLatest = check.Latest;
                 Settings.UpdatePublished = check.PublishedAt == default ? "" : check.PublishedAt.ToString("yyyy-MM-dd");
                 Settings.UpdatePageUrl = check.PageUrl;
-                Settings.UpdateNotes = check.Notes.Length > 8000 ? check.Notes[..8000] : check.Notes;
+                // Сырое тело храним отдельно от выбранного блока: язык интерфейса может
+                // смениться до следующей проверки, и заметки должны пересобраться сразу.
+                Settings.UpdateNotesRaw = UpdateService.RawNotes(check.Notes);
+                Settings.UpdateNotes = UpdateService.PickNotesForPanel(Settings.UpdateNotesRaw, Loc.Language);
             }
 
             Settings.Save(_paths.SettingsPath);

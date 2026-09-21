@@ -1,10 +1,11 @@
 # Сборка и выпуск панели. Запускается на каждый push в main и на pull request;
 # выпуск создаётся только по тегу вида v1.20.0.
 #
-# Важно: сборка идёт теми же скриптами, что и на машине разработчика (build.ps1,
-# tools\pack-panel.ps1, installer\build-installer.ps1, tools\check-versions.ps1,
-# tools\write-checksums.ps1) — иначе артефакт из CI отличается от проверенного локально
-# и от того, что скачает апдейтер панели.
+# Важно: сборка идёт теми же скриптами, что и на машине разработчика — build.ps1 и
+# tools\pack-panel.ps1 на каждый push и pull request, а на теге дополнительно
+# installer\build-installer.ps1, tools\check-versions.ps1 и tools\write-checksums.ps1.
+# Иначе артефакт из CI отличается от проверенного локально и от того, что скачает апдейтер
+# панели.
 #
 # Экшены закреплены по SHA коммита, а не по мажорному тегу: тег `@v4` владелец репозитория
 # экшена может переставить в любой момент, и тогда изменится код, который выполняется
@@ -57,7 +58,7 @@ jobs:
           Write-Host "тег и версия совпадают: $version"
 
       # build.ps1 сам пишет штамп build.txt, проверяет запись в CHANGELOG.md и запускает
-    # самопроверку панели в изолированном профиле.
+      # самопроверку панели в изолированном профиле.
       # Кодировка скриптов: UTF-8 с BOM и CRLF. Без BOM PowerShell 5.1 ломает кириллицу,
       # а правки через обычные редакторы BOM снимают.
       - name: Проверить кодировку скриптов
@@ -133,10 +134,18 @@ jobs:
         shell: pwsh
         run: ./tools/write-checksums.ps1 -Dist dist
 
-      - name: Заметки к выпуску (раздел CHANGELOG.md)
+      - name: Заметки к выпуску (три истории)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         run: ./tools/release-notes.ps1 -Out dist/release-notes.md
+
+      # Тело выпуска — это то, что показывает окно обновлений в панели, а собирается оно из трёх
+      # историй. Пустой блок перевода, чужая версия или разъехавшееся тело обязаны провалить
+      # сборку до job'а выпуска: иначе о поломке узнают, когда выпуск уже создан.
+      - name: Проверить заметки к выпуску
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: ./tools/check-notes.ps1
 
       # actions/upload-artifact v4.6.2
       - name: Сохранить сборку
@@ -181,13 +190,13 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Заметки к выпуску (раздел CHANGELOG.md)
+      - name: Заметки к выпуску (три истории)
         shell: pwsh
         run: ./tools/release-notes.ps1 -Out dist/release-notes.md
 
       # Если выпуск для этого тега уже создан (например, руками) — файлы в него доложатся,
       # одноимённые будут перезаписаны. Заголовок и текст существующего выпуска не меняются,
-      # поэтому заметки берём из CHANGELOG.md явно.
+      # поэтому заметки собираем из всех трёх историй тем же скриптом, что и в job'е сборки.
       # softprops/action-gh-release v2.6.2
       - name: Выпуск
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
