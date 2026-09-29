@@ -36,13 +36,38 @@ public class BalanceTests
 
         public List<string> Keys { get; } = new();
 
+        /// <summary>
+        /// Ответ по номеру запроса (нумерация с единицы). Нужен там, где важно, ЧЕЙ ответ показан:
+        /// у прежнего агента и у нового разные суммы, и по одной строке видно, чей баланс на панели.
+        /// </summary>
+        public Func<int, BalanceResult>? Answer { get; set; }
+
+        /// <summary>
+        /// Номера запросов, ответы на которые клиент отдаёт НЕ ПО СВОЕЙ ВОЛЕ, а по команде проверки
+        /// (<see cref="ReleaseAnswer"/>): такой запрос стоит ВНУТРИ клиента — ровно как настоящий,
+        /// ждущий сеть. Без этой двери проверить смену агента нечем: с мгновенным подставным
+        /// клиентом запрос успевает завершиться раньше, чем проверка дойдёт до своих утверждений
+        /// (на этом она и падала на раннере 36638902335 — то на одном утверждении, то на другом).
+        /// Ответы уходят по одному и в порядке запросов.
+        /// </summary>
+        public HashSet<int> HoldCalls { get; } = new();
+
+        private readonly SemaphoreSlim _answers = new(0);
+
+        /// <summary>Отпустить ровно один удержанный ответ.</summary>
+        public void ReleaseAnswer() => _answers.Release();
+
         public BalanceResult Query(AgentProfile agent, string key, DateTimeOffset now)
         {
             Calls++;
             Keys.Add(key);
 
-            return Next ?? new BalanceResult(
-                true, true, 12.34m, "CNY", "12.34 CNY", "пополнено 12.34", string.Empty, now, agent.Id);
+            if (HoldCalls.Contains(Calls)) _answers.Wait(TimeSpan.FromSeconds(10));
+
+            return Next
+                ?? Answer?.Invoke(Calls)
+                ?? new BalanceResult(
+                    true, true, 12.34m, "CNY", "12.34 CNY", "пополнено 12.34", string.Empty, now, agent.Id);
         }
     }
 
@@ -971,11 +996,33 @@ public class BalanceTests
     /// * **запрос идёт заново** — иначе человек до такта часов (полминуты) видел бы «не спрашивали»;
     /// * **окна пика пересчитаны по новому профилю** и подсказка значка разбужена (<c>Changed</c>):
     ///   подсказка живёт на этом событии, и без него на значке остался бы прежний тариф.
+    ///
+    /// ⚠️ **Чем эта проверка была слепа** (падение на раннере 36638902335, разобрано 29.09.2026).
+    /// Она читала <c>Result</c> как обычное поле, а заполняет его ФОНОВОЕ продолжение запроса.
+    /// Отсюда три разных падения одной и той же проверки, все — потерянная гонка:
+    ///
+    /// * «Assert.True() Failure» без строки (первое утверждение): ответ ещё не дошёл, а проверка
+    ///   ждала только, что запрос УШЁЛ (<c>client.Calls == 1</c>) — это разные события;
+    /// * «прежний ответ остался — он про другого агента»: на панели в этот миг был чужой ответ,
+    ///   но строка отказа не различала ДВУХ разных вещей — «ответ нового агента уже дошёл»
+    ///   и «ответ ПРЕЖНЕГО агента, ушедший до смены, дописался после сброса». Второе — настоящий
+    ///   дефект продукта (тогда продолжение запроса применяло ответ, не сверяя, тот ли это агент),
+    ///   и теперь его стережёт нижняя проверка: <c>Смена_агента_во_время_запроса…</c>. Различить
+    ///   эти две вещи прежней проверкой было нельзя ещё и потому, что подставной клиент отвечал
+    ///   ОДНОЙ И ТОЙ ЖЕ суммой на любой запрос, а «другой-агент» в каталоге из одного агента —
+    ///   тот же профиль: у ответов не было ни одного признака «чей он»;
+    /// * «баланс нового агента не запрошен» (ждали 5 с): смена случилась, пока запрос был в пути,
+    ///   и уходила в молчаливый пропуск «панель занята».
+    ///
+    /// Поэтому теперь ответ нового агента ДЕРЖИТ клиент, пока проверка смотрит на панель, ответы
+    /// прежнего и нового агента РАЗНЫЕ, а ждут не «запрос начался», а «ответ дошёл и панель
+    /// свободна». Гонки в проверке не остаётся — остаётся ровно то состояние, о котором она.
     /// </summary>
     [Fact]
     public void Смена_агента_сбрасывает_прежний_ответ_и_спрашивает_заново()
     {
         var dir = TempDir();
+        var client = new FakeClient();
 
         try
         {
@@ -987,25 +1034,52 @@ public class BalanceTests
                 "DEEPSEEK_API_KEY: sk-1234567890abcdef\n",
                 new UTF8Encoding(false));
 
-            var settings = new PanelSettings { ActiveAgent = AgentCatalog.DefaultId };
-            var client = new FakeClient();
+            var at = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
+
+            // У прежнего агента и у нового — РАЗНЫЕ суммы: по одной строке видно, чей ответ показан.
+            client.Answer = call => new BalanceResult(
+                true,
+                true,
+                call == 1 ? 12.34m : 99.99m,
+                "CNY",
+                call == 1 ? "12.34 CNY" : "99.99 CNY",
+                string.Empty,
+                string.Empty,
+                at,
+                AgentCatalog.DefaultId);
+
+            // Ответ НОВОГО агента держим, пока не посмотрим на панель.
+            client.HoldCalls.Add(2);
+
+            // Автообновление баланса выключено — спрашиваем сами, одним запросом: так у первого
+            // запроса нет двойника (прежде такт часов и явная просьба могли дать ДВА запроса,
+            // и «второй» в проверке оказывался не тем, о котором она думала).
+            var settings = new PanelSettings
+            {
+                ActiveAgent = AgentCatalog.DefaultId,
+                BalanceAutoRefresh = false,
+            };
 
             var controller = Controller(
                 client,
                 settings,
                 Path.Combine(dir, ".credentials.yaml"),
                 (_, _, _) => { },
-                now: new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+                now: at);
 
             var changed = 0;
             controller.Changed += () => changed++;
 
-            // Часы: окна пика посчитаны, автообновление баланса выключено — спрашиваем сами.
-            controller.Tick(new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
+            // Часы: окна пика посчитаны; баланс спрашиваем сами.
+            controller.Tick(at);
             controller.Refresh();
 
-            Assert.True(SpinWait.SpinUntil(() => client.Calls == 1, 5000), "первый запрос баланса не прошёл");
-            Assert.True(controller.Result.Ok);
+            // Ждём ПРИХОДА ответа, а не начала запроса.
+            Assert.True(
+                SpinWait.SpinUntil(() => !controller.Busy && controller.Result.Ok, 5000),
+                "первый запрос баланса не прошёл");
+            Assert.Equal(1, client.Calls);
+            Assert.Equal("12.34 CNY", controller.StatusText);
             Assert.False(controller.Peak.InPeak);
 
             var before = changed;
@@ -1014,18 +1088,129 @@ public class BalanceTests
             settings.ActiveAgent = "другой-агент";
             controller.AgentChanged();
 
-            // Прежний ответ сброшен СРАЗУ, до ответа сети: показывать чужой баланс нельзя.
+            // Прежний ответ сброшен СРАЗУ, до ответа сети: показывать чужой баланс нельзя. Ответ
+            // нового агента в этот миг ещё держит клиент, поэтому видеть здесь можно ровно одно —
+            // «не спрашивали»: ни суммы прежнего агента, ни суммы нового.
             Assert.False(controller.Result.Ok, "прежний ответ остался — он про другого агента");
             Assert.Equal(PanelStrings.BalanceNotRequested, controller.StatusText);
 
             Assert.True(changed > before, "подсказка значка не разбужена: событие «состояние изменилось» не пришло");
 
-            // И запрос ушёл заново — баланс НОВОГО агента.
+            // И запрос ушёл заново — баланс НОВОГО агента. Приход запроса в клиент ждём явно,
+            // с отказом по времени: «сколько успеется» здесь и было вторым лицом той же гонки.
             Assert.True(SpinWait.SpinUntil(() => client.Calls == 2, 5000), "баланс нового агента не запрошен");
+
+            // Отпускаем ответ нового агента: на панели обязан оказаться ЕГО баланс.
+            client.ReleaseAnswer();
+
+            Assert.True(
+                SpinWait.SpinUntil(() => !controller.Busy && controller.Result.Ok, 5000),
+                "ответ нового агента не дошёл");
+            Assert.Equal("99.99 CNY", controller.StatusText);
             Assert.Equal(AgentCatalog.DefaultId, controller.Agent.Id);
         }
         finally
         {
+            // Удержанные ответы отпускаем и при падении: иначе фоновые нитки ждали бы их впустую.
+            client.ReleaseAnswer();
+            client.ReleaseAnswer();
+            RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// СМЕНА АГЕНТА ВО ВРЕМЯ ЗАПРОСА: ответ прежнего агента не встаёт под именем нового.
+    ///
+    /// Это тот самый случай, ради которого дверь смены агента и сделана, и он живой: запрос баланса
+    /// идёт по сети сотни миллисекунд, и человек успевает переключить агента, пока ответ летит.
+    /// Сброса ответа здесь мало — продолжение запроса дописывает <c>Result</c> ПОСЛЕ сброса.
+    /// До правки 29.09.2026 это выглядело так: человек переключил агента, увидел «не спрашивали»,
+    /// а через мгновение — баланс ПРЕЖНЕГО агента под именем нового; и так до следующего такта
+    /// часов (до пяти минут), потому что запрос за нового агента в это время МОЛЧА пропускался
+    /// («панель занята» — <c>BalanceController.Refresh</c>).
+    ///
+    /// ⚠️ Проверка смотрит на панель в ТОТ САМЫЙ миг: ответ прежнего агента уже отпущен, а ответ
+    /// нового ещё стоит за дверью клиента. Смотреть на итог (после обоих ответов) бесполезно —
+    /// так дефект ПРОХОДИТ незамеченным: ответ нового агента затирает ответ прежнего, и на панели
+    /// оказывается верная сумма. Именно на этом первая редакция этой проверки и выжила мутацию.
+    /// </summary>
+    [Fact]
+    public void Смена_агента_во_время_запроса_не_показывает_ответ_прежнего()
+    {
+        var dir = TempDir();
+        var client = new FakeClient();
+
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(
+                Path.Combine(dir, ".credentials.yaml"),
+                "DEEPSEEK_API_KEY: sk-1234567890abcdef\n",
+                new UTF8Encoding(false));
+
+            var at = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
+
+            client.Answer = call => new BalanceResult(
+                true,
+                true,
+                call == 1 ? 12.34m : 99.99m,
+                "CNY",
+                call == 1 ? "12.34 CNY" : "99.99 CNY",
+                string.Empty,
+                string.Empty,
+                at,
+                AgentCatalog.DefaultId);
+
+            // Держим ОБА ответа: прежнего агента и нового. Отпускаем их по одному — иначе не увидеть
+            // состояние «ответ прежнего уже пришёл, ответ нового ещё нет».
+            client.HoldCalls.Add(1);
+            client.HoldCalls.Add(2);
+
+            var settings = new PanelSettings
+            {
+                ActiveAgent = AgentCatalog.DefaultId,
+                BalanceAutoRefresh = false,
+            };
+
+            var controller = Controller(
+                client,
+                settings,
+                Path.Combine(dir, ".credentials.yaml"),
+                (_, _, _) => { },
+                now: at);
+
+            controller.Refresh();
+
+            Assert.True(SpinWait.SpinUntil(() => client.Calls == 1, 5000), "запрос баланса не ушёл");
+            Assert.True(controller.Busy, "панель считает себя свободной, пока ответ не пришёл");
+
+            // Человек переключил агента, пока ответ летел.
+            settings.ActiveAgent = "другой-агент";
+            controller.AgentChanged();
+
+            Assert.False(controller.Result.Ok, "прежний ответ остался — он про другого агента");
+
+            // Отпускаем ответ ПРЕЖНЕГО агента. Ответ нового агента при этом ещё стоит за дверью —
+            // значит следующий взгляд на панель видит ровно то, что оставил прежний агент.
+            client.ReleaseAnswer();
+
+            Assert.True(SpinWait.SpinUntil(() => client.Calls == 2, 5000), "запрос баланса нового агента не ушёл");
+            Assert.False(controller.Result.Ok, "ответ прежнего агента встал под именем нового");
+            Assert.Equal(PanelStrings.BalanceNotRequested, controller.StatusText);
+
+            // Теперь отпускаем ответ нового агента: на панели обязан оказаться ЕГО баланс.
+            client.ReleaseAnswer();
+
+            Assert.True(
+                SpinWait.SpinUntil(() => !controller.Busy && controller.Result.Ok, 5000),
+                "баланс нового агента не дошёл");
+            Assert.Equal("99.99 CNY", controller.StatusText);
+            Assert.Equal(2, client.Calls);
+        }
+        finally
+        {
+            client.ReleaseAnswer();
+            client.ReleaseAnswer();
             RemoveTemp(dir);
         }
     }

@@ -161,6 +161,20 @@ public sealed class BalanceController : IBalanceControl, IDisposable
     private DateTime? _peakWarnedFor;
     private bool _lowWarned;
 
+    /// <summary>
+    /// Поколение активного агента. Смена агента его увеличивает, а запрос запоминает своё
+    /// поколение на старте: ответ, вернувшийся из другого поколения, — про ПРЕЖНЕГО агента,
+    /// и показывать его нельзя (дефект, найденный прогоном под загрузкой 29.09.2026).
+    /// </summary>
+    private int _generation;
+
+    /// <summary>
+    /// Смена агента случилась, пока запрос был в пути. Тогда нового агента надо спросить СРАЗУ,
+    /// как панель освободится: сам по себе <see cref="Refresh()"/> во время запроса — молчаливый
+    /// пропуск (<c>Busy</c>), и человек до такта часов остался бы без баланса нового агента.
+    /// </summary>
+    private bool _askAgainAfterBusy;
+
     public BalanceController(
         IBalanceClient client,
         string credentialsPath,
@@ -323,10 +337,20 @@ public sealed class BalanceController : IBalanceControl, IDisposable
     /// Предупреждения сбрасываются вместе с ответом: «о низком балансе уже сказано» и «о начале
     /// пика уже предупреждали» — это утверждения про ПРЕЖНЕГО агента, и переносить их на нового
     /// значит молча лишить человека обоих сообщений.
+    ///
+    /// ⚠️ **Сброса ответа МАЛО, если запрос уже в пути** (дефект, найденный прогоном под загрузкой
+    /// 29.09.2026, и он ровно тот, от которого эта дверь и защищает). Пока ответ прежнего агента
+    /// летит, продолжение запроса дописывало <c>Result</c> уже ПОСЛЕ сброса — и «12.34 CNY»
+    /// прежнего агента вставало под именем нового. Поэтому смена агента растит ПОКОЛЕНИЕ
+    /// (<see cref="_generation"/>), а продолжение запроса сверяет своё поколение с текущим.
     /// </summary>
     public void AgentChanged()
     {
         var agent = Agent;
+
+        // Поколение растёт ДО сброса: ответ, уже летящий от прежнего агента, обязан стать чужим
+        // в тот же миг.
+        _generation++;
 
         Result = BalanceResult.NotRequested(agent.Id);
         Peak = PeakDecisions.State(agent, _clock());
@@ -337,7 +361,18 @@ public sealed class BalanceController : IBalanceControl, IDisposable
 
         Changed?.Invoke();
 
-        if (Allowed) Refresh();
+        if (!Allowed) return;
+
+        // Запрос уже идёт — но он про прежнего агента, и ждать его нечего. Своим ходом
+        // «Обновить» во время запроса был бы МОЛЧАЛИВЫМ пропуском, поэтому помним, что нового
+        // агента надо спросить, и спросим сразу, как панель освободится.
+        if (Busy)
+        {
+            _askAgainAfterBusy = true;
+            return;
+        }
+
+        Refresh();
     }
 
     /// <summary>
@@ -352,12 +387,20 @@ public sealed class BalanceController : IBalanceControl, IDisposable
     /// Поэтому теперь вся работа идёт до снятия флага, а флаг снимается в <c>finally</c> — он обязан
     /// сняться и при исключении, иначе одна упавшая отправка сообщения оставила бы панель «занятой»
     /// навсегда, и баланс больше не обновлялся бы вовсе.
+    ///
+    /// ⚠️ **Ответ из ПРЕЖНЕГО поколения не показывается вовсе** (тот же дефект, что описан
+    /// в <see cref="AgentChanged"/>): запрос запоминает <see cref="_generation"/> на старте,
+    /// а продолжение сверяет его с текущим. Пропускаются все три следствия ответа — сам
+    /// <c>Result</c>, отметка «когда спрашивали» и предупреждение о низком балансе: все они
+    /// про прежнего агента. И если смена агента ждала, пока панель освободится, запрос за нового
+    /// агента уходит здесь же — иначе он не ушёл бы до такта часов.
     /// </summary>
     private void Refresh(DateTimeOffset now)
     {
         if (!Allowed || Busy) return;
 
         var agent = Agent;
+        var generation = _generation;
         Busy = true;
         Changed?.Invoke();
 
@@ -376,6 +419,8 @@ public sealed class BalanceController : IBalanceControl, IDisposable
         {
             try
             {
+                if (generation != _generation) return;
+
                 Result = task.IsCompletedSuccessfully
                     ? task.Result
                     : BalanceResult.Failed($"{task.Exception?.GetType().Name}", agent.Id, now);
@@ -403,6 +448,13 @@ public sealed class BalanceController : IBalanceControl, IDisposable
                 // и снятый флаг, и отправленное предупреждение.
                 Busy = false;
                 Changed?.Invoke();
+
+                // Смена агента ждала этого мгновения: спрашиваем нового агента теперь, своим ходом.
+                if (_askAgainAfterBusy)
+                {
+                    _askAgainAfterBusy = false;
+                    Refresh(_clock());
+                }
             }
         }));
     }
