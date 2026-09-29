@@ -1,0 +1,145 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.UpdateWindow"
+        Width="840" Height="780"
+        MinWidth="800" MinHeight="420">
+  <!--
+    ОКНО «ОБНОВЛЕНИЕ ПАНЕЛИ» — что стоит сейчас, что лежит на GitHub, что нового и что с этим
+    делать.
+
+    НИ ОДНОГО текста в разметке: и заголовок окна, и шапка, и подписи кнопок, и подсказки
+    ставятся кодом из PanelStrings, а тот берёт их из словаря. Правило одно на все экраны панели.
+
+    ⚠️ `WindowStartupLocation` здесь НЕТ и быть не должно (замечание владельца 28.09.2026: окно
+    открывалось далеко от панели). Место считает ОДНО решение — `Shell\PanelShell.Place` →
+    `WindowPlacement.NearPanel`: панель на экране — окно рядом с ней, панель в трее — у курсора.
+    Сторожит это `PanelShellTests.Окна_панели_не_задают_место_в_разметке`.
+
+    ⚠️ **ЗАМЕТКИ К ВЫПУСКУ ПРОКРУЧИВАЮТСЯ В СВОЁМ ПОЛЕ, А НЕ ВО ВСЁМ ОКНЕ** — замечание владельца
+    28.09.2026: *«функциональные клавиши „Пропустить эту версию“ и другие находятся внизу, и чтобы
+    на них нажать, придётся промотать в самый низ… текст с изменениями должен быть в своём
+    внутреннем окне с прокруткой, а не на всё окно»*.
+
+    Как это устроено и почему именно так:
+    * **ГЛАВНОЕ — вне прокрутки окна**: заметки (`NotesScroll`) и последняя карточка с кнопкой
+      замены (`ReplaceRow`) стоят САМОСТОЯТЕЛЬНЫМИ строками сетки. Прокрутка окна обходит
+      `Grid.Row="2"`, то есть СЕРЕДИНУ, — а заметки и замена за краем не оказываются никогда;
+    * шапка (заголовок, «Проверить сейчас», «Закрыть») — тоже вне прокрутки: это двери окна,
+      и искать их прокруткой человек не должен;
+    * **заметки** живут в своём `ScrollViewer` с видимой полосой: длинные заметки читаются
+      в границах карточки, а не растягивают окно;
+    * карточка действий («Открыть на GitHub», «Пропустить эту версию», «Скачать и подготовить»,
+      ход подготовки и отказ) прокручивается вместе с серединой — но она идёт ПЕРВОЙ в середине,
+      поэтому при обычной высоте окна кнопки видны без прокрутки вовсе, а при самой маленькой
+      окно прокручивается ДО них (карточка замены и заметки при этом остаются на месте).
+
+    ⚠️ Последнее нажатие — «Обновить и перезапустить панель» — по-прежнему в ОТДЕЛЬНОЙ карточке
+    (`ReplacePanel`), и она скрыта, пока замена не подготовлена. Так её нельзя нажать ни по ошибке,
+    ни «на всякий случай»: это единственная дверь продукта, которая подменяет саму панель.
+  -->
+  <Grid RowDefinitions="Auto,*,Auto,Auto">
+    <!-- Шапка: слева заголовок и подзаголовок, справа «Закрыть». ВНЕ прокрутки.
+         ⚠️ «Проверить сейчас» ушла ОТСЮДА в ряд действий и стоит там вместе с остальными тремя
+         (замечание владельца 28.09.2026: «Кнопки пропустить, проверить и т.д. можно было в 1 ряд
+         поместить»). Одна кнопка в шапке и три в карточке — это и есть два ряда, на которые
+         владелец указал. -->
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="24,24,16,0">
+      <StackPanel Grid.Column="0" Spacing="4">
+        <TextBlock x:Name="HeadingText" FontSize="22" FontWeight="SemiBold" />
+        <TextBlock x:Name="SubtitleText" Classes="hint" TextWrapping="Wrap" />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+        <Button x:Name="CloseButton" />
+      </StackPanel>
+    </Grid>
+
+    <!-- СЕРЕДИНА — единственное, что прокручивается: состояние выпуска и всё, что с ним можно
+         сделать, КРОМЕ замены файлов. Полоса прокрутки видна всегда — то же решение и та же
+         причина, что у окон настроек, копий и «Пики и тарифы»: обрезанный снизу текст читается
+         как обрезанное окно. Правое поле содержимого — 16, ровно ширина полосы. -->
+    <ScrollViewer Grid.Row="1"
+                  x:Name="ContentScroll"
+                  Margin="0,16,0,0"
+                  VerticalScrollBarVisibility="Visible"
+                  HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Margin="24,0,16,0" Spacing="16">
+        <!-- Карточка «что стоит и что на GitHub»: версия, дата выпуска и решение о сравнении. -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <TextBlock x:Name="CurrentText" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock x:Name="GithubText" />
+            <TextBlock x:Name="PublishedText" Classes="hint" TextWrapping="Wrap" />
+            <TextBlock x:Name="VerdictText" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <TextBlock x:Name="SourceText" Classes="hint" TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+
+        <!-- Карточка действий: всё, что можно сделать с выпуском, КРОМЕ замены файлов. Стоит
+             ПЕРВОЙ в прокручиваемой середине: при обычной высоте окна её кнопки видны без прокрутки.
+
+             ⚠️ РЯД КНОПОК — `StackPanel` ПО ГОРИЗОНТАЛИ, а не `WrapPanel`, и это не мелочь:
+             переносимая панель на узком окне складывала ряд в две строки, и «Скачать и подготовить»
+             уезжала вниз (владелец увидел это на своём скриншоте и назвал «сделано очень небрежно»).
+             Четыре кнопки занимают 707 точек при промежутках — отсюда ширина окна 720 и минимум 560,
+             при котором ряд ещё влезает. Меряет проверка
+             (`UpdateWindowTests.Кнопки_действий_в_окне_стоят_в_один_ряд`), а не глаз. -->
+        <Border Classes="card">
+          <StackPanel Spacing="8">
+            <TextBlock x:Name="ActionHintText" Classes="hint" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button x:Name="CheckNowButton" />
+              <Button x:Name="OpenGithubButton" />
+              <Button x:Name="SkipButton" />
+              <Button x:Name="PrepareButton" />
+            </StackPanel>
+            <TextBlock x:Name="RefusalTitleText" FontWeight="SemiBold" TextWrapping="Wrap" IsVisible="False" />
+            <TextBlock x:Name="StatusText" TextWrapping="Wrap" />
+            <ProgressBar x:Name="ProgressBar" Minimum="0" Maximum="100" IsVisible="False" />
+            <TextBlock x:Name="ProgressText" Classes="hint" TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- ЗАМЕТКИ К ВЫПУСКУ — В СВОЁМ ПОЛЕ С ПРОКРУТКОЙ (замечание владельца 28.09.2026).
+         Строки наполняет код (`Views\UpdateNotesView.cs`) — по одной строке на заголовок, пункт
+         списка и абзац. Одним TextBlock заметки шли бы простынёй, а на это владелец жаловался
+         дважды (`docs\DESIGN.md`, пункты 32–33). -->
+    <Border Grid.Row="2" Classes="card" Margin="24,16,16,16">
+      <DockPanel>
+        <TextBlock x:Name="NotesTitleText" DockPanel.Dock="Top" FontSize="16" FontWeight="SemiBold" />
+        <TextBlock x:Name="NotesEmptyText" DockPanel.Dock="Top" Classes="hint" TextWrapping="Wrap"
+                   Margin="0,8,0,0" />
+        <!-- Высота задана ЖЁСТКО (Height, а не MaxHeight и не `*`) — и это не мелочь.
+             При `Auto` карточка занимает столько, сколько просят заметки: длинные заметки
+             вырастают на несколько экранов и ВЫТАЛКИВАЮТ кнопки за нижний край — ровно то,
+             на что владелец жаловался 28.09.2026. При `*` карточка забирает всё свободное место,
+             и на высокой панели повторяется то же самое. Поэтому высота поля заметок —
+             ПОСТОЯННАЯ величина: заметки всегда прокручиваются внутри него, а кнопки всегда
+             на месте. Меряет это `UpdateWindowTests.Кнопки_видны_при_длинных_заметках…`. -->
+        <ScrollViewer x:Name="NotesScroll"
+                      Height="220"
+                      Margin="0,8,0,0"
+                      VerticalScrollBarVisibility="Visible"
+                      HorizontalScrollBarVisibility="Disabled">
+          <StackPanel x:Name="NotesPanel" Spacing="4" />
+        </ScrollViewer>
+      </DockPanel>
+    </Border>
+
+    <!-- ЧТО ПОДГОТОВЛЕНО и ОТДЕЛЬНАЯ кнопка замены — ПОСЛЕДНЯЯ строка сетки, ВНЕ прокрутки:
+         это последнее нажатие продукта, и оно обязано быть видно без единого оборота колеса.
+         Карточка появляется только после удачной подготовки: до неё показывать нечего. -->
+    <Border Grid.Row="3" x:Name="ReplacePanel" Classes="card" Margin="24,0,16,24" IsVisible="False">
+      <StackPanel Spacing="8">
+        <TextBlock x:Name="PreparedTitleText" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+        <TextBlock x:Name="PreparedStagedText" TextWrapping="Wrap" />
+        <TextBlock x:Name="PreparedBackupText" TextWrapping="Wrap" />
+        <TextBlock x:Name="PreparedScriptText" TextWrapping="Wrap" />
+        <TextBlock x:Name="PreparedLogText" TextWrapping="Wrap" />
+        <TextBlock x:Name="ReplaceHintText" Classes="hint" TextWrapping="Wrap" />
+        <Button x:Name="ReplaceButton" Classes="accent" HorizontalAlignment="Left" />
+      </StackPanel>
+    </Border>
+  </Grid>
+</Window>

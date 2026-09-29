@@ -1,0 +1,57 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.IssueWindow"
+        Width="720" Height="640"
+        MinWidth="560" MinHeight="460"
+        ShowInTaskbar="False">
+  <!--
+    ⚠️ `WindowStartupLocation` здесь НЕТ и быть не должно — то же правило, что у остальных
+    вспомогательных окон (замечание владельца 28.09.2026: «открывается далеко от основной
+    панели»). Место считает ОДНО решение: `Shell\PanelShell.Place` → `WindowPlacement.NearPanel`.
+    Сторожит проверка `PanelShellTests.Окна_панели_не_задают_место_в_разметке`.
+
+    Текстов в разметке НЕТ: все подписи ставятся кодом из PanelStrings (`docs\LOCALIZATION.md` §1).
+  -->
+  <Grid Margin="24" RowDefinitions="Auto,Auto,Auto,*,Auto,Auto" >
+    <StackPanel Grid.Row="0" Spacing="4">
+      <TextBlock x:Name="HeadingText" FontSize="20" FontWeight="SemiBold" />
+      <TextBlock x:Name="SubtitleText" TextWrapping="Wrap" Opacity="0.8" />
+    </StackPanel>
+
+    <!-- Что случилось: СВОИ слова человека. Без них отчёт — набор чисел, и разбирать его
+         придётся догадками. -->
+    <StackPanel Grid.Row="1" Margin="0,16,0,0" Spacing="8">
+      <TextBlock x:Name="MessageLabelText" FontWeight="SemiBold" />
+      <TextBox x:Name="MessageBox" AcceptsReturn="True" TextWrapping="Wrap"
+               Height="72" PlaceholderText="" />
+    </StackPanel>
+
+    <!-- РОВНО ТОТ ТЕКСТ, КОТОРЫЙ УЙДЁТ. Не «примерно такой»: человек обязан прочитать
+         глазами то, что отправит, а не поверить панели на слово. -->
+    <StackPanel Grid.Row="2" Margin="0,16,0,0" Spacing="8">
+      <TextBlock x:Name="PreviewLabelText" FontWeight="SemiBold" />
+    </StackPanel>
+
+    <TextBox Grid.Row="3" x:Name="PreviewBox"
+             IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+             FontFamily="Consolas,Menlo,monospace" FontSize="12"
+             VerticalContentAlignment="Top" />
+
+    <!-- Чего в отчёте нет и почему — рядом с текстом, а не в обещании панели. -->
+    <TextBlock Grid.Row="4" x:Name="OmittedText" Margin="0,8,0,0"
+               Classes="hint" TextWrapping="Wrap" Opacity="0.7" />
+
+    <StackPanel Grid.Row="5" Margin="0,16,0,0" Spacing="8">
+      <!-- Ошибка открытия ссылки, копирования или сохранения — СТРОКОЙ в самом окне,
+           а не модальным окном поверх него (то же правило, что у «О программе»). -->
+      <TextBlock x:Name="StatusText" TextWrapping="Wrap" Opacity="0.85" />
+
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button x:Name="OpenOnGithubButton" />
+        <Button x:Name="CopyButton" />
+        <Button x:Name="SaveButton" />
+        <Button x:Name="CloseButton" HorizontalAlignment="Right" />
+      </StackPanel>
+    </StackPanel>
+  </Grid>
+</Window>

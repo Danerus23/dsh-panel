@@ -1,0 +1,347 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.SettingsWindow"
+        Width="1080" Height="900"
+        MinWidth="820" MinHeight="420">
+  <!--
+    НИ ОДНОГО текста в разметке: и заголовок окна, и подписи, и подсказки ставятся кодом
+    из PanelStrings, а тот берёт их из словаря. Правило одно на все экраны панели.
+  -->
+  <!--
+    ⚠️ ШИРИНА ОКНА 1080, И ЭТО ИЗМЕРЕНО, А НЕ ВЫБРАНО НА ГЛАЗ (28.09.2026).
+
+    Причина — ряд действий в разделе «Обновление»: владелец попросил поместить кнопки в ОДИН ряд
+    (*«Кнопки пропустить, проверить и т.д. можно было в 1 ряд поместить»*), а четыре кнопки вместе
+    занимают 683 точки при промежутках. Прежняя ширина 860 давала содержимому раздела 530 — ряд
+    вылезал за правый край на 152 точки, то есть последняя кнопка была недоступна вовсе.
+
+    Замер (проверка `SettingsUpdateSectionTests.Кнопки_действий_стоят_в_один_ряд`): ширины кнопок
+    153 + 157 + 189 + 184 при промежутках 8×3 = 683. Колонка разделов 240, отступы окна 24+16+24 —
+    отсюда 1080: содержимое 1056 − 240 − 16 − 64 = 736 > 683. Минимум 820 — предел, на котором
+    ряд ещё влезает целиком.
+
+    ⚠️ ЧТО ЭТО ЛОМАЕТ — названо прямо: окно настроек стало шире и **на экране шириной 1366 точек
+    может не влезть целиком по ширине**. Размен осознанный: обрезанная справа кнопка хуже, чем
+    окно у края экрана, а на 1600 и 1920 (рабочие разрешения владельца и большинства) 1080 встаёт
+    свободно. Если владелец увидит, что окно велико, правильный ответ — сократить подписи кнопок
+    ряда, а не сузить его обратно: «в один ряд» — его требование.
+  -->
+  <!--
+    РАЗДЕЛЫ, А НЕ БЕСКОНЕЧНЫЙ СПИСОК (решение владельца 27.09.2026, `docs\DESIGN.md` п. 21):
+    слева вертикальный список разделов, справа содержимое выбранного. Это же лечит п. 4
+    («настройки не влезают в 1080p»): разделы больше не толкают друг друга вниз.
+
+    Четыре обещания, за которые отвечает эта разметка:
+
+    1. **«Сохранить» видна всегда** — кнопка стоит в НИЖНЕЙ строке сетки, ВНЕ прокрутки
+       раздела: переключение раздела и прокрутка её не двигают. Рядом с ней — дверь
+       «О программе…»: она тоже вне прокрутки и видна при любом разделе (решение владельца
+       27.09.2026: «„о программе“ не туда воткнул. Предлагаю перенести вообще в настройки»).
+    2. **Полоса прокрутки ВИДНА ВСЕГДА — у содержимого раздела**, а не у всего окна: системная
+       полоса появляется только в момент прокрутки, то есть ровно тогда, когда человек уже
+       догадался прокрутить. Горизонтальную гасим намеренно: с ней содержимое измерялось бы
+       бесконечной шириной и перенос строк в подсказках перестал бы работать.
+       ⚠️ **Полоса не имеет права наезжать на поля** (жалоба владельца 27.09.2026: «полоса идёт
+       поверх полей и флажков»). У карточки раздела правое поле — 0, а содержимое отступает
+       от полосы своим полем (`Margin="0,0,16,0"` у сетки внутри прокрутки): полоса шириной 16
+       живёт в СВОЕЙ полосе у самого края, и ни одно поле, флажок и список под неё не заходит.
+    3. **Содержимое разделов построено ЗАРАНЕЕ и не пересобирается** при переключении: видно
+       ровно одно из четырёх, остальные спрятаны. Пересборка теряла бы введённое, а над окном
+       уже стоит защита «несохранённая правка» (п. 16) — она опирается на те же поля.
+  -->
+  <Grid Margin="24" RowDefinitions="Auto,16,*,16,Auto">
+    <!-- ШАПКА ОКНА: слева заголовок, справа — «Открыть файл настроек».
+         ⚠️ СВОЕГО КРЕСТИКА ЗДЕСЬ НЕТ и не будет (замечание владельца 29.09.2026: *«в верхнем
+         правом углу странный крестик который выполняет функцию „Закрыть“. зачем он, если есть
+         стандартная функция окна по закрытию?»*). Он стоял рядом с «Открыть файл настроек»
+         в одной строке и читался третьей кнопкой панели инструментов, хотя делал ровно то же,
+         что системный крестик в заголовке Windows. У окна копий своего крестика нет никогда —
+         теперь одинаково у обоих.
+
+         Подписи ставит код из PanelStrings (правило «ни одного текста в разметке»). -->
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+      <TextBlock x:Name="SettingsHeadingText" Grid.Column="0" FontSize="22" FontWeight="SemiBold"
+                 VerticalAlignment="Center" />
+      <Button x:Name="OpenFolderButton" Grid.Column="1" />
+    </Grid>
+
+    <!--
+      ШИРИНА КОЛОНКИ РАЗДЕЛОВ — 240, А НЕ 200, И ПОДПИСЬ ПЕРЕНОСИТСЯ (замечание владельца
+      27.09.2026, он смотрел панель живьём: пункт «Резервное копирование» не вмещался).
+
+      Два средства сразу, и оба нужны. 240 — чтобы самая длинная подпись вставала в ОДНУ строку
+      (из 200 её выдавливали значок, внутренние отступы строки списка и полоса прокрутки самого
+      списка). `HorizontalScrollBarVisibility="Disabled"` — чтобы подпись, которой всё-таки
+      не хватило места (другой язык, крупный системный шрифт), ПЕРЕНОСИЛАСЬ на вторую строку,
+      а не обрезалась: высота строки списка автоматическая, и перенос её увеличивает.
+      Горизонтальной полосы у списка при этом нет — она отняла бы место у той же подписи.
+    -->
+    <Grid Grid.Row="2" ColumnDefinitions="240,16,*">
+      <!-- Список разделов. Подписи ставятся кодом из PanelStrings: строка в разметке выпала бы
+           из описи ключей и осталась бы русской на английском и китайском кадре. -->
+      <ListBox x:Name="SectionsList" Grid.Column="0" VerticalAlignment="Stretch"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+
+      <Border Grid.Column="2" Classes="card" Padding="24,24,0,24">
+        <ScrollViewer x:Name="ContentScroll"
+                      VerticalScrollBarVisibility="Visible"
+                      HorizontalScrollBarVisibility="Disabled">
+          <!-- Правое поле 16 — ровно ширина полосы прокрутки: она забирает последние 16 точек
+               области прокрутки, и без этого поля поля ввода уходили бы под неё. -->
+          <Grid Margin="0,0,16,0">
+            <StackPanel x:Name="GeneralSectionPanel" Spacing="12">
+              <TextBlock x:Name="GeneralSectionTitle" Classes="sectionTitle" />
+              <!-- Подзаголовок раздела: что именно здесь настраивается. Класс `hint` (12 пт,
+                   серый), а НЕ `sectionTitle`: на `sectionTitle` стоит проверка «заголовок крупнее
+                   подсказки и цветом акцента», и подзаголовок сломал бы её смысл. -->
+              <TextBlock x:Name="GeneralSubtitleText" Classes="hint" />
+
+              <!-- Подписи под полем нет намеренно (замечание владельца 28.09.2026: «Это абсолютно
+                   лишнее»). Прежде здесь стояла подсказка «Из этого каталога поднимается сервер.
+                   Пусто — папка панели: так было и в панели 1.x» — она объясняла то, что человек
+                   и так видит (поле с путём), и занимала место над полем «Порт своего сервера».
+                   ⚠️ Убрана именно ПОДПИСЬ: поле и его содержимое не тронуты, а её строка убрана
+                   заодно из словарей — иначе её сторожили бы ворота «каждая строка где-то
+                   используется». ⚠️ Имени строки здесь НЕТ намеренно: ворота читают и разметку,
+                   и комментарии в ней, поэтому имя, названное в пояснении, делало бы мёртвую
+                   строку «живой» — проверка замолчала бы ровно там, где она и нужна. -->
+              <TextBlock x:Name="WorkDirLabel" />
+              <TextBox x:Name="WorkDirBox" />
+              <StackPanel Orientation="Horizontal" Spacing="12">
+                <Button x:Name="SuggestWorkDirButton" IsVisible="False" />
+              </StackPanel>
+
+              <TextBlock x:Name="PortLabel" Margin="0,4,0,0" />
+              <NumericUpDown x:Name="PortBox" Width="160" HorizontalAlignment="Left"
+                             Minimum="1" Maximum="65535" Increment="1" />
+              <TextBlock x:Name="PortHintText" Classes="hint" Text="" />
+
+              <TextBlock x:Name="ThemeLabel" Margin="0,4,0,0" />
+              <ComboBox x:Name="ThemeBox" Width="260" HorizontalAlignment="Left" />
+
+              <!-- Язык интерфейса. Решение дирижёра: язык применяется при СЛЕДУЮЩЕМ запуске панели
+                   (пересобирать окна и меню на ходу — отдельная работа), и человеку об этом сказано
+                   словами, а не умолчанием. -->
+              <TextBlock x:Name="LanguageLabel" Margin="0,4,0,0" />
+              <ComboBox x:Name="LanguageBox" Width="260" HorizontalAlignment="Left" />
+              <TextBlock x:Name="LanguageHintText" Classes="hint" />
+
+              <CheckBox x:Name="AutostartCheck" Margin="0,4,0,0" />
+              <TextBlock x:Name="AutostartNoteText" Classes="hint" Text="" />
+            </StackPanel>
+
+            <!-- Раздел «Резервное копирование» (имя раздела — решение владельца 27.09.2026:
+                 прежде он назывался «Копии» и путался с дверью в главном окне). Тексты ставятся
+                 кодом из PanelStrings: правило новых экранов — подписи и подсказки живут в одном
+                 месте, а не в разметке (AGENTS.md). -->
+            <StackPanel x:Name="BackupSectionPanel" Spacing="12" IsVisible="False">
+              <TextBlock x:Name="BackupSectionTitle" Classes="sectionTitle" />
+              <TextBlock x:Name="BackupSectionSubtitleText" Classes="hint" />
+
+              <TextBlock x:Name="BackupFolderLabel" />
+              <TextBox x:Name="BackupFolderBox" />
+              <TextBlock x:Name="BackupFolderHintText" Classes="hint" />
+
+              <!-- Расписание автокопий и предел хранения (v2.2): «каждые N часов» и «хранить N последних».
+                   Обе — НАСТРОЙКИ, поэтому живут здесь, а не в окне копий (решение владельца: настройка —
+                   настройкой, действие — действием). Тексты ставятся кодом из PanelStrings. -->
+              <CheckBox x:Name="BackupScheduleCheck" Margin="0,8,0,0" />
+              <!--
+                ПОДПИСЬ ПЕРЕНОСИТСЯ, А ПОЛЕ ОСТАЁТСЯ НА МЕСТЕ (замечание владельца 27.09.2026:
+                пункт списка разделов не вмещался — колонка разделов стала шире, а карточка уже).
+
+                ⚠️ Прежде это была горизонтальная панель: подпись «Периодичность, часов:» и поле
+                в 140 точек стояли в строку и на минимальной ширине окна УХОДИЛИ ПОД ПОЛОСУ
+                прокрутки. Горизонтальная панель детей не переносит вовсе — она их выпускает
+                за свою ширину. Сетка `*,12,Auto` делает то, что нужно: подпись занимает
+                остаток и переносится, а поле стоит у правого края и не съезжает.
+              -->
+              <Grid ColumnDefinitions="*,12,Auto">
+                <TextBlock x:Name="BackupEveryLabel" Grid.Column="0" TextWrapping="Wrap"
+                           VerticalAlignment="Center" />
+                <NumericUpDown x:Name="BackupEveryBox" Grid.Column="2" Width="140"
+                               Minimum="1" Maximum="168" Increment="1" />
+              </Grid>
+              <Grid ColumnDefinitions="*,12,Auto">
+                <TextBlock x:Name="BackupKeepLabel" Grid.Column="0" TextWrapping="Wrap"
+                           VerticalAlignment="Center" />
+                <NumericUpDown x:Name="BackupKeepBox" Grid.Column="2" Width="140"
+                               Minimum="1" Maximum="20" Increment="1" />
+              </Grid>
+              <TextBlock x:Name="BackupScheduleHintText" Classes="hint" />
+              <TextBlock x:Name="BackupKeepHintText" Classes="hint" />
+
+              <!-- Правда о копии на ходу: сервер и агент ради копии не прерываются (решение владельца
+                   26.09.2026), поэтому целостную копию снимают вручную, когда работа не идёт. Сказано
+                   там, где человек ВКЛЮЧАЕТ расписание. -->
+              <TextBlock x:Name="BackupLiveNoteText" Classes="hint" />
+
+              <!-- Состав копии: ключи. Значение одно на всю панель — оно живёт в файле настроек,
+                   и то же самое показывает окно копий. Тексты ставятся кодом из PanelStrings. -->
+              <TextBlock x:Name="KeysSectionTitle" FontWeight="SemiBold" Margin="0,8,0,0" />
+              <CheckBox x:Name="BackupKeysCheck" />
+              <TextBlock x:Name="BackupKeysWarningText" Classes="hint" />
+              <TextBlock x:Name="BackupKeysDirsLabel" />
+              <TextBox x:Name="BackupKeysDirsBox" AcceptsReturn="True" Height="70" TextWrapping="Wrap" />
+              <TextBlock x:Name="BackupKeysDirsHint" Classes="hint" />
+
+              <!--
+                ⚠️ «Копии для передачи» ЗДЕСЬ БОЛЬШЕ НЕТ, и это не забывчивость. Решение владельца
+                27.09.2026 (п. 11 `docs\DESIGN.md`): *«функция по созданию копии и передачи
+                кому-либо смешалась с настройками резервных копий, хотя это просто отдельная фича»*.
+                Передача стала РАЗОВЫМ действием на одну копию: галочка живёт в окне копий и снимается
+                сама после копии, а настройки о ней не знают вовсе — иначе её унаследовали бы ночные
+                копии. Мёртвое поле `backupShareable` в файле осталось только ради чтения прежних
+                файлов (`Settings\PanelSettings.cs`).
+              -->
+            </StackPanel>
+
+            <StackPanel x:Name="BalanceSectionPanel" Spacing="12" IsVisible="False">
+              <TextBlock x:Name="BalanceSectionTitle" Classes="sectionTitle" />
+              <TextBlock x:Name="BalanceSectionSubtitleText" Classes="hint" />
+
+              <TextBlock x:Name="ActiveAgentLabel" />
+              <ComboBox x:Name="AgentBox" Width="260" HorizontalAlignment="Left" />
+              <TextBlock x:Name="AgentHintText" Classes="hint" Text="" />
+
+              <CheckBox x:Name="BalanceAutoCheck" Margin="0,4,0,0" />
+              <Grid ColumnDefinitions="*,12,Auto">
+                <TextBlock x:Name="BalancePeriodLabel" Grid.Column="0" TextWrapping="Wrap"
+                           VerticalAlignment="Center" />
+                <NumericUpDown x:Name="RefreshMinutesBox" Grid.Column="2" Width="140"
+                               Minimum="1" Maximum="1440" Increment="1" />
+              </Grid>
+
+              <CheckBox x:Name="BalanceWarnCheck" Margin="0,4,0,0" />
+              <Grid ColumnDefinitions="*,12,Auto">
+                <TextBlock x:Name="BalanceThresholdLabel" Grid.Column="0" TextWrapping="Wrap"
+                           VerticalAlignment="Center" />
+                <NumericUpDown x:Name="ThresholdBox" Grid.Column="2" Width="140"
+                               Minimum="0" Maximum="1000000" Increment="1" />
+              </Grid>
+
+              <Grid ColumnDefinitions="*,12,Auto" Margin="0,4,0,0">
+                <TextBlock x:Name="PeakNotifyLabel" Grid.Column="0" TextWrapping="Wrap"
+                           VerticalAlignment="Center" />
+                <NumericUpDown x:Name="PeakNotifyBox" Grid.Column="2" Width="140"
+                               Minimum="0" Maximum="1440" Increment="5" />
+              </Grid>
+              <TextBlock x:Name="PeakNotifyHintText" Classes="hint" Text="" />
+
+              <!--
+                ⚠️ ЗДЕСЬ БОЛЬШЕ НЕТ НИ РАСПИСАНИЯ ПИКОВ, НИ ТАБЛИЦЫ ЦЕН — и это не потеря,
+                а исполнение решения владельца 28.09.2026: *«мы так и не убрали в пункте „настройки“
+                обновление и пики — информацию о пиках и ценах. Для этого у нас отдельное окно,
+                вызываемое в главной панели»*.
+
+                Прежде раздел повторял собой окно «Пики и тарифы» целиком: строка состояния,
+                семь дней расписания и таблица «Стоимость». Один и тот же ответ на вопрос «сколько
+                стоит и когда дешевле» жил в двух окнах, и это читалось как два разных ответа.
+                Теперь ответ ОДИН и живёт в своём окне; здесь остались только НАСТРОЙКИ — каким
+                агентом панель следит за балансом и когда предупреждать.
+              -->
+              <TextBlock x:Name="PeakWhereHintText" Classes="hint" TextWrapping="Wrap" />
+            </StackPanel>
+
+            <StackPanel x:Name="ServerSectionPanel" Spacing="12" IsVisible="False">
+              <TextBlock x:Name="ServerSectionTitle" Classes="sectionTitle" />
+              <TextBlock x:Name="ServerSectionSubtitleText" Classes="hint" />
+
+              <!--
+                ОТЧЁТ ОКРУЖЕНИЯ ГРУППАМИ (просьба владельца 28.09.2026, он прислал кадр этого
+                раздела): *«я просил как то сделать здесь нормальную группировку с указанием пути;
+                так же нужно указать какая версия сейчас DSH, версия node и так далее»*.
+
+                Прежде здесь стоял ОДИН `TextBlock` с абзацем прозы, и это был п. 33 `DESIGN.md`.
+                Теперь строки строит код (`RenderEnvironment` → `Controls\EnvironmentPanelView`):
+                группа — заголовок, под ним строки «что искали · что нашли · где именно».
+                В разметке ни одного числа и ни одной подписи: и то и другое приходит из словаря.
+              -->
+              <StackPanel x:Name="EnvironmentPanel" Spacing="16" />
+
+              <Button x:Name="CheckEnvironmentButton" HorizontalAlignment="Left" />
+            </StackPanel>
+
+            <!--
+              РАЗДЕЛ «ОБНОВЛЕНИЕ» — решение владельца 28.09.2026: *«Я предполагал что это будет просто
+              нормальный пункт меню как и остальные во вкладке настройки, может быть просто
+              „обновления“»*. Прежде обновление было кнопкой-дверью внизу окна, и это читалось как
+              чужой элемент среди разделов.
+
+              ⚠️ **ОКНО «ОБНОВЛЕНИЕ ПАНЕЛИ» ОСТАЛОСЬ** — в него ведёт пункт меню значка. Здесь тот же
+              ответ, но СВОИМИ словами о том же состоянии: второй реализации решений нет, строки
+              собираются теми же чистыми функциями (`Views\UpdateWindow.VerdictLine` и соседи).
+
+              ⚠️ **КНОПКИ ДЕЙСТВИЙ — В ОДИН РЯД** (там же, слова владельца: «Кнопки пропустить,
+              проверить и т.д. можно было в 1 ряд поместить»). Поэтому это `StackPanel` по
+              горизонтали, а НЕ `WrapPanel`: переносимая панель на узком окне сложила бы ряд
+              в два, и замечание вернулось бы. Что ряд действительно влезает — меряет проверка
+              (`SettingsUpdateSectionTests`), а не глаз.
+            -->
+            <StackPanel x:Name="UpdateSectionPanel" Spacing="12" IsVisible="False">
+              <TextBlock x:Name="UpdateSectionTitle" Classes="sectionTitle" />
+              <TextBlock x:Name="UpdateSectionSubtitleText" Classes="hint" />
+
+              <!-- Что стоит, что на GitHub, когда выпущен и чем это кончилось. Тон строки решения —
+               тот же язык, что у строк состояния в меню значка. -->
+              <TextBlock x:Name="UpdateCurrentText" FontSize="16" FontWeight="SemiBold" />
+              <TextBlock x:Name="UpdateGithubText" />
+              <TextBlock x:Name="UpdatePublishedText" Classes="hint" TextWrapping="Wrap" />
+              <TextBlock x:Name="UpdateVerdictText" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+              <TextBlock x:Name="UpdateSourceText" Classes="hint" TextWrapping="Wrap" />
+
+              <!-- Ряд действий: проверить, открыть страницу выпуска, пропустить версию, скачать
+                   и подготовить. Все четыре — в ОДНОМ ряду, как и просил владелец. -->
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="UpdateCheckButton" />
+                <Button x:Name="UpdateGithubButton" />
+                <Button x:Name="UpdateSkipButton" />
+                <Button x:Name="UpdatePrepareButton" />
+              </StackPanel>
+
+              <TextBlock x:Name="UpdateHintText" Classes="hint" TextWrapping="Wrap" />
+              <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap" />
+              <ProgressBar x:Name="UpdateProgressBar" Minimum="0" Maximum="100" IsVisible="False" />
+              <TextBlock x:Name="UpdateProgressText" Classes="hint" TextWrapping="Wrap" />
+
+              <!-- Заметки к выпуску: своё поле с прокруткой и ПОСТОЯННОЙ высотой — то же решение,
+                   что в окне обновления и по той же причине (замечание владельца: кнопки не должны
+                   уезжать за край из-за длинного текста). -->
+              <TextBlock x:Name="UpdateNotesTitleText" FontWeight="SemiBold" Margin="0,4,0,0" />
+              <TextBlock x:Name="UpdateNotesEmptyText" Classes="hint" TextWrapping="Wrap" />
+              <ScrollViewer x:Name="UpdateNotesScroll"
+                            Height="180"
+                            VerticalScrollBarVisibility="Visible"
+                            HorizontalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="UpdateNotesPanel" Spacing="4" />
+              </ScrollViewer>
+
+              <!-- Замена файлов — ОТДЕЛЬНЫМ нажатием и только после подготовки: это единственная
+                   дверь продукта, которая подменяет саму панель. До подготовки здесь нечего
+                   показывать, поэтому весь блок скрыт. -->
+              <TextBlock x:Name="UpdatePreparedText" TextWrapping="Wrap" IsVisible="False" />
+              <Button x:Name="UpdateReplaceButton" Classes="accent" HorizontalAlignment="Left"
+                      IsVisible="False" />
+            </StackPanel>
+          </Grid>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+
+    <!-- Кнопка сохранения, дверь «О программе» и строка состояния — ВНЕ прокрутки раздела:
+         они видны при любом выбранном разделе и на любой высоте окна (решение владельца
+         27.09.2026). Дверь стоит рядом с «Сохранить» — там же, где была её прежняя дверь
+         в главном окне (нижний левый угол содержимого).
+
+         ⚠️ ДВЕРИ ОБНОВЛЕНИЯ ЗДЕСЬ БОЛЬШЕ НЕТ — она стала РАЗДЕЛОМ списка слева (решение владельца
+         28.09.2026: «это будет просто нормальный пункт меню как и остальные во вкладке настройки»).
+         Кнопка среди дверей читалась как чужой элемент: рядом стоят «Сохранить» и «О программе…»,
+         то есть действия над окном, а обновление — это ответ на вопрос «что у меня стоит». -->
+    <Grid Grid.Row="4" ColumnDefinitions="Auto,12,Auto,16,*">
+      <Button x:Name="SaveButton" Grid.Column="0" />
+      <Button x:Name="AboutButton" Grid.Column="2" />
+      <TextBlock x:Name="StatusText" Grid.Column="4" Text="" VerticalAlignment="Center"
+                 Opacity="0.75" TextWrapping="Wrap" />
+    </Grid>
+  </Grid>
+</Window>

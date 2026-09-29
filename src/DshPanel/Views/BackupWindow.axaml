@@ -1,0 +1,178 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.BackupWindow"
+        Width="840" Height="820"
+        MinWidth="620" MinHeight="520">
+  <!--
+    Полоса прокрутки ВИДНА ВСЕГДА — то же решение и та же причина, что у окна настроек
+    (жалоба владельца, п. 4–5 `docs\DESIGN.md`): список копий, план восстановления и строка
+    состояния уходят ниже края окна, и без полосы обрезанный снизу текст читается как обрезанное
+    окно, а не как «здесь есть ещё». Горизонтальная запрещена: с ней перенос строк в подсказках
+    перестал бы работать.
+
+    ⚠️ Правое поле содержимого — 16, ровно ширина полосы: полоса забирает последние 16 точек
+    области прокрутки и без этого поля наезжала бы на кнопки и списки (жалоба владельца
+    27.09.2026 про окно настроек — здесь та же беда была бы той же).
+  -->
+  <ScrollViewer x:Name="ContentScroll"
+                VerticalScrollBarVisibility="Visible"
+                HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Margin="24,24,16,24" Spacing="16">
+      <TextBlock x:Name="HeadingText" Classes="sectionTitle" />
+
+      <!-- Папка копий, кнопки и честная строка о том, откуда папка взялась.
+           Тексты ставятся кодом из PanelStrings: правило новых экранов.
+           Вид карточки — общий (`Border.card` в App.axaml): тень, скругление, подложка и рамка
+           объявлены один раз на всё приложение. -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock x:Name="FolderLabel" />
+
+          <!--
+            ПУТЬ ПАПКИ КОПИЙ И КНОПКА «ОТКРЫТЬ ПАПКУ» — В ОДНОЙ СТРОКЕ, ВПЛОТНУЮ к пути
+            (п. 31 `docs\DESIGN.md`, слова владельца: *«добавить возможность открыть папку через
+            проводник рядом с указанием пути для быстрого перехода»*).
+
+            Раскладка взята у двери каталога настроек (`SettingsWindow.axaml`, `*` и `Auto`):
+            путь занимает всё место и переносится, кнопка стоит у правого края своей колонки и
+            размера от состояния не меняет — правило «состояние не меняет размер», выросшее
+            из жалобы владельца на дрожание кнопок.
+
+            Подпись и подсказку ставит код из PanelStrings: в разметке текста не бывает.
+          -->
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock x:Name="FolderText" Grid.Column="0" TextWrapping="Wrap" FontWeight="SemiBold"
+                       VerticalAlignment="Center" />
+            <Button x:Name="OpenFolderButton" Grid.Column="1" Margin="12,0,0,0"
+                    VerticalAlignment="Center" />
+          </Grid>
+
+          <TextBlock x:Name="FolderNoteText" Classes="hint" TextWrapping="Wrap" />
+
+          <!-- Состав копии: приватные ключи. Галочка и список берутся из строк, а значение живёт
+               в настройках — это одно место правды и для окна настроек, и для этого окна. -->
+          <CheckBox x:Name="KeysCheck" Margin="0,8,0,0" />
+          <TextBlock x:Name="KeysWarningText" Classes="hint" TextWrapping="Wrap" Opacity="0.75" />
+          <TextBlock x:Name="KeysLabelText" />
+          <ItemsControl x:Name="KeysList" />
+          <TextBlock x:Name="KeysNoteText" Classes="hint" TextWrapping="Wrap" />
+          <Button x:Name="AddKeyDirButton" HorizontalAlignment="Left" IsVisible="False" />
+
+          <!-- «Эта копия — для передачи»: файл ключей доступа в архив не кладётся. Решение владельца
+               26.09.2026 — копией делятся, и ключ модели уехал бы вместе с ней.
+
+               ⚠️ С 27.09.2026 (п. 11 `docs\DESIGN.md`) это РАЗОВОЕ действие на ОДНУ копию, а не
+               настройка: галочка живёт состоянием ОКНА и снимается сама после копии — иначе вторая
+               копия молча стала бы передаваемой, а ночные копии унаследовали бы решение человека.
+               Сочетание с приватными ключами ЗАПРЕЩЕНО (п. 12, 29.09.2026) и объясняется словами
+               в строке под галочкой: такой архив унёс бы ключи тому, кому его отдают. -->
+          <CheckBox x:Name="ShareableCheck" Margin="0,8,0,0" />
+          <TextBlock x:Name="ShareableWarningText" Classes="hint" TextWrapping="Wrap" Opacity="0.75" />
+          <TextBlock x:Name="ShareableNoteText" Classes="hint" TextWrapping="Wrap" />
+
+          <!-- РЕЖИМ ОБЪЁМА (v2.2): три значения и пояснение к выбранному. У «полного» пояснение —
+               предупреждение о размере, и оно видно ДО начала копии. Лишние имена папок для
+               «своего фильтра» называются здесь же: решение о режиме и его список — одно решение,
+               а живёт оно в настройках. Тексты ставятся кодом из PanelStrings. -->
+          <TextBlock x:Name="ScopeLabel" Margin="0,8,0,0" />
+          <ComboBox x:Name="ScopeBox" Width="260" HorizontalAlignment="Left" />
+          <TextBlock x:Name="ScopeHintText" Classes="hint" TextWrapping="Wrap" Opacity="0.75" />
+
+          <TextBlock x:Name="ScopeExtraLabel" Margin="0,8,0,0" />
+          <TextBox x:Name="ScopeExtraBox" AcceptsReturn="True" Height="60" TextWrapping="Wrap" />
+          <TextBlock x:Name="ScopeExtraHint" Classes="hint" TextWrapping="Wrap" />
+          <Button x:Name="SaveExtrasButton" HorizontalAlignment="Left" />
+
+          <!-- Копия может сниматься НА ХОДУ: решение владельца 26.09.2026 — сервер ради копии
+               не гасится (агент работает и ночью). Строка-совет говорит об этом там, где человек
+               нажимает кнопку, а не в документе. -->
+          <TextBlock x:Name="LiveAdviceText" Classes="hint" TextWrapping="Wrap" Opacity="0.75" />
+
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button x:Name="CreateButton" />
+            <Button x:Name="RefreshButton" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock x:Name="ListLabel" FontWeight="SemiBold" />
+          <TextBlock x:Name="ListNoteText" Classes="hint" TextWrapping="Wrap" Opacity="0.7" />
+
+          <!--
+            СПИСОК КОПИЙ — ТАБЛИЦА (замечание владельца 28.09.2026: *«правильно будет сделать
+            правкой строк с имеющимися копиями тоже в виде таблицы… не совсем понятно даже, что это
+            кликабельно»*). Прежде здесь стоял `ListBox`, и каждая копия была абзацем текста.
+
+            Строки строит код (`Views\BackupTableView.cs`) из ГОТОВОЙ описи архива: в разметке
+            текста не бывает (правило проекта «ни одного текста в разметке»), а второй расчёт
+            размера и состава завёл бы вторую правду о копии.
+
+            ⚠️ Прокрутка своя и с ограничением высоты: копий бывает много, а под таблицей живёт
+            план восстановления — он обязан оставаться достижимым (п. 8 `docs\DESIGN.md`).
+            Полоса у списка — вертикальная и только она: с горизонтальной перенос строки
+            в колонке «особенности» перестал бы работать.
+          -->
+          <ScrollViewer MaxHeight="240"
+                        VerticalScrollBarVisibility="Auto"
+                        HorizontalScrollBarVisibility="Disabled">
+            <Grid x:Name="EntriesTable" />
+          </ScrollViewer>
+        </StackPanel>
+      </Border>
+
+      <!-- План наката: появляется, когда человек выбрал копию. Панель к этому моменту только
+           ЧИТАЛА архив — до нажатия «Восстановить» на диске ничего не меняется. -->
+      <Border x:Name="PlanPanel" IsVisible="False" Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock x:Name="PlanHeadingText" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+          <TextBlock x:Name="PlanVersionText" TextWrapping="Wrap" FontWeight="SemiBold" />
+
+          <!--
+            ПЛАН НЕ СОБРАЛСЯ — ПРИЧИНА СЛОВАМИ. Показывается только тогда, когда план не годен
+            (`RestorePlan.Ok == false`): «накат невозможен» без «почему» — отписка, а пропуск,
+            о котором молчат, человек читает как потерю данных.
+          -->
+          <TextBlock x:Name="PlanProblemText" TextWrapping="Wrap" IsVisible="False" />
+
+          <!--
+            ЧТО ВЕРНЁМ — ТАБЛИЦЕЙ, А НЕ ПРОСТЫНЁЙ (п. 32 `docs\DESIGN.md`, слова владельца:
+            *«Что вернём, копия? Текст очень неструктурированный, просто сплошной, и читать
+            невозможно»*).
+
+            Приём тот же, что у таблицы копий (п. 29): строки строит код
+            (`Views\RestoreTableView.cs`) на ОБЩЕЙ сетке панели (`Views\TableGrid.cs` — тот же
+            тонкий разделитель строк, тот же отступ), а данные берутся из СТРУКТУРНОГО плана
+            (`RestorePlan.Groups`), а не разбором готового текста.
+
+            ⚠️ Пустые группы (0 файлов) в таблицу не попадают вовсе, а прежняя склейка всех
+            выбранных групп в один `TextBlock` убрана, а не оставлена рядом: «как выглядит строка»
+            не может решаться в двух местах.
+
+            ⚠️ Итог под таблицей — КОРОТКАЯ строка-счётчик (числа те же, что отдаёт план),
+            а примечания плана живут отдельными строками: они длиннее счётчика и абзацем
+            сливались бы с ним.
+          -->
+          <Grid x:Name="PlanTable" />
+          <TextBlock x:Name="PlanSummaryText" TextWrapping="Wrap" Opacity="0.85" />
+          <TextBlock x:Name="PlanNotesText" Classes="hint" TextWrapping="Wrap" />
+
+          <TextBlock x:Name="PlanReadOnlyText" Classes="hint" TextWrapping="Wrap" />
+
+          <CheckBox x:Name="EngineCheck" />
+          <CheckBox x:Name="PanelCheck" />
+          <CheckBox x:Name="KeysConsentCheck" />
+          <TextBlock x:Name="ConsentNoteText" Classes="hint" TextWrapping="Wrap" />
+
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button x:Name="RunRestoreButton" />
+            <Button x:Name="CancelRestoreButton" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <TextBlock x:Name="StatusText" TextWrapping="Wrap" Opacity="0.85" />
+    </StackPanel>
+  </ScrollViewer>
+</Window>

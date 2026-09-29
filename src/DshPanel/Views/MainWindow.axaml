@@ -1,0 +1,163 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.MainWindow"
+        Width="640" Height="640"
+        MinWidth="560" MinHeight="420">
+  <!--
+    НИ ОДНОГО текста в разметке: подписи ставятся кодом окна из PanelStrings, а тот берёт их
+    из словаря (`Localization\ru.json`). Так текст перестаёт быть «строкой в разметке», которую
+    при переносе на три языка находят поиском по всему дереву, и попадает в одну опись ключей.
+  -->
+  <!--
+    Прокрутка контента — не украшение. Дефект Д2 (живой просмотр владельца 26.09.2026): когда
+    панель находит ЧУЖОЙ работающий сервер, карточка «Найден работающий DSH…» удлиняет
+    содержимое, и на минимальной высоте окна низ уезжал за край — кнопки нижнего ряда
+    становились недостижимы вовсе. Горизонтальную прокрутку гасим намеренно: с ней содержимое
+    измерялось бы бесконечной шириной, и перенос строк в подсказках перестал бы работать.
+  -->
+  <ScrollViewer x:Name="MainContentScroll"
+                VerticalScrollBarVisibility="Auto"
+                HorizontalScrollBarVisibility="Disabled">
+    <StackPanel x:Name="MainContent" Margin="24" Spacing="16">
+      <!--
+        ШАПКА: слева имя панели, справа — двери в другие окна. Решение владельца 27.09.2026:
+        «кнопка настройки не должна быть в одном ряду с кнопками управления сервером». Поэтому
+        «Копии и восстановление…» и «Настройки…» стоят ЗДЕСЬ, а в карточке сервера остались
+        только действия с сервером.
+
+        ⚠️ Дверь «О программе…» ушла ОТСЮДА в настройки (решение владельца 27.09.2026:
+        «„о программе“ не туда воткнул. Предлагаю перенести вообще в настройки»). Само окно
+        осталось одно и то же — переехала дверь.
+      -->
+      <Grid ColumnDefinitions="*,Auto">
+        <!-- ЛОГОТИП ВМЕСТО ПРОСТОЙ НАДПИСИ — решение владельца 28.09.2026, вариант A из четырёх
+             предложенных (`docs\DESIGN.md` п. 34, кадр `assets\logo-options.png`): компактный знак
+             с монограммой и текстовое имя рядом, в одну строку.
+
+             ⚠️ Знак рисуется ЗДЕСЬ, разметкой, из тех же средств, что всё остальное: рамка-квадрат
+             с закруглением, внутри буквы. Ни картинки, ни шрифтового значка — панель раздаётся
+             одним exe, и шрифтовой значок на чужой машине оказался бы пустым квадратом.
+             Буквы — из строки `AppMonogram`: они латинские во всех трёх языках (имя изделия не
+             переводят), а вот ИМЯ рядом — переводится, поэтому «DSH 面板 2.0» на китайском.
+
+             ⚠️ Высоту шапки знак НЕ увеличивает — ради этого вариант A и выбран: 26 точек против
+             24 у текста, и строка остаётся одной. -->
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Border Width="26" Height="26" CornerRadius="6"
+                  Background="{DynamicResource AccentButtonBackground}"
+                  VerticalAlignment="Center">
+            <TextBlock x:Name="LogoMonogramText" FontSize="9" FontWeight="Bold"
+                       Foreground="White"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBlock x:Name="AppTitleText" FontSize="20" FontWeight="SemiBold"
+                     VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Button x:Name="BackupsButton" />
+          <Button x:Name="SettingsButton" />
+        </StackPanel>
+      </Grid>
+
+      <!-- Карточка сервера: вид карточки — общий (`Border.card` в App.axaml), здесь только
+           содержимое. Отдельная карточка нашему виду больше не нужна: тень, скругление,
+           подложка и рамка объявлены один раз на всё приложение. -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <!-- Состояние — ЦВЕТОМ и кружком: тон решает `TrayStatus.ServerTone` (тот же, что
+               у строки сервера в меню значка), а кисть берётся у темы. Значит «работает»,
+               «не работает» и «панель не знает» выглядят одинаково в окне и в значке. -->
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <Border x:Name="ServerDot" Classes="dot" />
+            <TextBlock x:Name="ServerStatusText" FontSize="18" FontWeight="SemiBold" />
+          </StackPanel>
+          <TextBlock x:Name="ServerDetailText" Text="" TextWrapping="Wrap" Opacity="0.75" />
+
+          <!-- Ряд кнопок сервера — ПЕРЕНОСИМЫЙ (WrapPanel), а не жёсткий. Ряд растёт с каждой
+               новой дверью, а минимальная ширина окна — 640: дефект Д2 был ровно про то, что
+               содержимое переставало вмещаться и нижние кнопки становились недостижимы.
+               Здесь стоят ТОЛЬКО действия с сервером: ни настроек, ни копий рядом с «Запустить»
+               быть не должно (решение владельца 27.09.2026).
+               Отступы заданы полями, а не Spacing: так ряд переносится одинаково на всех
+               версиях каркаса. -->
+          <WrapPanel Orientation="Horizontal">
+            <!-- «Запустить» — ГЛАВНОЕ действие окна, и оно окрашено акцентом темы (класс accent):
+                 у окна одно действие, которое поднимает работу, и оно обязано отличаться
+                 от «Остановить» и «Отвязаться» (решение владельца 27.09.2026). -->
+            <Button x:Name="StartServerButton" Classes="accent" Margin="0,0,12,8" />
+            <!-- «Перезапустить» стоит СТРОГО между «Запустить» и «Остановить»: перезапуск —
+                 ровно эти два действия подряд, и человек ищет его именно здесь. -->
+            <Button x:Name="RestartServerButton" Margin="0,0,12,8" />
+            <Button x:Name="StopServerButton" Margin="0,0,12,8" />
+            <Button x:Name="DetachServerButton" IsVisible="False" Margin="0,0,12,8" />
+          </WrapPanel>
+
+          <!-- Дверь в панель, которую поднимает сервер: браузер открывается ТОЛЬКО по щелчку
+               человека. Сама ссылка (в ней токен) не показывается нигде — ни текстом, ни
+               подсказкой: сюда выходит лишь «можно нажать» и причина отказа словами.
+
+               ⚠️ ПОСТОЯННОЙ НАДПИСИ ПОД КНОПКОЙ ЗДЕСЬ НЕТ (замечание владельца 28.09.2026):
+               она читалась как ОБРАЩЕНИЕ ПРОГРАММЫ к человеку («Откроется работа вашего агента
+               в браузере — по вашему щелчку и только по нему»), то есть повторяла то, что делает
+               сама кнопка, и занимала строку на виду. Причина недоступности осталась — но там,
+               где её ищут: в ПОДСКАЗКЕ кнопки (её ставит код из строки словаря, она меняется
+               вместе с состоянием сервера). -->
+          <Button x:Name="OpenAgentButton" HorizontalAlignment="Left" />
+
+          <!-- Найденный работающий сервер, который панель не поднимала. Панель показывает его
+               и спрашивает, а не встраивается молча (решение владельца 24.09.2026). Это вставка
+               ВНУТРИ карточки, поэтому у неё не общая тень карточки, а своя рамка из темы. -->
+          <Border x:Name="FoundServerPanel" IsVisible="False"
+                  BorderThickness="1" CornerRadius="8" Padding="12"
+                  BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+            <StackPanel Spacing="8">
+              <TextBlock x:Name="FoundServerText" Text="" TextWrapping="Wrap" FontWeight="SemiBold" />
+              <TextBlock x:Name="AdoptHintText" Classes="hint" Text="" />
+              <Button x:Name="AdoptServerButton" HorizontalAlignment="Left" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock x:Name="BalanceTitleText" Classes="sectionTitle" />
+
+          <!--
+            АКТИВНЫЙ АГЕНТ МЕНЯЕТСЯ ЗДЕСЬ ЖЕ (решение владельца 27.09.2026): «активный агент так же
+            должен быстро меняться в главном окне, где указан баланс, наверное там должен быть
+            выпадающий список». Смена уходит ВЛАДЕЛЬЦУ НАСТРОЕК — тем же путём, что кнопка
+            «Сохранить» в настройках, и второго способа записи в панели нет.
+
+            ⚠️ Пока агент ОДИН, список недоступен и говорит об этом словами под собой: живой
+            выпадающий список из одного пункта обещал бы выбор, которого нет.
+          -->
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock x:Name="ActiveAgentLabel" VerticalAlignment="Center" />
+            <ComboBox x:Name="AgentBox" Width="200" />
+          </StackPanel>
+          <TextBlock x:Name="AgentHintText" Classes="hint" Text="" />
+
+          <TextBlock x:Name="BalanceStatusText" FontSize="20" FontWeight="SemiBold" />
+          <TextBlock x:Name="BalanceDetailText" Text="" TextWrapping="Wrap" Opacity="0.75" />
+
+          <!-- Тариф — тоже ЦВЕТОМ: пик дороже, вне пика вдвое дешевле. Тон берётся у того же
+               решения, что красит строку тарифа в меню значка (`TrayStatus.PeakTone`). -->
+          <TextBlock x:Name="PeakText" Text="" FontSize="16" FontWeight="SemiBold" />
+          <TextBlock x:Name="PeakNextText" Text="" TextWrapping="Wrap" Opacity="0.85" />
+          <TextBlock x:Name="PeakScheduleText" Classes="hint" Text="" />
+
+          <!-- Две кнопки карточки баланса — ПЕРЕНОСИМЫМ рядом (WrapPanel), как ряд сервера:
+               минимальная ширина окна 640, и жёсткий ряд однажды перестал бы вмещаться
+               (дефект Д2). Отступы заданы полями, а не Spacing, — тем же способом, что у ряда
+               сервера: так ряд переносится одинаково на всех версиях каркаса. -->
+          <WrapPanel Orientation="Horizontal" HorizontalAlignment="Left">
+            <Button x:Name="RefreshBalanceButton" Margin="0,0,12,8" />
+            <Button x:Name="PeakButton" Margin="0,0,12,8" />
+          </WrapPanel>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</Window>

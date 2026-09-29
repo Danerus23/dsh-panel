@@ -1,0 +1,62 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.AboutWindow"
+        Width="560" SizeToContent="Height"
+        MinWidth="440"
+        CanResize="False"
+        ShowInTaskbar="False">
+  <!--
+    ⚠️ `WindowStartupLocation` здесь НЕТ и быть не должно (замечание владельца 28.09.2026: «когда
+    открываешь окно, оно открывается далеко от основной панели»). Прежде тут стояло
+    `CenterOwner`, но владельца у этого окна нет вовсе — панель открывает его не диалогом, —
+    и «центр владельца» выходил произвольным. Теперь место считает ОДНО решение
+    (`Shell\PanelShell.Place` → `WindowPlacement.NearPanel`) для всех четырёх вспомогательных окон:
+    панель на экране — рядом с ней, панель в трее — у курсора. Сторожит это проверка
+    `PanelShellTests.Окна_панели_не_задают_место_в_разметке`.
+  -->
+  <!--
+    Текстов в разметке НЕТ: заголовок, название продукта, версия и все подписи ставятся кодом
+    окна из PanelStrings (`Shell\PanelStrings.cs`), а тот берёт их из словаря. Это правило
+    проекта (`docs\LOCALIZATION.md` §1): строка, оставленная в разметке, выпадает из описи
+    ключей, и «забыли перевести» находится поиском по всему дереву, а не прогоном.
+  -->
+  <StackPanel Margin="24" Spacing="16">
+    <TextBlock x:Name="ProductText" FontSize="24" FontWeight="SemiBold" />
+    <TextBlock x:Name="VersionText" Opacity="0.75" />
+
+    <StackPanel Spacing="8">
+      <TextBlock x:Name="PurposeHeadingText" FontWeight="SemiBold" />
+      <TextBlock x:Name="PurposeText" TextWrapping="Wrap" Opacity="0.85" />
+    </StackPanel>
+
+    <!-- Ссылки: строки появляются, только если показывать есть что (пустой адрес — это
+         «возможности нет»). Поэтому обе ссылки скрыты в разметке и включаются кодом. -->
+    <StackPanel x:Name="LinksPanel" Spacing="8">
+      <TextBlock x:Name="LinksHeadingText" FontWeight="SemiBold" />
+      <HyperlinkButton x:Name="RepoLinkButton" HorizontalAlignment="Left" IsVisible="False" />
+      <HyperlinkButton x:Name="DonateLinkButton" HorizontalAlignment="Left" IsVisible="False" />
+      <TextBlock x:Name="DonateNoteText" Classes="hint" TextWrapping="Wrap" Opacity="0.7" />
+    </StackPanel>
+
+    <!-- Строка о машинном переводе: показывается НЕ на русском и только там (решение владельца).
+         Условие живёт в чистом предикате ShowsTranslationNote, а не здесь. -->
+    <TextBlock x:Name="TranslationNoteText" Classes="hint" TextWrapping="Wrap" Opacity="0.7" />
+
+    <!-- БЛОК «СООБЩИТЬ О ПРОБЛЕМЕ» (требование владельца 29.09.2026): дверь в своё окно.
+         Здесь только дверь — сам отчёт собирается и показывается в IssueWindow, потому что
+         человеку надо прочитать РОВНО тот текст, который уйдёт, и места ему нужно больше. -->
+    <StackPanel x:Name="IssuePanel" Spacing="8">
+      <TextBlock x:Name="IssueHeadingText" FontWeight="SemiBold" />
+      <TextBlock x:Name="IssueNoteText" Classes="hint" TextWrapping="Wrap" Opacity="0.7" />
+      <Button x:Name="IssueButton" HorizontalAlignment="Left" />
+    </StackPanel>
+
+    <TextBlock x:Name="LicenseText" Opacity="0.85" />
+    <TextBlock x:Name="CopyrightText" Opacity="0.85" />
+
+    <!-- Ошибка открытия ссылки — СТРОКОЙ в самом окне, а не модальным окном поверх него. -->
+    <TextBlock x:Name="StatusText" TextWrapping="Wrap" Opacity="0.85" />
+
+    <Button x:Name="CloseButton" HorizontalAlignment="Right" />
+  </StackPanel>
+</Window>

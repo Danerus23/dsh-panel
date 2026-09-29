@@ -1,0 +1,89 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.PeakWindow"
+        Width="620" Height="900"
+        MinWidth="460" MinHeight="440">
+  <!--
+    ОКНО «ПИКИ И ТАРИФЫ» — отдельное окно, а не строка в главном (решение дирижёра, названное
+    владельцу): расписание окон, цена и состояние не помещаются в карточку главного окна,
+    не превратив её в простыню.
+
+    НИ ОДНОГО текста в разметке: и заголовок окна, и шапка, и подписи, и подсказки ставятся
+    кодом из PanelStrings, а тот берёт их из словаря. Правило одно на все экраны панели.
+
+    ДВЕ ТАБЛИЦЫ, А НЕ ОДНА (замечание владельца 27.09.2026, смотрел панель живьём: «табличка
+    пиков собрана неверно»). «График пиков» отвечает на «когда дешевле» (день · пик · вне пика),
+    «Стоимость» — на «сколько стоит» (единица · вне пика · пик). Прежде оба ответа стояли
+    в одной таблице и читались как один.
+
+    Полоса прокрутки ВИДНА ВСЕГДА — то же решение и та же причина, что у окон настроек и копий
+    (жалоба владельца, п. 4–5 `docs\DESIGN.md`): таблица по дням недели уходит ниже края,
+    и обрезанный снизу текст читается как обрезанное окно, а не как «здесь есть ещё».
+    Горизонтальная запрещена: с ней перенос строк в подсказках перестал бы работать.
+
+    ⚠️ Правое поле содержимого — 16, ровно ширина полосы: полоса забирает последние 16 точек
+    области прокрутки и без этого поля наезжала бы на таблицу и строки (жалоба владельца
+    27.09.2026 про окно настроек — здесь та же беда была бы той же).
+  -->
+  <ScrollViewer x:Name="ContentScroll"
+                VerticalScrollBarVisibility="Visible"
+                HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Margin="24,24,16,24" Spacing="16">
+      <!-- Шапка: слева заголовок и подзаголовок, справа — «Обновить информацию», «История»
+           и «Закрыть». Кнопка разбора стоит здесь, а не у таблицы цен: она обновляет и цены,
+           и окна пика, то есть всё окно целиком. -->
+      <Grid ColumnDefinitions="*,Auto">
+        <StackPanel Grid.Column="0" Spacing="4">
+          <TextBlock x:Name="HeadingText" FontSize="22" FontWeight="SemiBold" />
+          <TextBlock x:Name="SubtitleText" Classes="hint" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+          <Button x:Name="RefreshPriceButton" />
+          <!-- Дверь в ОТДЕЛЬНОЕ окно истории (решение владельца 28.09.2026): не переключатель
+               дат внутри этого окна, а своё окно со списком записей слева. Просьбу принимает
+               связка (`Shell\PanelShell.OpenPricingHistory`) — своего способа показа у окна нет. -->
+          <Button x:Name="HistoryButton" />
+          <Button x:Name="CloseButton" />
+        </StackPanel>
+      </Grid>
+
+      <!-- Карточка «сейчас»: состояние, когда переключение и пояснение цен.
+           Вид карточки — общий (`Border.card` в App.axaml): тень, скругление, подложка и рамка
+           объявлены один раз на всё приложение. -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock x:Name="NowText" FontSize="16" FontWeight="SemiBold" />
+          <TextBlock x:Name="NextText" TextWrapping="Wrap" Opacity="0.85" />
+          <TextBlock x:Name="LegendText" Classes="hint" />
+        </StackPanel>
+      </Border>
+
+      <!-- Таблица 1: «График пиков». Наполняет код (`Views\PeakTableView.cs`) — ТОТ ЖЕ построитель,
+           что у раздела настроек: в разметке текста не бывает, а второй расчёт окон завёл бы
+           вторую правду о тарифе. Под таблицей — короткая строка «сейчас: вне пика, до 04:00». -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock x:Name="TableTitleText" FontSize="16" FontWeight="SemiBold" />
+          <TextBlock x:Name="TableHeadingText" Classes="hint" />
+          <Grid x:Name="PeakTablePanel" />
+          <TextBlock x:Name="NowLineText" Classes="hint" />
+        </StackPanel>
+      </Border>
+
+      <!-- Таблица 2: «Стоимость» — цена за единицу со страницы цен (движок тот же: код).
+           Почему цен нет, объясняет строка под таблицей: молчащая пустая таблица читается
+           как «панель сломалась». -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <TextBlock x:Name="PriceTitleText" FontSize="16" FontWeight="SemiBold" />
+          <Grid x:Name="PriceTablePanel" />
+          <TextBlock x:Name="PriceSourceText" Classes="hint" />
+        </StackPanel>
+      </Border>
+
+      <!-- Откуда взяты окна: дата проверки, источник и расписание. Это ЕДИНСТВЕННОЕ место,
+           где источник РАСПИСАНИЯ виден человеку; в главном окне его больше нет. -->
+      <TextBlock x:Name="PeakSourceText" Classes="hint" />
+    </StackPanel>
+  </ScrollViewer>
+</Window>

@@ -1,0 +1,18 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.BackupStopWindow"
+        Width="620" SizeToContent="Height"
+        MinWidth="480"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <StackPanel Margin="24" Spacing="16">
+    <TextBlock x:Name="QuestionText" TextWrapping="Wrap" FontSize="14" />
+
+    <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+      <Button x:Name="CancelButton" />
+      <Button x:Name="LiveButton" />
+      <Button x:Name="StopButton" />
+    </StackPanel>
+  </StackPanel>
+</Window>

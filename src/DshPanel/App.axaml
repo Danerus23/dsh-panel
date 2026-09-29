@@ -1,0 +1,338 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="DshPanel.App"
+             RequestedThemeVariant="Default">
+  <!--
+    ОДНО МЕСТО НА ВСЁ ПРИЛОЖЕНИЕ. Стили кнопок и общий ритм отступов живут здесь, а не по окнам
+    (направление работы 27.09.2026): стиль, размноженный по четырём разметкам, расходится на
+    первой же правке, и «одинаковые кнопки» перестают быть одинаковыми.
+
+    ⚠️ СВОЕЙ ПАЛИТРЫ ЗДЕСЬ ПО-ПРЕЖНЕМУ НЕТ — и это не «пока нет». Шаг 2 вида (решение владельца
+    27.09.2026: «очень не хватает цветов, объёмности, теней») добавляет тени, скругления,
+    акцент главного действия и цвета состояния, но КАЖДЫЙ цвет берётся готовым:
+
+    * акцент главного действия — у темы каркаса (`AccentButtonBackground` и её соседи):
+      у Fluent он есть в обеих темах и меняется вместе с ними;
+    * цвета состояния — у палитры значка (`Shell\PanelLook.cs` переводит тон в кисть):
+      зелёный, янтарный, красный, серый — те же числа, что красят строку меню значка;
+    * тень карточки — своя ПРОЗРАЧНОСТЬ чёрного, объявленная в `PanelLook.Install`
+      (сплошного цвета у тени не бывает). Здесь стоит только ссылка на неё.
+
+    Поэтому ни одного «#RRGGBB» в этом файле нет и быть не должно: подобранный на глаз оттенок
+    сломал бы одну из двух тем, и заметить это на одной теме нельзя.
+
+    Шкала отступов — 4 / 8 / 12 / 16 / 24. Других чисел в полях и промежутках панели быть
+    не должно: разнобой 6 / 10 / 14 и читается как «кнопки выглядят простовато».
+  -->
+  <Application.Styles>
+    <FluentTheme />
+
+    <!--
+      Кнопка: одна высота и одни внутренние отступы на все окна.
+
+      ⚠️ РАЗМЕР УМЕНЬШЕН 28.09.2026 по замечанию владельца: *«мне кажется нужно слегка уменьшить
+      кнопки, выглядят крупновато»*. Замер до правки: ВСЕ кнопки панели были **35 точек в высоту** —
+      при `MinHeight 32` и отступах `12,8` каркас добавлял к тексту свою рамку. Стало: `MinHeight 28`
+      и отступы `12,6` (горизонталь оставлена 12 — она из шкалы отступов, и проверка
+      `PanelRhythmTests` следит за этим), то есть высота ≈30, а ширина меньше на ~4 % за счёт
+      кегля 13 вместо каркасных 14.
+
+      Числа правки обязаны сойтись в ДВУХ местах: здесь и в `PanelRhythmTests.ButtonHeight`
+      с `ButtonPadding` — проверка `Все_кнопки_окон_одной_высоты_и_с_одними_отступами` меряет
+      НАСТОЯЩИЕ кнопки всех окон и падает, если значения разошлись.
+    -->
+    <Style Selector="Button">
+      <Setter Property="MinHeight" Value="28" />
+      <Setter Property="Padding" Value="12,6" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
+    <!-- НАВЕДЕНИЕ: кнопка светлеет и обводится сильнее — видно, что она отзовётся. -->
+    <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource ButtonBackgroundPointerOver}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushPointerOver}" />
+      <Setter Property="TextBlock.Foreground" Value="{DynamicResource ButtonForegroundPointerOver}" />
+    </Style>
+
+    <!-- НАЖАТИЕ: фон темнее наведения — палец (или кнопка мыши) видит, что нажатие дошло. -->
+    <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource ButtonBackgroundPressed}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushPressed}" />
+      <Setter Property="TextBlock.Foreground" Value="{DynamicResource ButtonForegroundPressed}" />
+    </Style>
+
+    <!--
+      ФОКУС объявлен НИЖЕ — В КОНЦЕ ФАЙЛА, последним правилом кнопки. Там же сказано, почему
+      ему нельзя стоять здесь, рядом с наведением и нажатием.
+    -->
+
+    <!-- НЕДОСТУПНА: та же кнопка, но приглушённая — и с подсказкой о причине (PanelToolTip). -->
+    <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource ButtonBackgroundDisabled}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushDisabled}" />
+      <Setter Property="TextBlock.Foreground" Value="{DynamicResource ButtonForegroundDisabled}" />
+      <Setter Property="Opacity" Value="0.7" />
+    </Style>
+
+    <!--
+      Подсказка под органом (и под кнопкой) — ОДНОГО размера на все окна. Класс ставится
+      в разметке, текст — кодом из словаря: правило «ни одного текста в разметке» действует
+      и здесь.
+    -->
+    <Style Selector="TextBlock.hint">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Opacity" Value="0.6" />
+    </Style>
+
+    <!--
+      ВЫБРАННАЯ СТРОКА СПИСКА видна не только подсветкой каркаса: у неё ещё и полужирная подпись.
+      Это нужно списку разделов настроек — по одной подсветке человек понимает, чей содержимое
+      справа, — и работает тем же правилом у любого списка панели.
+    -->
+    <Style Selector="ListBoxItem:selected">
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <!--
+      СТРОКА СПИСКА — СКРУГЛЁННАЯ ПОДЛОЖКА (решение владельца 27.09.2026, шаг 2 вида:
+      «стиль как в harness»). Выбранный раздел настроек читается подложкой, а не одной лишь
+      полужирной подписью: список из четырёх слов глаз ищет формой, и подсветку каркаса
+      на светлой теме видно куда хуже, чем подложку.
+
+      Скругление и внутренние отступы — у САМОЙ строки, а не у подписи: подложку рисует
+      контейнер строки (`ListBoxItem`), и отступы подписи её бы не сдвинули.
+
+      ⚠️ Кисть — ИЗ ТЕМЫ (`PanelLook.SectionSelectionKey`), та же, чем карточка отличается
+      от фона окна. Свой оттенок, подобранный на светлой теме, на тёмной слился бы с фоном —
+      то есть выбранная строка исчезла бы вовсе.
+    -->
+    <Style Selector="ListBoxItem">
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="12,8" />
+    </Style>
+
+    <!-- Подложка выбранной строки. Сток стоит ПОСЛЕ FluentTheme (и после его состояния
+         `:selected`) — иначе подсветка каркаса перебивала бы её: правила одного свойства
+         применяются по порядку объявления. -->
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}" />
+      <Setter Property="CornerRadius" Value="6" />
+    </Style>
+
+    <!--
+      КАРТОЧКА — ОДНО объявление на все окна панели (класс `card`): мягкая тень, скругление,
+      подложка и рамка из темы. Прежде эти четыре свойства стояли в разметке КАЖДОЙ карточки,
+      и рамка была подобрана числом (`#33808080`) сразу в трёх файлах — то есть своим цветом,
+      который на тёмной теме читается иначе.
+
+      Подложка берётся у темы (светлая — почти белая, тёмная — почти чёрная) и отличается
+      от фона окна: этим карточка и читается как карточка, а не как рамка на пустом месте.
+    -->
+    <Style Selector="Border.card">
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Padding" Value="24" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseLowBrush}" />
+      <Setter Property="BoxShadow" Value="{DynamicResource PanelCardShadow}" />
+    </Style>
+
+    <!--
+      ТОНКИЙ РАЗДЕЛИТЕЛЬ СТРОК таблицы окон пика (`Views\PeakTableView.cs` ставит класс).
+
+      Строка таблицы отделена линией в одну точку снизу — по ней семь дней и читаются как семь
+      строк, а не как слипшийся столбец (жалоба владельца: «текст немного сливается в строку»).
+
+      ⚠️ Кисть — ИЗ ТЕМЫ, и это тот же довод, что у рамки карточки: прежде рамка была подобрана
+      числом (`#33808080`) сразу в трёх файлах и на тёмной теме читалась иначе. Толщину и отступ
+      ставит сам построитель: разделитель обязан быть и тогда, когда таблицу собрали без окна.
+    -->
+    <Style Selector="Border.peakRow">
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseLowBrush}" />
+    </Style>
+
+    <!--
+      СТРОКА, ПО КОТОРОЙ ВЫБИРАЮТ (таблица готовых копий, `Views\BackupTableView.cs`).
+      Слова владельца 28.09.2026: *«Не совсем понятно даже, что это кликабельно»*.
+
+      Три состояния и все — ЦВЕТОМ, потому что размер строки менять нельзя (правило, выросшее
+      из «дрожания кнопок», сторожит `PanelRhythmTests.В_разметке_состояние_не_меняет_размер`):
+
+      * `:pointerover` — строка под курсором: мягкая подсветка;
+      * `.backupSelected` — выбранная строка: подсветка плотнее (курсор к ней уже не подсказка);
+      * разделитель строки приходит классом `peakRow` — ТОЙ ЖЕ линией, что отделяет строки таблиц
+        пиков: «таблица» в панели обязана выглядеть одинаково везде.
+
+      ⚠️ Кисти — у ТЕМЫ (`Shell\PanelLook.cs` называет их ключи), и обе объявлены оба раза:
+      своего оттенка, подобранного на светлой теме, на тёмной не видно вовсе.
+
+      ⚠️ ПОДЛОЖКА СТРОКИ — `Transparent`, и это НЕ цвет, а условие работы строки: орган без
+      подложки не попадает в проверку попадания вовсе, поэтому он не получает ни наведения,
+      ни щелчка. Именно так «кликабельная» строка и оказалась бы мёртвой: подсветку объявили,
+      а мышь её не видит. Своего оттенка здесь нет — прозрачность не красит ничего.
+    -->
+    <Style Selector="Border.backupRow">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <Style Selector="Border.backupRow:pointerover">
+      <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListLowBrush}" />
+    </Style>
+
+    <Style Selector="Border.backupRow.backupSelected">
+      <Setter Property="Background" Value="{DynamicResource SystemControlHighlightListMediumBrush}" />
+    </Style>
+
+    <!--
+      ПОДСВЕТКА ТАБЛИЦЫ ГРАФИКА (замечание владельца 27.09.2026: «чтобы человек сразу видел,
+      где он сейчас»). Два класса и ДВЕ кисти, и обе — из темы:
+
+      * `peakToday` — строка СЕГОДНЯШНЕГО дня: мягкая зелёная подложка;
+      * `peakNow` — ячейка ТЕКУЩЕГО окна в ней: та же зелёная, но заметно плотнее.
+
+      Цвет берётся у тона «хорошо» уже принятой палитры (`Tray\TrayPalette` через
+      `Shell\PanelLook`), а плотность — у темы. Своей краски здесь не появляется: оттенок,
+      подобранный на светлой теме, на тёмной пропадает — на этом панель уже спотыкалась.
+    -->
+    <Style Selector="Border.peakToday">
+      <Setter Property="Background" Value="{DynamicResource PanelPeakTodayRow}" />
+    </Style>
+
+    <Style Selector="TextBlock.peakNow">
+      <Setter Property="Background" Value="{DynamicResource PanelPeakNowCell}" />
+      <Setter Property="Padding" Value="4,0" />
+    </Style>
+
+    <!--
+      ЗАГОЛОВОК РАЗДЕЛА заметнее (решение владельца 27.09.2026, шаг 2 вида): крупнее, полужирный
+      и цветом акцента темы. Один класс на все окна — «заметный заголовок» обязан выглядеть
+      одинаково и в панели, и в настройках, и в копиях.
+    -->
+    <Style Selector="TextBlock.sectionTitle">
+      <Setter Property="FontSize" Value="20" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{DynamicResource AccentButtonBackground}" />
+    </Style>
+
+    <!--
+      КРУЖОК СОСТОЯНИЯ — маленькая метка перед строкой состояния, тем же тоном, что и текст
+      (решение владельца: состояние должно быть видно цветом, как в меню значка). Круг получается
+      из квадрата скруглением в половину стороны.
+    -->
+    <Style Selector="Border.dot">
+      <Setter Property="Width" Value="12" />
+      <Setter Property="Height" Value="12" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="0,0,8,0" />
+    </Style>
+
+    <!--
+      ЦВЕТА СОСТОЯНИЯ: класс ставит КОД (`Shell\PanelLook.cs` — по тону, который решил
+      `Shell\TrayStatus.cs`), а сам цвет берётся у темы. Так «пик», «работает» и «авария»
+      выглядят одинаково в окне, в меню значка и на его огоньке, и ни один оттенок
+      не подобран в окне на глаз.
+    -->
+    <Style Selector="TextBlock.tone-good">
+      <Setter Property="Foreground" Value="{DynamicResource PanelToneGood}" />
+    </Style>
+    <Style Selector="TextBlock.tone-warning">
+      <Setter Property="Foreground" Value="{DynamicResource PanelToneWarning}" />
+    </Style>
+    <Style Selector="TextBlock.tone-bad">
+      <Setter Property="Foreground" Value="{DynamicResource PanelToneBad}" />
+    </Style>
+    <Style Selector="TextBlock.tone-neutral">
+      <Setter Property="Foreground" Value="{DynamicResource PanelToneNeutral}" />
+    </Style>
+    <Style Selector="Border.tone-good">
+      <Setter Property="Background" Value="{DynamicResource PanelToneGood}" />
+    </Style>
+    <Style Selector="Border.tone-warning">
+      <Setter Property="Background" Value="{DynamicResource PanelToneWarning}" />
+    </Style>
+    <Style Selector="Border.tone-bad">
+      <Setter Property="Background" Value="{DynamicResource PanelToneBad}" />
+    </Style>
+    <Style Selector="Border.tone-neutral">
+      <Setter Property="Background" Value="{DynamicResource PanelToneNeutral}" />
+    </Style>
+
+    <!--
+      ГЛАВНОЕ ДЕЙСТВИЕ ОКНА — акцентным цветом темы (решение владельца 27.09.2026: «акцентный
+      цвет для главного действия»). В карточке сервера это «Запустить»: у окна одно действие,
+      которое поднимает работу, и оно обязано отличаться от «Остановить» и «Отвязаться».
+
+      Сток стоит ПОСЛЕ состояний кнопки намеренно: правила одного свойства применяются
+      по порядку объявления, и объявленный раньше акцент перебил бы наведение и нажатие.
+
+      ⚠️ Акцент здесь ОДИН на окно, а не «у всех важных кнопок»: два акцентных действия рядом
+      читаются как «нажми любую», то есть не читаются вовсе.
+    -->
+    <Style Selector="Button.accent /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentButtonBackground}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonBorderBrush}" />
+      <Setter Property="TextBlock.Foreground" Value="{DynamicResource AccentButtonForeground}" />
+    </Style>
+    <Style Selector="Button.accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentButtonBackgroundPointerOver}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonBorderBrush}" />
+      <Setter Property="TextBlock.Foreground" Value="{DynamicResource AccentButtonForeground}" />
+    </Style>
+    <Style Selector="Button.accent:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentButtonBackgroundPressed}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentButtonBorderBrush}" />
+      <Setter Property="TextBlock.Foreground" Value="{DynamicResource AccentButtonForeground}" />
+    </Style>
+
+    <!-- Недоступное главное действие — та же приглушённая кнопка, что и все: акцент на серой
+         кнопке обещал бы нажатие, которого не будет. -->
+    <Style Selector="Button.accent:disabled /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource ButtonBackgroundDisabled}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushDisabled}" />
+      <Setter Property="TextBlock.Foreground" Value="{DynamicResource ButtonForegroundDisabled}" />
+    </Style>
+
+    <!--
+      ФОКУС: рамка ВИДНОЙ КИСТЬЮ ТЕМЫ, при НЕИЗМЕННОЙ ТОЛЩИНЕ.
+
+      ⚠️ Здесь была рамка «в две точки вместо одной» (BorderThickness 2 против 1), и это оказалось
+      дефектом живого просмотра (владелец, 28.09.2026): *«когда на них нажимаешь, у них меняется
+      слегка размер, от чего соседняя кнопка уменьшается и дрожит весь текст ниже»*. Нажатие даёт
+      кнопке ФОКУС, рамка толстела — размер кнопки пересчитывался, и раскладка вокруг неё ехала.
+      Отсюда правило: **состояние кнопки не смеет менять раскладку** — оно меняет только ЦВЕТ
+      (рамки, фона, текста) и прозрачность. Толщина рамки у кнопки одна на все состояния (`1`,
+      объявлена базовым стилем `Button`), поэтому здесь её нет и быть не должно.
+
+      Почему кисть, а не акцентная рамка каркаса. Замер 28.09.2026 (пиксельный кадр, ОБЕ темы):
+      у ВСЕХ кистей рамки кнопки каркаса — `ButtonBorderBrush`, `...PointerOver`, `...Pressed`,
+      `...Disabled` и `AccentButtonBorderBrush` — цвет `Transparent` (рамку рисует фон, а не она).
+      Поэтому «фокус акцентной рамкой» даёт РОВНО НОЛЬ отличий в кадре: так и сломалась прежняя
+      правка. Видимая кисть взята из того же семейства, что уже рисует разделитель строк таблицы
+      пиков (`PanelLook.PeakRowSeparatorKey`): `SystemControlForegroundBaseMediumBrush` —
+      `#99000000` на светлой теме и `#99FFFFFF` на тёмной. Замер: фокус отличается от обычного
+      кадра на 434 пикселя при отличии канала 138 в светлой теме и 138 в тёмной.
+
+      ⚠️ ПОЧЕМУ ПРАВИЛО СТОИТ В САМОМ КОНЦЕ ФАЙЛА. У акцентной кнопки (`Button.accent`) кисть
+      рамки объявлена своим правилом НИЖЕ остальных состояний, а правила одного свойства
+      применяются по порядку объявления: объявленный раньше фокус акцентная кнопка перебила бы
+      собой. Замер это подтвердил: с фокусом, стоящим рядом с наведением, акцентная кнопка
+      не менялась в кадре ВООБЩЕ (0 пикселей), а в конце файла — те же 434 пикселя, что у обычной.
+      Сторожит это кадровая проверка `Каждое_состояние_кнопки_видно_по_кадру`: она снимает
+      и обычную кнопку, и акцентную. Второй сторож — замер «состояние не двигает соседей»
+      (`ButtonStateTests`) — и разбор разметки на свойства, меняющие размер (`PanelRhythmTests`).
+
+      ⚠️ Осознанная мелочь: у НЕДОСТУПНОЙ и одновременно сосредоточенной кнопки рамка остаётся
+      видимой (это правило объявлено последним). В жизни такого не бывает — недоступный орган
+      фокуса не получает, — и раскладку это не двигает ни на точку, поэтому правило `:focus:disabled`
+      не заводится.
+    -->
+    <Style Selector="Button:focus /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+    </Style>
+  </Application.Styles>
+</Application>

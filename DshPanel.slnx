@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DshPanel/DshPanel.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DshPanel.Tests/DshPanel.Tests.csproj" />
+  </Folder>
+</Solution>

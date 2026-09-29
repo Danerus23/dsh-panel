@@ -1,0 +1,102 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+
+    <!--
+      Параметров раздачи здесь НЕТ — и это намеренно, по двум причинам:
+
+        * SelfContained + PublishSingleFile делают проект «автономным исполняемым
+          файлом», а на такой НЕЛЬЗЯ ссылаться из обычного проекта: тестовый сразу
+          падал с NETSDK1151;
+
+        * RuntimeIdentifier = win-x64 и SelfContained = false заданы в
+          Directory.Build.props для всего решения. Без RID каждый проект кладёт в bin
+          нативы ВСЕХ платформ (runtimes\win-x64, win-x86, win-arm64, linux-musl-* от
+          SkiaSharp.NativeAssets.*) — на приложение в 46 МБ это давало 763 МБ вывода.
+
+      Самодостаточный один файл собирается профилем публикации
+      Properties\PublishProfiles\win-x64.pubxml — там его и искать.
+    -->
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!--
+      Свой ЗНАЧОК (решение владельца 26.09.2026, вариант «C — пульт») — он лежит в РЕСУРСАХ exe,
+      и оттуда его берёт ПРОВОДНИК: это и есть значок панели в списке файлов. Трей берёт байты
+      `.ico` из сборки ОТДЕЛЬНО (`EmbeddedResource` ниже): значок своего процесса подменить
+      «на лету» нельзя, а файла рядом с панелью не лежит — панель раздаётся одним exe.
+      Файл рисуется генератором `tools\make-icon.ps1` во всех девяти размерах сразу: набор,
+      нарисованный по клеточкам руками, расползается между трее и проводником.
+    -->
+    <ApplicationIcon>..\..\assets\dsh-panel.ico</ApplicationIcon>
+
+    <AssemblyName>DshPanel</AssemblyName>
+    <RootNamespace>DshPanel</RootNamespace>
+    <Version>2.0.0</Version>
+    <Product>DSH Panel</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      ЗНАЧОК — два файла из ОДНОГО источника (`tools\make-icon.ps1`), и это не дублирование:
+      у них разные читатели.
+
+        * PNG — значок ОКОН. Avalonia рисует окно из PNG, а ICO не читает вовсе (у Skia нет
+          кодека ICO) — поэтому «одного .ico на всё» не хватает;
+        * ICO — значок ТРЕЯ и значок самого exe (`ApplicationIcon` выше). Трей берёт из сборки
+          БАЙТЫ этого файла и собирает из кадра HICON: панель раздаётся ОДНИМ exe, и рядом
+          с ним .ico не лежит.
+
+      Файлы лежат ВНЕ папки проекта, поэтому адреса заданы явно: `Link` даёт предсказуемый путь
+      внутри сборки (`avares://DshPanel/Assets/dsh-panel.png`), `LogicalName` — предсказуемое имя
+      ресурса. Без них имя собирается из пути точками, и опечатка в нём ищется прогоном.
+      Оба адреса проверяются прогоном: `tests\DshPanel.Tests\PanelIconTests.cs`.
+    -->
+    <AvaloniaResource Include="..\..\assets\dsh-panel.png" Link="Assets/dsh-panel.png" />
+    <EmbeddedResource Include="..\..\assets\dsh-panel.ico"
+                      Link="Assets/dsh-panel.ico"
+                      LogicalName="DshPanel.Assets.dsh-panel.ico" />
+
+    <!--
+      СЛОВАРИ СТРОК — внутри сборки (`Localization\ru.json`, `en.json`, `zh.json`). Панель
+      раздаётся ОДНИМ exe, и папки с переводами рядом с ней не будет: файл, который может
+      потеряться или не уехать в архив, для интерфейса не годится.
+
+      Имя ресурса получается из пути точками, и оно НЕ хардкодится: `Loc` ищет словарь
+      по суффиксу `.Localization.<язык>.json` — так переименование проекта не превратит
+      все строки в ключи. Файл без BOM: `.json` с меткой ломает разбор.
+    -->
+    <EmbeddedResource Include="Localization\*.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Проверкам без экрана видно внутреннее — и только им. Это не ослабление границ, а условие
+      проверяемости: окно копий показывает диалог вопросом «сервер работает — погасить?», и без
+      шва на этот вопрос связку «выбор человека → гашение → правда в отчёте» проверить нельзя
+      вовсе. Именно из-за отсутствия такого шва в окне жил дефект: выбор «погасить» ничего не
+      гасил, а движку сообщалось, что сервер не работает (найдено 26.09.2026).
+    -->
+    <InternalsVisibleTo Include="DshPanel.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Версии — в Directory.Packages.props (центральное управление). -->
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Win32" />
+    <PackageReference Include="Avalonia.Skia" />
+    <!-- Формирование текста: без Avalonia.Desktop его надо включать явно, ссылка нужна
+         для вызова UseHarfBuzz(). Иначе падение на реальном рабочем столе. -->
+    <PackageReference Include="Avalonia.HarfBuzz" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+
+    <!-- Режим съёмки интерфейса без экрана (ключ shot). Он живёт в САМОМ приложении,
+         как в v1: им снимались кадры для README и проверялась вёрстка. Без этого
+         пакета проверить, что нарисовано, можно только показав окно человеку. -->
+    <PackageReference Include="Avalonia.Headless" />
+  </ItemGroup>
+
+</Project>

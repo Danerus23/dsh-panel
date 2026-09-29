@@ -1,0 +1,28 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.cs]
+indent_size = 4
+# using-и сортируем и держим снаружи пространства имён — единообразие важнее вкуса
+dotnet_sort_system_directives_first = true
+csharp_style_namespace_declarations = file_scoped:warning
+dotnet_diagnostic.IDE0005.severity = warning
+
+[*.{axaml,xaml,csproj,props,targets,config,manifest}]
+indent_size = 2
+
+[*.{json,yml,yaml}]
+indent_size = 2
+# .json — БЕЗ BOM, иначе ломается разбор (грабля v1)
+charset = utf-8
+
+[*.ps1]
+indent_size = 4
+# .ps1 — UTF-8 С BOM и CRLF, иначе PowerShell 5.1 ломает кириллицу (грабля v1)
+charset = utf-8-bom

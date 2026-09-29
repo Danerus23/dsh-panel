@@ -1,0 +1,79 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.PricingHistoryWindow"
+        Width="900" Height="820"
+        MinWidth="680" MinHeight="480">
+  <!--
+    ОКНО «ИСТОРИЯ ЦЕН» — точки изменения тарифа на странице цен (требование владельца 28.09.2026,
+    п. 26 `docs\DESIGN.md`): хранить не каждую проверку, а только те, где что-то изменилось,
+    и показывать рядом с ценой её изменение к ПРЕДЫДУЩЕЙ записи.
+
+    РЕШЕНИЕ ВЛАДЕЛЬЦА: это ОТДЕЛЬНОЕ окно, а не переключатель дат внутри «Пиков и тарифов».
+    Внутри — список записей СЛЕВА (как разделы настроек: «28.09.2026, 14:32 — текущие», «30.09.2026»),
+    справа — таблица ВЫБРАННОЙ записи. Список, а не полоса кнопок: записей со временем станет много,
+    и ряд кнопок упёрся бы в ширину окна.
+
+    НИ ОДНОГО текста в разметке и НИ ОДНОГО `WindowStartupLocation`: и подписи, и место окна —
+    общие для всей панели (подписи ставит код из PanelStrings, место — `Shell\PanelShell.Place`
+    через `Shell\SingleWindowSlot`). Своего способа показа у этого окна нет и быть не должно.
+
+    Полоса прокрутки ВИДНА ВСЕГДА — у содержимого записи, а не у всего окна: то же решение и та же
+    причина, что у окон настроек, копий и пиков (жалоба владельца про прокрутку наощупь).
+    Горизонтальная запрещена: с ней перенос строк в длинных именах строк цены перестал бы работать.
+
+    Правое поле содержимого — 16, ровно ширина полосы: полоса забирает последние 16 точек области
+    прокрутки и без этого поля наезжала бы на таблицу (та же грабля, что у окна настроек).
+  -->
+  <Grid Margin="24" RowDefinitions="Auto,16,*">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+      <StackPanel Grid.Column="0" Spacing="4">
+        <TextBlock x:Name="HeadingText" FontSize="22" FontWeight="SemiBold" />
+        <TextBlock x:Name="SubtitleText" Classes="hint" />
+      </StackPanel>
+      <Button x:Name="CloseButton" Grid.Column="1" VerticalAlignment="Top" />
+    </Grid>
+
+    <!-- Ширина колонки записей — 200: подпись «28.09.2026, 14:32 — текущие» переносится,
+         а не обрезается (высота строки списка автоматическая). -->
+    <Grid Grid.Row="2" ColumnDefinitions="200,16,*">
+      <ListBox x:Name="EntriesList" Grid.Column="0" VerticalAlignment="Stretch"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <!--
+          ⚠️ ПОДПИСЬ ПЕРЕНОСИТСЯ, А НЕ ОБРЕЗАЕТСЯ — и это не украшение, а то, ради чего строка
+          существует: «28.09.2026, 15:00 — первая цена» шире колонки 200 точек, и без шаблона
+          строка списка обрезала её многоточием («… — пер…» — НАЙДЕНО НА КАДРЕ 29.09.2026).
+          Прежние подписи («28.09.2026, 14:32», «… — текущие») влезали в одну строку, поэтому
+          обещание в комментарии выше ничем не проверялось. Теперь его стережёт проверка
+          `Окно_без_изменений_показывает_первую_цену_с_датой_и_своими_строками`: она меряет
+          НАРИСОВАННУЮ высоту строки и падает, если перенос пропал.
+        -->
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+
+      <Border Grid.Column="2" Classes="card" Padding="24,24,16,24">
+        <ScrollViewer x:Name="ContentScroll"
+                      VerticalScrollBarVisibility="Visible"
+                      HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="12" VerticalAlignment="Top">
+            <TextBlock x:Name="EntryTitleText" Classes="sectionTitle" TextWrapping="Wrap" />
+            <TextBlock x:Name="ComparedText" Classes="hint" TextWrapping="Wrap" />
+            <TextBlock x:Name="EmptyText" Classes="hint" TextWrapping="Wrap" />
+            <TextBlock x:Name="DroppedText" Classes="hint" TextWrapping="Wrap" />
+
+            <TextBlock x:Name="PricesHeadingText" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock x:Name="PricesNoneText" Classes="hint" TextWrapping="Wrap" />
+            <Grid x:Name="PriceTablePanel" />
+
+            <TextBlock x:Name="WindowsHeadingText" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock x:Name="WindowsNoneText" Classes="hint" TextWrapping="Wrap" />
+            <Grid x:Name="WindowsTablePanel" />
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>

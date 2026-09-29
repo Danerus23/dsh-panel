@@ -1,0 +1,13 @@
+# Скрипты и установщик обязаны быть с CRLF: PowerShell 5.1 и Inno Setup читают их так.
+# Остальное — как принято в репозитории.
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.iss text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Картинки и архивы не трогаем.
+*.png binary
+*.ico binary
+*.zip binary
+*.exe binary
