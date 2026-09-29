@@ -403,9 +403,14 @@ public class UpdateInstallTests
             _ => "2.1.0");
 
         Assert.False(preparation.Ok);
-        Assert.Equal(UpdateRefusal.SumMismatch, preparation.Refusal);
-        Assert.Equal("UpdateSumMismatchFormat", preparation.RefusalKey);
-        Assert.Contains("ожидалось", preparation.Detail, StringComparison.Ordinal);
+        Assert.Equal(UpdateRefusal.ArchiveSumMismatch, preparation.Refusal);
+        Assert.Equal("UpdateArchiveSumMismatchFormat", preparation.RefusalKey);
+
+        // Значения, а не слова: ожидаемая сумма (та, что в файле) и полученная (та, что у файла).
+        Assert.False(string.IsNullOrWhiteSpace(preparation.Detail));
+        Assert.False(string.IsNullOrWhiteSpace(preparation.DetailMore));
+        Assert.NotEqual(preparation.Detail, preparation.DetailMore);
+        Assert.Contains(preparation.Detail, UpdateRefusalLines.Line(preparation), StringComparison.Ordinal);
 
         Assert.False(Directory.Exists(Path.Combine(stand.UpdateRoot, "2.1.0")));
         Assert.Empty(Directory.GetFiles(stand.UpdateRoot));
@@ -431,8 +436,11 @@ public class UpdateInstallTests
             _ => "2.1.0");
 
         Assert.False(preparation.Ok);
-        Assert.Equal(UpdateRefusal.SumMissing, preparation.Refusal);
-        Assert.Equal("UpdateSumMissingFormat", preparation.RefusalKey);
+        Assert.Equal(UpdateRefusal.ArchiveSumMissing, preparation.Refusal);
+        Assert.Equal("UpdateArchiveSumMissingFormat", preparation.RefusalKey);
+
+        // Значение — имя файла, о котором в файле сумм нет строки.
+        Assert.Equal(UpdateAssets.ArchiveName, preparation.Detail);
         Assert.False(Directory.Exists(Path.Combine(stand.UpdateRoot, "2.1.0")));
     }
 
@@ -494,8 +502,11 @@ public class UpdateInstallTests
         Assert.False(preparation.Ok);
         Assert.Equal(UpdateRefusal.VersionMismatch, preparation.Refusal);
         Assert.Equal("UpdateVersionMismatchFormat", preparation.RefusalKey);
+
+        // Значения, а не слова: версия внутри архива и версия, которую обещал выпуск.
         Assert.Contains("2.0.9", preparation.Detail, StringComparison.Ordinal);
-        Assert.Contains("2.1.0", preparation.Detail, StringComparison.Ordinal);
+        Assert.Equal("2.1.0", preparation.DetailMore);
+        Assert.Contains(preparation.DetailMore, UpdateRefusalLines.Line(preparation), StringComparison.Ordinal);
 
         Assert.False(Directory.Exists(Path.Combine(stand.UpdateRoot, "2.1.0")));
         Assert.Equal(before, stand.Snapshot(stand.Target));
@@ -648,13 +659,19 @@ public class UpdateInstallTests
             _ => "2.1.0");
 
         Assert.False(refused.Ok);
-        Assert.Equal(UpdateRefusal.SumMismatch, refused.Refusal);
+        Assert.Equal(UpdateRefusal.SetupSumMismatch, refused.Refusal);
+        Assert.Equal("UpdateSetupSumMismatchFormat", refused.RefusalKey);
         Assert.Equal(before, second.Snapshot(second.Target));
     }
 
-    /// <summary>Неудача загрузки называется отказом, а не исключением наружу.</summary>
+    /// <summary>
+    /// НЕУДАЧА ЗАГРУЗКИ НАЗВАНА ОТКАЗОМ, а не исключением наружу, и КАЖДАЯ НЕУДАЧА — СВОИМ
+    /// ОТКАЗОМ: у файла сумм, архива и установщика ключи разные. Один ключ на троих значил бы,
+    /// что различать их снова придётся словами в <c>Detail</c>, — а <c>Detail</c> подставляется
+    /// в строку, которую читает человек (дефект языка, найденный 29.09.2026).
+    /// </summary>
     [Fact]
-    public void Неудача_загрузки_названа_отказом()
+    public void Неудача_загрузки_названа_отказом_и_своим_для_каждого_файла()
     {
         using var stand = new Stand();
 
@@ -664,9 +681,21 @@ public class UpdateInstallTests
         var preparation = UpdateInstall.Prepare(Request(stand, assets), stand.Download, _ => "2.1.0");
 
         Assert.False(preparation.Ok);
-        Assert.Equal(UpdateRefusal.DownloadFailed, preparation.Refusal);
+        Assert.Equal(UpdateRefusal.ArchiveDownloadFailed, preparation.Refusal);
+        Assert.Equal("UpdateArchiveDownloadFailedFormat", preparation.RefusalKey);
         Assert.Contains("HTTP 500", preparation.Detail, StringComparison.Ordinal);
         Assert.Empty(Directory.GetFiles(stand.UpdateRoot));
+
+        // Тот же путь, но не скачался файл сумм: отказ ДРУГОЙ, и ключ у него свой.
+        using var second = new Stand();
+        var secondAssets = Ready(second);
+        second.Download.FailUrl = SumsUrl;
+
+        var sums = UpdateInstall.Prepare(Request(second, secondAssets), second.Download, _ => "2.1.0");
+
+        Assert.False(sums.Ok);
+        Assert.Equal(UpdateRefusal.SumsDownloadFailed, sums.Refusal);
+        Assert.NotEqual(preparation.RefusalKey, sums.RefusalKey);
     }
 
     // ------------------------------------------------------------------ текст сценария

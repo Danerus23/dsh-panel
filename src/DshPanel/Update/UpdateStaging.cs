@@ -1,15 +1,24 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Compression;
 using DshPanel.Backup;
 
 namespace DshPanel.Update;
 
-/// <summary>Чем кончилась распаковка архива: получилось или нет, и что именно помешало.</summary>
-public sealed record UpdateUnpack(bool Ok, string Detail)
+/// <summary>
+/// Чем кончилась распаковка архива: получилось или нет, и ЧТО именно помешало.
+///
+/// <see cref="Refusal"/> называет СЛУЧАЙ (<see cref="UpdateRefusal"/>), а <see cref="Detail"/>
+/// и <see cref="More"/> несут значения этого случая. Слов причины здесь нет намеренно: фразу
+/// для человека собирает словарь по ключу отказа, и русское слово отсюда однажды уже стояло
+/// посреди английской фразы (дефект языка, найденный 29.09.2026).
+/// </summary>
+public sealed record UpdateUnpack(bool Ok, UpdateRefusal Refusal, string Detail, string More)
 {
-    public static UpdateUnpack Done { get; } = new(true, string.Empty);
+    public static UpdateUnpack Done { get; } = new(true, UpdateRefusal.None, string.Empty, string.Empty);
 
-    public static UpdateUnpack Fail(string detail) => new(false, detail);
+    public static UpdateUnpack Fail(UpdateRefusal refusal, string detail = "", string more = "") =>
+        new(false, refusal, detail, more);
 }
 
 /// <summary>
@@ -43,24 +52,30 @@ public static class UpdateStaging
     /// записать файл мимо места распаковки. Такие архивы не распаковываются вовсе, и пропуск
     /// называет себя отказом, а не тихой потерей части файлов.
     ///
-    /// Отказ называет причину ТЕХНИЧЕСКИ (это <see cref="UpdateUnpack.Detail"/> — для журнала
-    /// и отчёта): фразу для человека собирает дирижёр по ключу отказа.
+    /// Отказ называет причину СЛУЧАЕМ (<see cref="UpdateUnpack.Refusal"/>) и его значениями:
+    /// фразу для человека собирает интерфейс по ключу отказа, а словами здесь ничего не сказано.
     /// </summary>
     public static UpdateUnpack Unpack(string archivePath, string folder)
     {
         if (string.IsNullOrWhiteSpace(archivePath) || !File.Exists(archivePath))
-            return UpdateUnpack.Fail("архив не найден");
+            return UpdateUnpack.Fail(UpdateRefusal.ArchiveMissing);
 
         if (string.IsNullOrWhiteSpace(folder))
-            return UpdateUnpack.Fail("не названа папка распаковки");
+            return UpdateUnpack.Fail(UpdateRefusal.UnpackFolderMissing);
 
         try
         {
             var read = ZipReader.Read(archivePath);
 
-            if (!read.Ok) return UpdateUnpack.Fail("архив не читается");
-            if (read.Files == 0) return UpdateUnpack.Fail("в архиве нет ни одного файла");
-            if (read.Unsafe.Count > 0) return UpdateUnpack.Fail($"записей мимо каталога распаковки: {read.Unsafe.Count}");
+            if (!read.Ok) return UpdateUnpack.Fail(UpdateRefusal.ArchiveUnreadable);
+            if (read.Files == 0) return UpdateUnpack.Fail(UpdateRefusal.ArchiveEmpty);
+
+            if (read.Unsafe.Count > 0)
+            {
+                return UpdateUnpack.Fail(
+                    UpdateRefusal.ArchiveUnsafe,
+                    read.Unsafe.Count.ToString(CultureInfo.InvariantCulture));
+            }
 
             Directory.CreateDirectory(folder);
             ZipFile.ExtractToDirectory(archivePath, folder, overwriteFiles: true);
@@ -69,7 +84,11 @@ public static class UpdateStaging
         }
         catch (Exception error)
         {
-            return UpdateUnpack.Fail($"{error.GetType().Name}: {error.Message}");
+            // Причина от .NET остаётся причиной: слова-обрамление живут в словаре, а сюда идёт
+            // то, что сказала среда. См. решение у `UpdateRefusal.WriteFailed`.
+            return UpdateUnpack.Fail(
+                UpdateRefusal.ArchiveBroken,
+                $"{error.GetType().Name}: {error.Message}");
         }
     }
 

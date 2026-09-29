@@ -9,6 +9,20 @@ namespace DshPanel.Update;
 /// ПОЧЕМУ ОБНОВЛЕНИЕ НЕ ПОДГОТОВЛЕНО. Ответ называется перечислением, а не фразой: фразу
 /// на языке панели собирает интерфейс по ключу (<see cref="UpdateRefusals.Key"/>), а движок
 /// отдаёт данные. Иначе движок пришлось бы трогать при каждой правке перевода.
+///
+/// ⚠️ **ЗНАЧЕНИЕ НА КАЖДЫЙ РАЗЛИЧИМЫЙ СЛУЧАЙ, а не «на тему».** Здесь это правило оплачено
+/// дефектом языка, найденным и названным 29.09.2026: пять разных причин распаковки и три разных
+/// неудачи скачивания сходились в <c>ArchiveUnreadable</c> и <c>DownloadFailed</c>, и тогда
+/// человеческие слова причины приходилось класть в <see cref="UpdatePreparation.Detail"/> —
+/// а туда их клал движок, русскими литералами. На английском и китайском внутри английской
+/// и китайской фразы стоял русский текст («Could not download the release file: файл сумм: …»).
+///
+/// Отсюда два правила, которые проверяются прогоном (<c>UpdateRefusalLanguageTests</c>):
+///
+/// 1. **у каждого значения — СВОЙ ключ** (иначе причина снова поедет в <c>Detail</c> словами);
+/// 2. <see cref="UpdatePreparation.Detail"/> и <see cref="UpdatePreparation.DetailMore"/> несут
+///    ЗНАЧЕНИЯ (имя файла, хеш, ожидаемое и полученное, счёт, причина от загрузчика или
+///    исключения) — и ни одного слова, которое панель могла бы перевести.
 /// </summary>
 public enum UpdateRefusal
 {
@@ -33,31 +47,58 @@ public enum UpdateRefusal
     /// <summary>В выпуске нет файла контрольных сумм — без него обновление не готовится.</summary>
     NoSums,
 
+    /// <summary>Файл контрольных сумм скачать не удалось. Значение — причина от загрузчика.</summary>
+    SumsDownloadFailed,
+
     /// <summary>Файл сумм пуст или не разобрался ни на одну строку.</summary>
     SumsUnreadable,
 
-    /// <summary>Суммы для этого вложения в файле нет. Это ОТКАЗ, а не «пропустим».</summary>
-    SumMissing,
+    /// <summary>Архив панели скачать не удалось. Значение — причина от загрузчика.</summary>
+    ArchiveDownloadFailed,
 
-    /// <summary>Сумма не сошлась: скачался не тот файл. Он не распаковывается.</summary>
-    SumMismatch,
+    /// <summary>Суммы для архива в файле нет. Значение — имя файла. Это ОТКАЗ, а не «пропустим».</summary>
+    ArchiveSumMissing,
 
-    /// <summary>Скачать вложение не удалось.</summary>
-    DownloadFailed,
+    /// <summary>Сумма архива не сошлась: скачался не тот файл. Значения — ожидаемое и полученное.</summary>
+    ArchiveSumMismatch,
 
-    /// <summary>Архив не читается, пуст или содержит записи мимо каталога распаковки.</summary>
+    /// <summary>Скачанного архива нет там, где его ждут (защита самой распаковки).</summary>
+    ArchiveMissing,
+
+    /// <summary>Не названа папка, в которую распаковывать архив (защита самой распаковки).</summary>
+    UnpackFolderMissing,
+
+    /// <summary>Архив не читается: открыть его или перечислить записи не удалось.</summary>
     ArchiveUnreadable,
+
+    /// <summary>Архив читается, но файлов в нём нет вовсе.</summary>
+    ArchiveEmpty,
+
+    /// <summary>В архиве есть записи мимо каталога распаковки. Значение — сколько их.</summary>
+    ArchiveUnsafe,
+
+    /// <summary>Разобрать архив не удалось. Значение — причина от исключения.</summary>
+    ArchiveBroken,
 
     /// <summary>В распакованном архиве нет собранной панели.</summary>
     NoExe,
 
-    /// <summary>Версия внутри архива не совпала с версией выпуска.</summary>
+    /// <summary>Версия внутри архива не совпала с версией выпуска. Значения — внутри и ожидалось.</summary>
     VersionMismatch,
+
+    /// <summary>Установщик выпуска скачать не удалось. Значение — причина от загрузчика.</summary>
+    SetupDownloadFailed,
+
+    /// <summary>Суммы для установщика в файле нет. Значение — имя файла.</summary>
+    SetupSumMissing,
+
+    /// <summary>Сумма установщика не сошлась. Значения — ожидаемое и полученное.</summary>
+    SetupSumMismatch,
 
     /// <summary>Страховочную копию прежней панели снять не удалось — откатываться будет некуда.</summary>
     NoBackup,
 
-    /// <summary>Сценарий замены или шапку журнала записать не удалось.</summary>
+    /// <summary>Сценарий замены или шапку журнала записать не удалось. Значение — причина от исключения.</summary>
     WriteFailed,
 }
 
@@ -70,7 +111,12 @@ public static class UpdateRefusals
 {
     /// <summary>
     /// Ключ строки для человека. Пусто — отказа нет. Строки, у которых в имени нет <c>Format</c>,
-    /// показываются как есть; у остальных в текст подставляется <see cref="UpdatePreparation.Detail"/>.
+    /// показываются как есть; у остальных в текст подставляются значения отказа
+    /// (<see cref="UpdatePreparation.Detail"/> и <see cref="UpdatePreparation.DetailMore"/>).
+    ///
+    /// ⚠️ Ключи РАЗЛИЧИМЫ: двух значений с одним ключом здесь быть не должно. Один ключ на пять
+    /// причин — это и есть дорога назад, к русской причине, подставленной в чужую фразу
+    /// (дефект 29.09.2026); сторожит <c>UpdateRefusalLanguageTests</c>.
     /// </summary>
     public static string Key(UpdateRefusal refusal) => refusal switch
     {
@@ -81,13 +127,22 @@ public static class UpdateRefusals
         UpdateRefusal.NoTarget => "UpdateRefusedNoTarget",
         UpdateRefusal.NoArchive => "UpdateNoArchive",
         UpdateRefusal.NoSums => "UpdateNoSums",
-        UpdateRefusal.SumsUnreadable => "UpdateSumsUnreadableFormat",
-        UpdateRefusal.SumMissing => "UpdateSumMissingFormat",
-        UpdateRefusal.SumMismatch => "UpdateSumMismatchFormat",
-        UpdateRefusal.DownloadFailed => "UpdateDownloadFailedFormat",
-        UpdateRefusal.ArchiveUnreadable => "UpdateArchiveUnreadableFormat",
+        UpdateRefusal.SumsDownloadFailed => "UpdateSumsDownloadFailedFormat",
+        UpdateRefusal.SumsUnreadable => "UpdateSumsUnreadable",
+        UpdateRefusal.ArchiveDownloadFailed => "UpdateArchiveDownloadFailedFormat",
+        UpdateRefusal.ArchiveSumMissing => "UpdateArchiveSumMissingFormat",
+        UpdateRefusal.ArchiveSumMismatch => "UpdateArchiveSumMismatchFormat",
+        UpdateRefusal.ArchiveMissing => "UpdateArchiveMissing",
+        UpdateRefusal.UnpackFolderMissing => "UpdateUnpackFolderMissing",
+        UpdateRefusal.ArchiveUnreadable => "UpdateArchiveUnreadable",
+        UpdateRefusal.ArchiveEmpty => "UpdateArchiveEmpty",
+        UpdateRefusal.ArchiveUnsafe => "UpdateArchiveUnsafeFormat",
+        UpdateRefusal.ArchiveBroken => "UpdateArchiveBrokenFormat",
         UpdateRefusal.NoExe => "UpdateNoExe",
         UpdateRefusal.VersionMismatch => "UpdateVersionMismatchFormat",
+        UpdateRefusal.SetupDownloadFailed => "UpdateSetupDownloadFailedFormat",
+        UpdateRefusal.SetupSumMissing => "UpdateSetupSumMissingFormat",
+        UpdateRefusal.SetupSumMismatch => "UpdateSetupSumMismatchFormat",
         UpdateRefusal.NoBackup => "UpdateNoBackup",
         UpdateRefusal.WriteFailed => "UpdateWriteFailedFormat",
         _ => "UpdateRefusedUnknown",
@@ -128,9 +183,11 @@ public sealed record UpdateRequest(
 /// ЧТО ГОТОВО К ЗАМЕНЕ. Наружу отдаются данные и ПУТИ, а не готовый рассказ: командную строку
 /// показывает интерфейс, а строки берёт по ключу отказа.
 ///
-/// <see cref="Detail"/> — техническая причина (для журнала и отчёта): она называет, ЧТО именно
-/// не сошлось — какой файл, какая версия, какая сумма. Человеческая фраза собирается из
-/// <see cref="Refusal"/> и этой подробности.
+/// <see cref="Detail"/> и <see cref="DetailMore"/> — ЗНАЧЕНИЯ отказа (для подстановки в строку
+/// человека и для журнала): имя файла, хеш, ожидаемое и полученное, счёт, причина от загрузчика
+/// или исключения. Человеческих слов среди них нет: слова живут в трёх словарях, и фраза
+/// собирается из ключа (<see cref="UpdateRefusal"/>) и этих значений. Так было не всегда —
+/// до 29.09.2026 здесь лежал русский текст причины, и он же стоял посреди английской фразы.
 /// </summary>
 public sealed record UpdatePreparation(
     bool Ok,
@@ -144,12 +201,22 @@ public sealed record UpdatePreparation(
     string LogPath,
     string CommandLine)
 {
+    /// <summary>
+    /// ВТОРОЕ значение подстановки: строка вида «ожидалось {0}, получено {1}» берёт его отсюда.
+    /// Пусто — и это нормальный ответ: у большинства отказов значение одно, а лишний довод
+    /// <c>string.Format</c> пропускает.
+    /// </summary>
+    public string DetailMore { get; init; } = string.Empty;
+
     /// <summary>Ключ строки отказа ("" — отказа нет).</summary>
     public string RefusalKey => UpdateRefusals.Key(Refusal);
 
     /// <summary>Отказ без пути и без версии — так выглядят ответы до первого касания диска.</summary>
-    public static UpdatePreparation Refuse(UpdateRefusal refusal, string detail) =>
-        new(false, refusal, detail, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
+    public static UpdatePreparation Refuse(UpdateRefusal refusal, string detail, string more = "") =>
+        new(false, refusal, detail, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty)
+        {
+            DetailMore = more,
+        };
 }
 
 /// <summary>
@@ -261,13 +328,13 @@ public static class UpdateInstall
         // За отказом убираем за собой: без этого в состоянии панели копились бы обрезанные
         // загрузки, скачанный архив и файл сумм от неудавшихся обновлений. Страховочную копию
         // не трогаем: её могло не быть вовсе, а если она есть — это готовый откат.
-        UpdatePreparation Fail(UpdateRefusal refusal, string detail)
+        UpdatePreparation Fail(UpdateRefusal refusal, string detail, string more = "")
         {
             TryDeleteFolder(staged);
             TryDeleteFile(archivePath);
             TryDeleteFile(sumsPath);
 
-            return UpdatePreparation.Refuse(refusal, detail);
+            return UpdatePreparation.Refuse(refusal, detail, more);
         }
 
         string Fetch(string url, string path, UpdateStage stage, string name)
@@ -293,39 +360,39 @@ public static class UpdateInstall
             // --- суммы ------------------------------------------------------------------------
 
             var failure = Fetch(request.Assets.SumsUrl, sumsPath, UpdateStage.Sums, UpdateAssets.SumsName);
-            if (failure.Length > 0) return Fail(UpdateRefusal.DownloadFailed, "файл сумм: " + failure);
+            if (failure.Length > 0) return Fail(UpdateRefusal.SumsDownloadFailed, failure);
 
             var sums = UpdateSums.Parse(File.ReadAllLines(sumsPath));
-            if (sums.Count == 0) return Fail(UpdateRefusal.SumsUnreadable, "файл сумм пуст или не разобран");
+            if (sums.Count == 0) return Fail(UpdateRefusal.SumsUnreadable, string.Empty);
 
             // --- архив и его сумма ------------------------------------------------------------
 
             failure = Fetch(request.Assets.ArchiveUrl, archivePath, UpdateStage.Archive, UpdateAssets.ArchiveName);
-            if (failure.Length > 0) return Fail(UpdateRefusal.DownloadFailed, "архив: " + failure);
+            if (failure.Length > 0) return Fail(UpdateRefusal.ArchiveDownloadFailed, failure);
 
             progress?.Invoke(new UpdateProgress(UpdateStage.Verify, UpdateAssets.ArchiveName, 0, -1));
 
             var verdict = UpdateSums.Verify(sums, UpdateAssets.ArchiveName, UpdateSums.Sha256(archivePath));
 
             if (verdict.Check == SumCheck.Missing)
-                return Fail(UpdateRefusal.SumMissing, "в файле сумм нет строки для " + UpdateAssets.ArchiveName);
+                return Fail(UpdateRefusal.ArchiveSumMissing, UpdateAssets.ArchiveName);
 
             if (verdict.Check == SumCheck.Mismatch)
-                return Fail(UpdateRefusal.SumMismatch, $"ожидалось {verdict.Expected}, получено {verdict.Actual}");
+                return Fail(UpdateRefusal.ArchiveSumMismatch, verdict.Expected, verdict.Actual);
 
             // --- распаковка и версия внутри ---------------------------------------------------
 
             progress?.Invoke(new UpdateProgress(UpdateStage.Unpack, archivePath, 0, -1));
 
             var unpack = UpdateStaging.Unpack(archivePath, staged);
-            if (!unpack.Ok) return Fail(UpdateRefusal.ArchiveUnreadable, unpack.Detail);
+            if (!unpack.Ok) return Fail(unpack.Refusal, unpack.Detail, unpack.More);
 
             if (!File.Exists(Path.Combine(staged, UpdateStaging.PanelExeName)))
-                return Fail(UpdateRefusal.NoExe, "в распакованном архиве нет " + UpdateStaging.PanelExeName);
+                return Fail(UpdateRefusal.NoExe, UpdateStaging.PanelExeName);
 
             var inside = (versionOf ?? UpdateStaging.ReadVersion)(staged);
             if (!UpdateStaging.VersionMatches(inside, version))
-                return Fail(UpdateRefusal.VersionMismatch, $"внутри «{inside}», ожидалось «{version}»");
+                return Fail(UpdateRefusal.VersionMismatch, inside, version);
 
             // --- установщик выпуска (если он есть) --------------------------------------------
 
@@ -333,17 +400,15 @@ public static class UpdateInstall
             {
                 var setupPath = Path.Combine(staged, UpdateAssets.SetupName);
                 failure = Fetch(request.Assets.SetupUrl, setupPath, UpdateStage.Setup, UpdateAssets.SetupName);
-                if (failure.Length > 0) return Fail(UpdateRefusal.DownloadFailed, "установщик: " + failure);
+                if (failure.Length > 0) return Fail(UpdateRefusal.SetupDownloadFailed, failure);
 
                 var setup = UpdateSums.Verify(sums, UpdateAssets.SetupName, UpdateSums.Sha256(setupPath));
 
                 if (!setup.Ok)
                 {
-                    return Fail(
-                        setup.Check == SumCheck.Missing ? UpdateRefusal.SumMissing : UpdateRefusal.SumMismatch,
-                        "установщик: " + (setup.Check == SumCheck.Missing
-                            ? "в файле сумм нет строки для " + UpdateAssets.SetupName
-                            : $"ожидалось {setup.Expected}, получено {setup.Actual}"));
+                    return setup.Check == SumCheck.Missing
+                        ? Fail(UpdateRefusal.SetupSumMissing, UpdateAssets.SetupName)
+                        : Fail(UpdateRefusal.SetupSumMismatch, setup.Expected, setup.Actual);
                 }
             }
 
@@ -353,7 +418,7 @@ public static class UpdateInstall
 
             var copy = CopyCurrent(target, backup);
             if (copy.Length == 0)
-                return Fail(UpdateRefusal.NoBackup, "страховочную копию прежней панели снять не удалось: " + target);
+                return Fail(UpdateRefusal.NoBackup, target);
 
             // --- сценарий и шапка журнала -----------------------------------------------------
 
@@ -385,6 +450,11 @@ public static class UpdateInstall
         }
         catch (Exception error)
         {
+            // ОБРАМЛЕНИЕ ПЕРЕВОДИТСЯ, ПРИЧИНА ОСТАЁТСЯ: слова «записать файлы замены не удалось»
+            // живут в словаре (`UpdateWriteFailedFormat`), а сюда идёт причина от .NET — тип
+            // исключения и его сообщение. Сообщение .NET на русской Windows русское, и это
+            // единственное место, где русский текст может попасть в чужую фразу: заменить его
+            // нечем — иначе причина исчезнет вовсе. Решение названо прямо, а не спрятано.
             return Fail(UpdateRefusal.WriteFailed, $"{error.GetType().Name}: {error.Message}");
         }
     }

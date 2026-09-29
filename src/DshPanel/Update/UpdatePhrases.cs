@@ -20,8 +20,11 @@ namespace DshPanel.Update;
 /// Забудь строку для нового отказа — проверка падает, а не молчит.
 ///
 /// ⚠️ Правило подстановки взято у ядра ДОСЛОВНО (<see cref="UpdateRefusals.Key"/>): у ключа
-/// с <c>Format</c> в имени в текст подставляется техническая подробность
-/// (<see cref="UpdatePreparation.Detail"/>), остальные показываются как есть.
+/// с <c>Format</c> в имени в текст подставляются ЗНАЧЕНИЯ отказа
+/// (<see cref="UpdatePreparation.Detail"/> и <see cref="UpdatePreparation.DetailMore"/> — имя
+/// файла, хеш, ожидаемое и полученное), остальные показываются как есть. Человеческих слов
+/// среди подставляемого нет: слова живут в трёх словарях. Проверка трёх языков собирает строку
+/// тем же правилом (<see cref="Fill"/>) — второго правила в панели быть не должно.
 /// </summary>
 public static class UpdateRefusalLines
 {
@@ -42,7 +45,7 @@ public static class UpdateRefusalLines
         : Known(key) ?? PanelStrings.UpdateRefusedUnknown;
 
     /// <summary>
-    /// Строка для человека по готовому ответу движка: ключ плюс подробность. Отказа нет —
+    /// Строка для человека по готовому ответу движка: ключ плюс значения. Отказа нет —
     /// пустая строка (окну нечего показывать).
     /// </summary>
     public static string Line(UpdatePreparation? preparation)
@@ -50,13 +53,24 @@ public static class UpdateRefusalLines
         if (preparation is null || preparation.Ok) return string.Empty;
 
         var key = preparation.RefusalKey;
-        var text = Text(key);
 
-        // Правило подстановки — от ядра: «Format» в имени ключа значит «сюда идёт подробность».
-        return key.Contains("Format", StringComparison.Ordinal)
-            ? string.Format(CultureInfo.CurrentCulture, text, preparation.Detail)
-            : text;
+        return Fill(key, Text(key), preparation.Detail, preparation.DetailMore);
     }
+
+    /// <summary>
+    /// ЗНАЧЕНИЯ В ГОТОВЫЙ ТЕКСТ: «<c>Format</c>» в имени ключа значит «сюда идут значения отказа».
+    ///
+    /// Правило ОДНО на панель и вынесено отдельно ровно затем, чтобы проверка трёх языков
+    /// собирала строку ТЕМ ЖЕ правилом, а не своим: своё правило в проверке разошлось бы
+    /// с панелью молча — и прогон зеленел бы на строке, которой человек не видит.
+    ///
+    /// Лишний довод <c>string.Format</c> пропускает: у отказа со значениями их бывает одно
+    /// (<see cref="UpdatePreparation.Detail"/>) или два (плюс <see cref="UpdatePreparation.DetailMore"/>).
+    /// </summary>
+    public static string Fill(string? key, string text, string detail, string more) =>
+        (key ?? string.Empty).Contains("Format", StringComparison.Ordinal)
+            ? string.Format(CultureInfo.CurrentCulture, text, detail, more)
+            : text;
 
     /// <summary>
     /// Знакомая строка ключа или <c>null</c>, если ключа панель не знает. Таблица ОДНА:
@@ -70,13 +84,22 @@ public static class UpdateRefusalLines
         "UpdateRefusedNoTarget" => PanelStrings.UpdateRefusedNoTarget,
         "UpdateNoArchive" => PanelStrings.UpdateNoArchive,
         "UpdateNoSums" => PanelStrings.UpdateNoSums,
-        "UpdateSumsUnreadableFormat" => PanelStrings.UpdateSumsUnreadableFormat,
-        "UpdateSumMissingFormat" => PanelStrings.UpdateSumMissingFormat,
-        "UpdateSumMismatchFormat" => PanelStrings.UpdateSumMismatchFormat,
-        "UpdateDownloadFailedFormat" => PanelStrings.UpdateDownloadFailedFormat,
-        "UpdateArchiveUnreadableFormat" => PanelStrings.UpdateArchiveUnreadableFormat,
+        "UpdateSumsDownloadFailedFormat" => PanelStrings.UpdateSumsDownloadFailedFormat,
+        "UpdateSumsUnreadable" => PanelStrings.UpdateSumsUnreadable,
+        "UpdateArchiveDownloadFailedFormat" => PanelStrings.UpdateArchiveDownloadFailedFormat,
+        "UpdateArchiveSumMissingFormat" => PanelStrings.UpdateArchiveSumMissingFormat,
+        "UpdateArchiveSumMismatchFormat" => PanelStrings.UpdateArchiveSumMismatchFormat,
+        "UpdateArchiveMissing" => PanelStrings.UpdateArchiveMissing,
+        "UpdateUnpackFolderMissing" => PanelStrings.UpdateUnpackFolderMissing,
+        "UpdateArchiveUnreadable" => PanelStrings.UpdateArchiveUnreadable,
+        "UpdateArchiveEmpty" => PanelStrings.UpdateArchiveEmpty,
+        "UpdateArchiveUnsafeFormat" => PanelStrings.UpdateArchiveUnsafeFormat,
+        "UpdateArchiveBrokenFormat" => PanelStrings.UpdateArchiveBrokenFormat,
         "UpdateNoExe" => PanelStrings.UpdateNoExe,
         "UpdateVersionMismatchFormat" => PanelStrings.UpdateVersionMismatchFormat,
+        "UpdateSetupDownloadFailedFormat" => PanelStrings.UpdateSetupDownloadFailedFormat,
+        "UpdateSetupSumMissingFormat" => PanelStrings.UpdateSetupSumMissingFormat,
+        "UpdateSetupSumMismatchFormat" => PanelStrings.UpdateSetupSumMismatchFormat,
         "UpdateNoBackup" => PanelStrings.UpdateNoBackup,
         "UpdateWriteFailedFormat" => PanelStrings.UpdateWriteFailedFormat,
 

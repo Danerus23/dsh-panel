@@ -43,10 +43,17 @@ public class UpdatePhrasesTests
 
             foreach (var language in Languages)
             {
-                var text = Loc.TIn(language, key);
+                // ⚠️ Читается СЛОВАРЬ языка, а не только `Loc.TIn`: на ПУСТОЕ значение `TIn` молча
+                // отдаёт английский, и пустой перевод выглядел бы переводом. Пустое значение —
+                // пропажа, и она обязана ронять прогон, а не притворяться английским.
+                var dictionary = Loc.Dictionary(language);
 
-                Assert.False(string.IsNullOrWhiteSpace(text), $"{language}: пустая строка отказа «{key}»");
-                Assert.NotEqual(key, text);
+                Assert.True(
+                    dictionary.TryGetValue(key, out var own) && own.Length > 0,
+                    $"{language}: у отказа «{key}» нет своей строки — пустая считается пропажей");
+
+                Assert.Equal(own, Loc.TIn(language, key));
+                Assert.NotEqual(key, own);
             }
         }
     }
@@ -103,18 +110,23 @@ public class UpdatePhrasesTests
     }
 
     /// <summary>
-    /// ПРАВИЛО ПОДСТАНОВКИ ВЗЯТО У ЯДРА ДОСЛОВНО: у ключа с «Format» в имени в строку идёт
-    /// техническая подробность, у остальных — нет. Без этого «Сумма не сошлась: {0}» показала бы
-    /// человеку фигурную скобку вместо того, ЧТО именно не сошлось.
+    /// ПРАВИЛО ПОДСТАНОВКИ ВЗЯТО У ЯДРА ДОСЛОВНО: у ключа с «Format» в имени в строку идут
+    /// ЗНАЧЕНИЯ (ожидаемое и полученное), у остальных — не идут. Без этого «Сумма не сошлась: {0}»
+    /// показала бы человеку фигурную скобку вместо того, ЧТО именно не сошлось.
+    ///
+    /// ⚠️ Подставляются ЗНАЧЕНИЯ, а не человеческие слова: слова причины живут в трёх словарях,
+    /// и русский литерал здесь однажды уже стоял посреди английской фразы (дефект 29.09.2026).
     /// </summary>
     [Fact]
-    public void У_отказа_с_Format_подробность_подставляется_а_у_остальных_нет()
+    public void У_отказа_с_Format_значения_подставляются_а_у_остальных_нет()
     {
-        var mismatch = UpdatePreparation.Refuse(UpdateRefusal.SumMismatch, "ожидалось abc, получено def");
+        var mismatch = UpdatePreparation.Refuse(UpdateRefusal.ArchiveSumMismatch, "abc", "def");
         var line = UpdateRefusalLines.Line(mismatch);
 
-        Assert.Contains("ожидалось abc", line, StringComparison.Ordinal);
+        Assert.Contains("abc", line, StringComparison.Ordinal);
+        Assert.Contains("def", line, StringComparison.Ordinal);
         Assert.DoesNotContain("{0}", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("{1}", line, StringComparison.Ordinal);
 
         var noArchive = UpdatePreparation.Refuse(UpdateRefusal.NoArchive, "мелочь для журнала");
 

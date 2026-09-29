@@ -529,12 +529,16 @@ public static class UpdateSelfTest
                 "у каждого этапа подготовки есть подпись",
                 Enum.GetValues<UpdateStage>().All(stage => UpdateStageLines.Knows(stage)));
 
-            // Правило подстановки взято у ядра: «Format» в имени ключа — сюда идёт подробность.
+            // Правило подстановки взято у ядра: «Format» в имени ключа — сюда идут ЗНАЧЕНИЯ отказа
+            // (ожидаемое и полученное), а не человеческие слова: слова живут в трёх словарях,
+            // и русское слово здесь однажды уже стояло посреди английской фразы.
+            var mismatchLine = UpdateRefusalLines.Line(
+                UpdatePreparation.Refuse(UpdateRefusal.ArchiveSumMismatch, "aaa", "bbb"));
+
             Check(
-                "подробность отказа подставляется в строку",
-                UpdateRefusalLines
-                    .Line(UpdatePreparation.Refuse(UpdateRefusal.SumMismatch, "ожидалось одно, получено другое"))
-                    .Contains("ожидалось одно", StringComparison.Ordinal));
+                "значения отказа подставляются в строку",
+                mismatchLine.Contains("aaa", StringComparison.Ordinal)
+                && mismatchLine.Contains("bbb", StringComparison.Ordinal));
 
             Check(
                 "отказ без Format показывается как есть",

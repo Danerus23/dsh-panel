@@ -2752,6 +2752,11 @@ public static class PanelStrings
     public static string UpdateNoticeFailedFormat => Loc.T(nameof(UpdateNoticeFailedFormat));
 
     // --- причины отказа движка установки (ключи отдаёт `UpdateRefusals.Key`) ---
+    //
+    // ⚠️ ПО СТРОКЕ НА КАЖДЫЙ РАЗЛИЧИМЫЙ СЛУЧАЙ, а не «на тему». Пока пять причин распаковки
+    // делили один ключ, слова причины приходилось класть в `UpdatePreparation.Detail` — русским
+    // литералом из движка, — и на английском и китайском внутри чужой фразы стоял русский текст
+    // («Could not download the release file: файл сумм: …»). Дефект найден 29.09.2026.
 
     /// <summary>Отказ: у прогона нет права готовить замену файлов.</summary>
     public static string UpdateRefusedLocked => Loc.T(nameof(UpdateRefusedLocked));
@@ -2771,31 +2776,58 @@ public static class PanelStrings
     /// <summary>Отказ: в выпуске нет файла контрольных сумм.</summary>
     public static string UpdateNoSums => Loc.T(nameof(UpdateNoSums));
 
-    /// <summary>Отказ: файл сумм пуст или не разобрался (с подробностью).</summary>
-    public static string UpdateSumsUnreadableFormat => Loc.T(nameof(UpdateSumsUnreadableFormat));
+    /// <summary>Отказ: файл контрольных сумм скачать не удалось (значение — причина от загрузчика).</summary>
+    public static string UpdateSumsDownloadFailedFormat => Loc.T(nameof(UpdateSumsDownloadFailedFormat));
 
-    /// <summary>Отказ: суммы для вложения в файле нет (с подробностью).</summary>
-    public static string UpdateSumMissingFormat => Loc.T(nameof(UpdateSumMissingFormat));
+    /// <summary>Отказ: файл сумм пуст или не разобрался ни на одну строку.</summary>
+    public static string UpdateSumsUnreadable => Loc.T(nameof(UpdateSumsUnreadable));
 
-    /// <summary>Отказ: сумма не сошлась — скачался не тот файл (с подробностью).</summary>
-    public static string UpdateSumMismatchFormat => Loc.T(nameof(UpdateSumMismatchFormat));
+    /// <summary>Отказ: архив панели скачать не удалось (значение — причина от загрузчика).</summary>
+    public static string UpdateArchiveDownloadFailedFormat => Loc.T(nameof(UpdateArchiveDownloadFailedFormat));
 
-    /// <summary>Отказ: скачать вложение не удалось (с подробностью).</summary>
-    public static string UpdateDownloadFailedFormat => Loc.T(nameof(UpdateDownloadFailedFormat));
+    /// <summary>Отказ: суммы для архива в файле нет (значение — имя файла).</summary>
+    public static string UpdateArchiveSumMissingFormat => Loc.T(nameof(UpdateArchiveSumMissingFormat));
 
-    /// <summary>Отказ: архив не читается (с подробностью).</summary>
-    public static string UpdateArchiveUnreadableFormat => Loc.T(nameof(UpdateArchiveUnreadableFormat));
+    /// <summary>Отказ: сумма архива не сошлась (значения — ожидаемое и полученное).</summary>
+    public static string UpdateArchiveSumMismatchFormat => Loc.T(nameof(UpdateArchiveSumMismatchFormat));
+
+    /// <summary>Отказ: скачанного архива нет там, где его ждут.</summary>
+    public static string UpdateArchiveMissing => Loc.T(nameof(UpdateArchiveMissing));
+
+    /// <summary>Отказ: не названа папка, в которую распаковывать архив.</summary>
+    public static string UpdateUnpackFolderMissing => Loc.T(nameof(UpdateUnpackFolderMissing));
+
+    /// <summary>Отказ: архив не читается.</summary>
+    public static string UpdateArchiveUnreadable => Loc.T(nameof(UpdateArchiveUnreadable));
+
+    /// <summary>Отказ: архив читается, но файлов в нём нет.</summary>
+    public static string UpdateArchiveEmpty => Loc.T(nameof(UpdateArchiveEmpty));
+
+    /// <summary>Отказ: в архиве есть записи мимо каталога распаковки (значение — сколько их).</summary>
+    public static string UpdateArchiveUnsafeFormat => Loc.T(nameof(UpdateArchiveUnsafeFormat));
+
+    /// <summary>Отказ: разобрать архив не удалось (значение — причина от исключения).</summary>
+    public static string UpdateArchiveBrokenFormat => Loc.T(nameof(UpdateArchiveBrokenFormat));
 
     /// <summary>Отказ: в распакованном архиве нет собранной панели.</summary>
     public static string UpdateNoExe => Loc.T(nameof(UpdateNoExe));
 
-    /// <summary>Отказ: версия внутри архива не совпала с версией выпуска (с подробностью).</summary>
+    /// <summary>Отказ: версия внутри архива не совпала с версией выпуска (значения — внутри и ожидалось).</summary>
     public static string UpdateVersionMismatchFormat => Loc.T(nameof(UpdateVersionMismatchFormat));
+
+    /// <summary>Отказ: установщик выпуска скачать не удалось (значение — причина от загрузчика).</summary>
+    public static string UpdateSetupDownloadFailedFormat => Loc.T(nameof(UpdateSetupDownloadFailedFormat));
+
+    /// <summary>Отказ: суммы для установщика в файле нет (значение — имя файла).</summary>
+    public static string UpdateSetupSumMissingFormat => Loc.T(nameof(UpdateSetupSumMissingFormat));
+
+    /// <summary>Отказ: сумма установщика не сошлась (значения — ожидаемое и полученное).</summary>
+    public static string UpdateSetupSumMismatchFormat => Loc.T(nameof(UpdateSetupSumMismatchFormat));
 
     /// <summary>Отказ: страховочную копию прежней панели снять не удалось.</summary>
     public static string UpdateNoBackup => Loc.T(nameof(UpdateNoBackup));
 
-    /// <summary>Отказ: сценарий замены или шапку журнала записать не удалось (с подробностью).</summary>
+    /// <summary>Отказ: сценарий замены или шапку журнала записать не удалось (значение — причина от исключения).</summary>
     public static string UpdateWriteFailedFormat => Loc.T(nameof(UpdateWriteFailedFormat));
 
     /// <summary>Отказ, которого панель не знает: причина не названа (журнал правили руками).</summary>
