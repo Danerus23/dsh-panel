@@ -44,7 +44,19 @@ public class BackupRotationTests
     private static BackupArchive Dated(string name, DateTimeOffset moment, long bytes = 1000) =>
         new(Path.Combine(@"C:\backups", name), moment, bytes);
 
-    private static readonly DateTimeOffset Base = new(2026, 9, 26, 12, 0, 0, TimeSpan.FromHours(3));
+    /// <summary>
+    /// Отсчёт проверок — по стенным часам ЭТОЙ машины.
+    ///
+    /// ⚠️ **И это не придирка, а причина правки 30.09.2026.** Имя копии хранит МЕСТНУЮ стенную
+    /// отметку (<see cref="BackupNaming.ArchiveName"/>), а читается обратно как местная
+    /// (<see cref="BackupNaming.TimeFromName"/>) — значит сверять её с моментом, у которого
+    /// смещение вписано в проверку руками, можно только на машине с тем же смещением. Прогон CI
+    /// идёт по UTC, и три проверки этого набора падали («Expected +03:00, Actual +00:00») не от
+    /// дефекта, а от ЧАСОВОГО ПОЯСА сборочной машины. Момент берётся в поясе машины, а стенные
+    /// числа остаются прежними (26.09.2026 12:00) — из них и строится имя файла.
+    /// </summary>
+    private static readonly DateTimeOffset Base =
+        new(2026, 9, 26, 12, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2026, 9, 26, 12, 0, 0)));
 
     // --- что удаляется -------------------------------------------------------
 
@@ -340,7 +352,10 @@ public class BackupRotationTests
             var single = Assert.Single(files);
             Assert.Equal(name, single.Name);
             Assert.Equal(512, single.Bytes);
-            Assert.Equal(Base, single.CreatedAt);
+
+            // Момент сверяется СТЕННЫМИ ЧИСЛАМИ машины, а не смещением из проверки: имя хранит
+            // местную отметку, и круг «момент → имя → момент» обязан сойтись в любом поясе.
+            Assert.Equal(Base, LocalRead(single.CreatedAt!.Value));
             Assert.Equal(BackupFileKind.Copy, single.Kind);
         }
         finally
@@ -362,8 +377,23 @@ public class BackupRotationTests
     {
         var name = BackupNaming.ArchiveName(Base, withEngine: true);
 
-        Assert.Equal(Base, BackupNaming.TimeFromName(name));
+        // Круговой оборот «момент → имя → момент»: имя хранит местную отметку машины, и обратно
+        // она читается местной же. Сравнение со смещением из проверки (+03:00) падало бы на UTC.
+        Assert.Equal(Base, LocalRead(BackupNaming.TimeFromName(name)!.Value));
     }
+
+    /// <summary>
+    /// Момент, прочитанный из имени, приведён к стенным числам машины.
+    ///
+    /// Имя копии хранит СТЕННУЮ отметку и смещения не хранит: обратно она читается в поясе машины.
+    /// Поэтому сверять её с моментом, у которого смещение вписано в проверку руками, можно только
+    /// на машине с тем же смещением, — а прогон обязан сходиться в любом поясе. Приведение здесь
+    /// то же самое, что делает <see cref="BackupNaming.TimeFromName"/> внутри
+    /// (<c>DateTime.SpecifyKind(..., Local)</c>), и это не подгонка под ответ: проверка утверждает,
+    /// что круг «стенные числа → имя → те же стенные числа в поясе машины» замкнулся.
+    /// </summary>
+    private static DateTimeOffset LocalRead(DateTimeOffset value) =>
+        new(DateTime.SpecifyKind(value.DateTime, DateTimeKind.Local));
 
     /// <summary>
     /// Имя, которое лишь начинается как наше, временем не считается: «2026-09-26-0135000» —

@@ -131,25 +131,40 @@ public class BackupNamingTests
     /// иначе чужой архив сдвинул бы наш интервал (именно это и случилось ночью 26.09.2026:
     /// «автокопия: рано: прошло 23 ч 34 мин из 24 ч»). А для СПИСКА та же отметка читается и у чужой
     /// копии: порядок «свежие сверху» обязан быть общим для обеих панелей.
+    ///
+    /// ⚠️ **Проверка независима от ЧАСОВОГО ПОЯСА машины** (правка 30.09.2026). Сверять момент
+    /// со смещением, вписанным в проверку руками (+03:00), нельзя: имя копии хранит МЕСТНУЮ стенную
+    /// отметку, а разбирается она как местная, — и на машине с другим поясом (сборочный раннер идёт
+    /// по UTC) ответ законно выходит с другим смещением. Прежняя редакция падала именно на этом:
+    /// «Expected +03:00, Actual +00:00». Ожидание берёт СТЕННЫЕ ЧИСЛА у самой машины, поэтому
+    /// проверяется КРУГОВОЙ оборот «имя → момент», а не пояс машины, на которой прогон.
     /// </summary>
     [Fact]
     public void Время_читается_у_своих_копий_а_чужое_часов_не_двигает()
     {
         var moment = new DateTimeOffset(2026, 9, 24, 23, 30, 0, TimeSpan.FromHours(3));
 
+        // Имя хранит 23:30 и НЕ хранит смещения: обратно эти же стенные числа читаются в поясе
+        // машины. Ожидание строится ровно так же — иначе оно сверяло бы пояс, а не круг.
+        var expected = new DateTimeOffset(DateTime.SpecifyKind(moment.DateTime, DateTimeKind.Local));
+
         var ours = BackupNaming.ArchiveName(moment, withEngine: true);
 
-        Assert.Equal(moment, BackupNaming.TimeFromName(ours));
-        Assert.Equal(moment, BackupNaming.TimeFromName(BackupNaming.SafetyPrefix + "2026-09-24-233000.zip"));
+        // Имя и вправду несёт эти стенные числа — то есть круг «момент → имя → момент» начинается
+        // с той же отметки, которую проверка ждёт на выходе.
+        Assert.Contains("2026-09-24-233000", ours, StringComparison.Ordinal);
+
+        Assert.Equal(expected, BackupNaming.TimeFromName(ours));
+        Assert.Equal(expected, BackupNaming.TimeFromName(BackupNaming.SafetyPrefix + "2026-09-24-233000.zip"));
 
         // Копия панели 1.x: и обычная, и предохранительная — времени для часов НЕ дают.
         Assert.Null(BackupNaming.TimeFromName("dsh-backup-2026-09-24-233000-full.zip"));
         Assert.Null(BackupNaming.TimeFromName("dsh-before-restore-2026-09-24-233000.zip"));
 
         // А для порядка строк в списке — дают: отметка у обеих панелей одна и та же.
-        Assert.Equal(moment, BackupNaming.ListedMoment("dsh-backup-2026-09-24-233000-full.zip"));
-        Assert.Equal(moment, BackupNaming.ListedMoment("dsh-before-restore-2026-09-24-233000.zip"));
-        Assert.Equal(moment, BackupNaming.ListedMoment(ours));
+        Assert.Equal(expected, BackupNaming.ListedMoment("dsh-backup-2026-09-24-233000-full.zip"));
+        Assert.Equal(expected, BackupNaming.ListedMoment("dsh-before-restore-2026-09-24-233000.zip"));
+        Assert.Equal(expected, BackupNaming.ListedMoment(ours));
 
         // Чужой файл не даёт ни того, ни другого.
         Assert.Null(BackupNaming.ListedMoment("чужой-2026-09-24-233000.zip"));

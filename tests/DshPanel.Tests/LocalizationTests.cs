@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using DshPanel.Localization;
 using DshPanel.Settings;
 using DshPanel.Shell;
@@ -23,9 +26,66 @@ namespace DshPanel.Tests;
 ///    Проверки других языков идут через <see cref="Loc.TIn"/> и глобального состояния не трогают:
 ///    xunit гоняет классы параллельно, и «проверил три языка» не должно означать «проверил
 ///    тот, который успел выставиться».
+/// 4. **Культура прогона ЗАДАНА ЯВНО и там же** (правка 30.09.2026). Язык строк — не то же самое,
+///    что культура форматирования, а прогон CI на английском раннере не задавал ни того, ни
+///    другого. Сторожат это две проверки ниже — состояние и сам источник закрепления: сними
+///    закрепление в <c>TestLocale</c> — и они покраснеют (проверено мутацией).
 /// </summary>
 public class LocalizationTests
 {
+    // ---- культура прогона задана явно ------------------------------------------------
+
+    /// <summary>
+    /// Культура форматирования у прогона не «машина такая», а ЗАДАННАЯ: обе культуры —
+    /// инвариантные. Проверка нужна как сторож: пока она зелёная, ни одна проверка набора
+    /// не может «сойтись потому, что машина русская».
+    ///
+    /// <c>CurrentUICulture</c> проверяется отдельно и не для полноты: она живёт независимо
+    /// от <c>CurrentCulture</c>, и оставь её английской — проверки, спрашивающие у .NET строку
+    /// интерфейса, снова зависели бы от машины.
+    /// </summary>
+    [Fact]
+    public void Культура_прогона_задана_явно_и_не_берётся_у_машины()
+    {
+        Assert.Equal(CultureInfo.InvariantCulture, CultureInfo.CurrentCulture);
+        Assert.Equal(CultureInfo.InvariantCulture, CultureInfo.CurrentUICulture);
+        Assert.Equal(CultureInfo.InvariantCulture, CultureInfo.DefaultThreadCurrentCulture);
+        Assert.Equal(CultureInfo.InvariantCulture, CultureInfo.DefaultThreadCurrentUICulture);
+    }
+
+    /// <summary>
+    /// А это сторож САМОГО закрепления, а не его следствия: закрепление обязано стоять в ОДНОМ
+    /// месте (<see cref="TestLocale"/>) и ставить ОБЕ культуры. Без этой проверки снятие
+    /// закрепления заметила бы только машина с другой культурой — то есть на сборочном раннере,
+    /// а не здесь, и «проверено» означало бы «проверено кем-то другим когда-то».
+    /// </summary>
+    [Fact]
+    public void Закрепление_культуры_стоит_в_одном_месте_и_ставит_обе_культуры()
+    {
+        var path = TestLocaleSource();
+
+        Assert.True(File.Exists(path), $"не нашёл TestLocale.cs: {path}");
+
+        var text = File.ReadAllText(path);
+
+        foreach (var assignment in new[]
+                 {
+                     "CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;",
+                     "CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;",
+                     "CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;",
+                     "CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;",
+                 })
+        {
+            Assert.True(
+                text.Contains(assignment, StringComparison.Ordinal),
+                $"в TestLocale.cs нет строки «{assignment}» — культура снова берётся у машины");
+        }
+    }
+
+    /// <summary>Путь к <c>TestLocale.cs</c> — от этого файла, а не от рабочего каталога процесса.</summary>
+    private static string TestLocaleSource([CallerFilePath] string thisFile = "") =>
+        Path.Combine(Path.GetDirectoryName(thisFile)!, "TestLocale.cs");
+
     private static Dictionary<string, string> Ru => new(Loc.Dictionary("ru"), StringComparer.Ordinal);
 
     private static List<string> Members() =>

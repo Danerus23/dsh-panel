@@ -29,7 +29,18 @@ namespace DshPanel.Tests;
 /// </summary>
 public class BackupScheduleLifeTests
 {
-    private static readonly DateTimeOffset Now = new(2026, 9, 26, 12, 0, 0, TimeSpan.FromHours(3));
+    /// <summary>
+    /// Часы стенда: 26.09.2026 12:00 по СТЕННЫМ часам ЭТОЙ машины.
+    ///
+    /// ⚠️ **Смещение берётся у машины, а не вписывается руками (+03:00), и это причина правки
+    /// 30.09.2026.** Архивы здесь кладутся в папку НАСТОЯЩИМИ именами (<see cref="BackupNaming"/>),
+    /// а имя хранит местную стенную отметку и читается обратно как местная. Часы стенда — тоже
+    /// местные. Разъедься они (часы со смещением +03:00, чтение имени — по поясу машины) — и
+    /// «прошлая копия» уезжает на разницу поясов: на сборочном раннере с UTC три проверки этого
+    /// набора падали «прошлая копия помечена будущим временем». Стенные числа при этом прежние.
+    /// </summary>
+    private static readonly DateTimeOffset Now =
+        new(2026, 9, 26, 12, 0, 0, TimeZoneInfo.Local.GetUtcOffset(new DateTime(2026, 9, 26, 12, 0, 0)));
 
     private sealed record Stand(BackupController Control, AppPaths Paths, PanelSettings Settings, List<string> Log, List<NoticeKind> Notices);
 
