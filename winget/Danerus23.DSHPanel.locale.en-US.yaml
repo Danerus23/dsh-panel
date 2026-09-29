@@ -3,10 +3,10 @@
 # DSH Panel — en-US defaultLocale manifest (en-US is the DefaultLocale of the version file,
 # so this file is the defaultLocale manifest, not an extra locale one).
 # PackageName and Publisher must match Windows "Apps and features" for this install:
-# DisplayName = "DSH Panel", Publisher = "Danerus23", DisplayVersion = "1.20.3".
+# DisplayName = "DSH Panel", Publisher = "Danerus23", DisplayVersion = "2.0.0".
 
 PackageIdentifier: Danerus23.DSHPanel
-PackageVersion: 1.21.0
+PackageVersion: 2.0.0
 PackageLocale: en-US
 Publisher: Danerus23
 PublisherUrl: https://github.com/Danerus23
@@ -39,9 +39,9 @@ Description: |-
   dsh command line and does not modify it; it does not send telemetry.
 
   Requirements: Windows 10 or 11 (x64), Node.js 20 or newer, and the DSH package
-  (@deepseek-ai/dsh). The .NET Desktop Runtime 8 is required by the panel itself and is
-  installed by this package when it is missing; the portable "no .NET needed" build and a
-  setup-free zip are published on the GitHub releases page.
+  (@deepseek-ai/dsh). The panel needs no .NET runtime of its own: 2.0 is one executable with
+  the runtime inside, and the installer does not install Node or the DSH engine. A setup-free
+  zip is published on the GitHub releases page.
 
   Not affiliated with DeepSeek. DSH Panel is a community-made tray application; DeepSeek and
   DeepSeek Harness are trademarks of their respective owner.
@@ -53,9 +53,9 @@ Tags:
 - backup
 - local-server
 - windows
-- winforms
+- avalonia
 - dotnet
-ReleaseNotesUrl: https://github.com/Danerus23/dsh-panel/releases/tag/v1.21.0
+ReleaseNotesUrl: https://github.com/Danerus23/dsh-panel/releases/tag/v2.0.0
 Documentations:
 - DocumentLabel: README
   DocumentUrl: https://github.com/Danerus23/dsh-panel#readme
