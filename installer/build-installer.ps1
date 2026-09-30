@@ -43,9 +43,16 @@ if (-not $OutDir) { $OutDir = Join-Path $root 'dist' }
 # `-AppDir upd-build\rel-dist` он искал `installer\upd-build\rel-dist\*` и падал
 # («No files found matching …») — проверено 29.09.2026.
 if (-not [IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path $root $OutDir }
-if (-not [IO.Path]::IsPathRooted($AppDir)) { $AppDir = Join-Path $root $AppDir }
 $OutDir = [IO.Path]::GetFullPath($OutDir)
-if ($AppDir) { $AppDir = [IO.Path]::GetFullPath($AppDir) }
+
+# ⚠️ -AppDir трогаем ТОЛЬКО когда он задан: ПУСТОЙ означает «взять из -OutDir», и это решается ниже.
+# Здесь 30.09.2026 была ошибка: `Join-Path $root ''` на пустом -AppDir давал КОРЕНЬ репозитория,
+# панель искалась в корне, и сборка падала «нет панели: <корень>\DshPanel.exe». Локально это
+# не видно (я всегда передавал -AppDir), а в CI, где зовут только `-SkipBuild`, видно сразу.
+if ($AppDir) {
+    if (-not [IO.Path]::IsPathRooted($AppDir)) { $AppDir = Join-Path $root $AppDir }
+    $AppDir = [IO.Path]::GetFullPath($AppDir)
+}
 
 if (-not (Test-Path -LiteralPath $project)) {
     throw ('не нашёл проект панели: ' + $project)
