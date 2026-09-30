@@ -75,14 +75,19 @@ jobs:
         run: dotnet test tests/DshPanel.Tests/DshPanel.Tests.csproj -c Release --no-build
 
       # Раздатка для выпуска: один exe (среда .NET внутри, ставить её не нужно).
+      # ⚠️ ПРОГОН ВРУЧНУЮ (workflow_dispatch) СОБИРАЕТ ВСЮ ВЫПУСКНУЮ ЧАСТЬ, КРОМЕ САМОГО ВЫПУСКА.
+      # Так проверяют шаг установщика ДО тега. Причина — 30.09.2026: установщик сломался на
+      # компиляторе (в Inno Setup 6 нет китайского языка; раннер ставит семёрку туда, где её
+      # искали не первым), и CI узнал об этом только на теге — выпуск пришлось собирать руками.
+      # Job release ниже по-прежнему запускается ТОЛЬКО по тегу: прогон вручную ничего не публикует.
       - name: Опубликовать панель (один exe)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: dotnet publish src/DshPanel/DshPanel.csproj -c Release -p:PublishProfile=win-x64 -o dist
 
       # Установщик нужен в выпуске: панель качает dsh-panel-setup.exe как часть комплекта.
       - name: Установить Inno Setup 7
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
           $iscc = @(
@@ -108,14 +113,14 @@ jobs:
 
       # Версия берётся из единственного места (DshPanel.csproj) — скрипт читает её сам.
       - name: Собрать установщик
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: ./installer/build-installer.ps1 -SkipBuild
 
       # Архив раздатки: панель — один exe, но комплект «распаковал и запустил» людям нужен.
       # Имя архива — как у 1.x: оно жёстко зашито в инструментах winget и в панели.
       - name: Собрать архив
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
           $zip = Join-Path (Get-Location) 'dist/DshPanel.zip'
@@ -126,7 +131,7 @@ jobs:
       # Файл сумм: панель сверяет по нему скачанное, и формат у него свой —
       # «хэш, два пробела, имя файла», UTF-8 БЕЗ BOM (с BOM первый хэш перестал бы быть хэшем).
       - name: Записать контрольные суммы
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
           $names = @('dsh-panel-setup.exe', 'DshPanel.zip')
@@ -140,7 +145,7 @@ jobs:
           Get-Content $out
 
       - name: Сохранить файлы выпуска
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-files

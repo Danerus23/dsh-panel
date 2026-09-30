@@ -93,19 +93,80 @@ $stamp = @(
 Write-Host ('версия: ' + $version)
 
 # --- 3. Компилятор -----------------------------------------------------------
+#
+# ⚠️ ЗДЕСЬ 30.09.2026 ПАДАЛ ВЫПУСК (шаг CI «Собрать установщик», тег v2.0.1), и виноват был
+# не установщик: на раннере GitHub уже стоит Inno Setup 6 (в «Program Files (x86)»), а шаг CI
+# ставит Inno Setup 7 (в «Program Files»). Прежний список искал шестёрку РАНЬШЕ семёрки, сборка
+# брала её — а в шестёрке НЕТ китайского языка (`Languages\ChineseSimplified.isl`). Панель обещает
+# три языка, .iss требует этот файл, и Inno падал на строке 104 «Couldn't open include file»:
+# снаружи это выглядело как «установщик не собрался» без причины. Локально не воспроизводилось —
+# на машине владельца семёрка лежит там, где её ищут первым.
+#
+# Отсюда два правила, и оба проверяемы:
+#   1) все пути Inno Setup 7 идут ПЕРЕД любым Inno Setup 6;
+#   2) компилятор обязан уметь собрать ЭТОТ .iss — его языковые файлы проверяются ДО запуска.
+
+$iss = Join-Path $installerDir 'dsh-panel.iss'
+
+# Языки берутся из самого .iss: добавили в него язык — скрипт потребует и файл для него.
+function Get-IssLanguageFile {
+    param([string]$IssPath)
+
+    $files = New-Object Collections.Generic.List[string]
+    foreach ($line in (Get-Content -LiteralPath $IssPath)) {
+        foreach ($match in [regex]::Matches($line, 'MessagesFile:\s*"compiler:([^"]+)"')) {
+            $files.Add(($match.Groups[1].Value -replace '/', '\'))
+        }
+    }
+    return $files.ToArray()
+}
+
+# Пустой ответ — компилятор годится; непустой — список недостающих у него файлов.
+function Get-MissingLanguageFile {
+    param([string]$IsccPath, [string[]]$Needed)
+
+    $dir = Split-Path -Parent $IsccPath
+    $missing = New-Object Collections.Generic.List[string]
+    foreach ($file in $Needed) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dir $file))) { $missing.Add($file) }
+    }
+    return $missing.ToArray()
+}
+
+$languageFiles = Get-IssLanguageFile -IssPath $iss
+if (-not $languageFiles -or $languageFiles.Count -eq 0) {
+    throw ('в ' + $iss + ' не нашлось ни одного MessagesFile — посмотрите раздел [Languages]')
+}
 
 if (-not $Iscc) {
+    # Порядок — это предпочтение: сперва седьмая версия во всех своих местах, потом шестая.
     $candidates = @(
         (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 7\ISCC.exe'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
-        'C:\Program Files (x86)\Inno Setup 7\ISCC.exe',
-        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
         'C:\Program Files\Inno Setup 7\ISCC.exe',
-        'C:\Program Files\Inno Setup 6\ISCC.exe'
+        'C:\Program Files (x86)\Inno Setup 7\ISCC.exe',
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
+        'C:\Program Files\Inno Setup 6\ISCC.exe',
+        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
     )
 
+    $unfit = New-Object Collections.Generic.List[string]
     foreach ($candidate in $candidates) {
-        if (Test-Path -LiteralPath $candidate) { $Iscc = $candidate; break }
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+
+        $missing = Get-MissingLanguageFile -IsccPath $candidate -Needed $languageFiles
+        if ($missing.Count -gt 0) {
+            $unfit.Add('   ' + $candidate + ' — нет: ' + ($missing -join ', '))
+            continue
+        }
+
+        $Iscc = $candidate
+        break
+    }
+
+    if (-not $Iscc -and $unfit.Count -gt 0) {
+        throw ('ни один компилятор Inno Setup на этой машине не соберёт установщик с этими языками:' +
+            [Environment]::NewLine + ($unfit -join [Environment]::NewLine) + [Environment]::NewLine +
+            'Нужен Inno Setup 7: китайского языка (' + ($languageFiles -join ', ') + ') в шестёрке нет.')
     }
 }
 
@@ -119,12 +180,19 @@ if (-not $Iscc) {
         'winget install --id JRSoftware.InnoSetup --exact --silent — или укажите -Iscc <путь>')
 }
 
+# Последняя дверь: и -Iscc, и ISCC.exe из PATH проходят ту же проверку, что и поиск.
+$missingInChosen = Get-MissingLanguageFile -IsccPath $Iscc -Needed $languageFiles
+if ($missingInChosen.Count -gt 0) {
+    throw ('компилятор ' + $Iscc + ' не соберёт этот установщик: нет файлов ' +
+        ($missingInChosen -join ', ') + ' (нужен Inno Setup 7 — в шестёрке китайского языка нет)')
+}
+
 $isccVersion = (Get-Item -LiteralPath $Iscc).VersionInfo.FileVersion
 Write-Host ('компилятор: ' + $Iscc + ' (' + $isccVersion + ')')
 
 # --- 4. Сборка установщика ---------------------------------------------------
 
-$iss = Join-Path $installerDir 'dsh-panel.iss'
+# $iss найден выше — в разделе 3, потому что оттуда же берутся языки компилятора.
 $setup = Join-Path $OutDir 'dsh-panel-setup.exe'
 if (Test-Path -LiteralPath $setup) { Remove-Item -LiteralPath $setup -Force }
 

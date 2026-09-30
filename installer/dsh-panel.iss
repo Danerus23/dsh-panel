@@ -101,6 +101,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 [Languages]
 Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
+; ⚠️ Китайский есть ТОЛЬКО в Inno Setup 7: в шестёрке файла `ChineseSimplified.isl` нет, и компиляция
+; падает «Couldn't open include file» (так и было 30.09.2026 в CI). Сборка проверяет языковые файлы
+; компилятора заранее — понижать компилятор нельзя, панель обещает три языка.
 Name: "zh"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [CustomMessages]
