@@ -31,12 +31,22 @@
 
 ![Panel, English](docs/screenshots/en/panel.png)
 
-Panel version — **2.0.0**. One file, `DshPanel.exe`, installed into your user profile; no
-administrator rights and no separate .NET install — the runtime is inside.
+**Your DSH server, under control** — and out of the way in the tray. One file, `DshPanel.exe`:
+installed into your user profile, no administrator rights, no separate .NET install — the runtime is
+inside. This panel version is **2.0.1**.
 
-The panel speaks three languages — **Russian, English and Chinese**. Russian is the original, while
-**English and Chinese are machine translations**: the meaning is right, but some wording may not
-sound native.
+Start and stop the server, a tray icon that shows its state, your balance, peak windows and price
+history, copies of your data with restore, and the panel updating itself — all of it **in three
+languages: Russian, English and Chinese**.
+
+Peak windows are shown in **your local time**, prices come with a history of changes rather than from
+memory, and the sign-in link opens only when you click it.
+
+You only need your own installed DSH: the panel manages your server, it does not bring one. For what
+the panel does not do, see [“What is missing”](#what-is-missing).
+
+Russian is the original. **English and Chinese are machine translations:** the meaning is right, but
+some wording may not sound native.
 
 ## Installation
 
@@ -48,8 +58,8 @@ sound native.
 3. Then press **Start** — the panel brings up your DSH server and shows its state. The entry link
    opens in your browser from a separate button.
 
-DSH Panel 2.0 installs **over panel 1.x**: both use the same package identifier, so the tray keeps
-one panel, not two.
+If you already have an **earlier panel**, the installer goes over it: both use the same package
+identity, so the tray keeps one panel, not two.
 
 **What it needs:** Windows 10 or 11, x64. No .NET install. It also needs your own installed DSH —
 the engine is not bundled (see “What is missing”).
@@ -115,7 +125,7 @@ was not the one it replaced.
 
 ### Three languages
 
-Russian, English and Chinese. The language is chosen in the settings.
+Russian, English and Chinese. The language switch is in the settings.
 
 ### Reporting a problem
 
@@ -133,20 +143,19 @@ looked for, what it found, which versions of DSH, Node, npm and pnpm are install
 
 ## What is missing
 
-This is said plainly so that nothing comes as a surprise:
-
-* **No DSH engine and no Node in the download.** The panel does not ship them: you need your own
-  installed DSH. Panel 1.x had an installer that brought both the engine and Node — this one does
-  not.
-* **No code signing at all.** On the first run SmartScreen will warn about an unknown publisher.
-  That is expected: no signing certificate was bought.
-* **No DSH updates.** The panel updates itself and nothing else.
-* **The peak table knows no Chinese holidays.** The schedule is weekly — the same as on the pricing
-  page.
+* **You need your own installed DSH.** No engine and no Node come with the download: the panel
+  manages your server, it does not bring one. Your own DSH is what makes the server start and what
+  fills the environment report.
+* **There is no code signing — SmartScreen will warn you.** On the first run it will say the
+  publisher is unknown: no signing certificate was bought. That is expected; you can still run the
+  installer through “More info” → “Run anyway”.
+* **The panel updates only itself.** It does not update DSH itself — DSH updates on its own.
+* **The peak schedule is weekly.** The table runs by days of the week, the same as on the pricing
+  page, and knows no Chinese holidays.
 
 ## Screenshots
 
-Every window comes in all three languages. The shots were taken on a demo profile.
+Every window comes in all three languages — the language switch lives in the settings.
 
 ![Several panel windows at once.](docs/demo.png)
 
@@ -178,8 +187,8 @@ inside — the machine that runs it needs no .NET install.
 Building needs the **.NET SDK 10** (the version is pinned in `global.json`) and a network
 connection, because packages come from NuGet. The installer is built by
 [Inno Setup 7](https://jrsoftware.org/isdl.php) through `installer\build-installer.ps1`, which also
-places the release file in `dist\`. Node and pnpm are what brings the server up, not what builds the
-panel.
+places the release file in `dist\`. The build itself needs no Node and no pnpm — those bring the
+server up, they do not build the panel.
 
 ## Support the project
 
