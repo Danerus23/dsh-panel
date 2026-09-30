@@ -402,13 +402,25 @@ public class BackupShareableTests
             var due = controller.Tick(new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero));
             Assert.True(due.Take, "расписание не сработало: " + due.Reason);
 
+            // ⚠️ Ждём НЕ «файл появился», а «работа кончилась». 7-Zip создаёт архив СРАЗУ и держит его,
+            // пока пишет, поэтому чтение по одному лишь появлению файла падало
+            // «The process cannot access the file … because it is being used by another process»:
+            // так вышло в CI 30.09.2026 (прогон 36662334090), а на машине повторилось **8 раз из 40**.
+            // `Busy` — собственная дверь контроллера: она занята ровно на время работы и снимается
+            // в `finally` ПОСЛЕ движка, а движок копий с `Verify: true` сам читает архив в конце, —
+            // значит «не занято» честно означает «архив закрыт и уже кем-то прочитан».
+            var files = Directory.GetFiles(paths.BackupsDir, "dsh2-backup-*.zip");
             var deadline = DateTime.UtcNow.AddSeconds(30);
-            while (DateTime.UtcNow < deadline && Directory.GetFiles(paths.BackupsDir, "dsh2-backup-*.zip").Length == 0)
+            while (DateTime.UtcNow < deadline && (files.Length == 0 || controller.Busy))
             {
                 System.Threading.Thread.Sleep(50);
+                files = Directory.GetFiles(paths.BackupsDir, "dsh2-backup-*.zip");
             }
 
-            var archive = Directory.GetFiles(paths.BackupsDir, "dsh2-backup-*.zip").Single();
+            Assert.True(files.Length > 0, "ночная копия не появилась за 30 секунд");
+            Assert.False(controller.Busy, "копия ещё идёт: читать архив в этот момент нельзя");
+
+            var archive = files.Single();
 
             Assert.Contains(
                 Names(archive),

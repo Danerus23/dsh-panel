@@ -149,10 +149,13 @@ jobs:
       # ⚠️ Раньше здесь стояло `--generate-notes`: это английский текст GitHub без меток, и панель
       # показала бы его на всех трёх языках. Дыру не было видно, пока выпуски собирались руками
       # (описание к ним ставили вручную) — 30.09.2026 выпускную часть впервые прогнали в конвейере.
+      # ⚠️ Версию инструмент берёт сам из `src/DshPanel/DshPanel.csproj` (как установщик), а НЕ из
+      # `github.ref_name`: прогон вручную идёт с ветки, и `ref_name` там — `main` (на этом ручной
+      # прогон 36663614401 и упал: искался раздел `## main`).
       - name: Собрать описание выпуска (три языка)
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: pwsh
-        run: ./tools/release-notes.ps1 -Version '${{ github.ref_name }}' -Out dist/release-notes.md
+        run: ./tools/release-notes.ps1 -Out dist/release-notes.md
 
       - name: Сохранить файлы выпуска
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'

@@ -12,19 +12,34 @@
 # его на всех трёх языках. Дыру нашли при разборе выпускного пути (в CI выпуск не создавался ни
 # разу: оба тега падали на шаге установщика).
 #
-# Запуск:  pwsh -NoProfile -File .\tools\release-notes.ps1 -Version v2.0.1 -Out dist\release-notes.md
-#          Без -Tree берётся корень репозитория — так зовёт конвейер (шаг «Собрать описание выпуска»).
+# Запуск:  pwsh -NoProfile -File .\tools\release-notes.ps1 -Out dist\release-notes.md
+#          Без -Tree берётся корень репозитория, без -Version — `<Version>` из DshPanel.csproj;
+#          именно так зовёт конвейер (шаг «Собрать описание выпуска (три языка)»).
 
 param(
     [string]$Tree = '',
     [Parameter(Mandatory = $true)][string]$Out,
-    [Parameter(Mandatory = $true)][string]$Version
+    [string]$Version = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
 if (-not $Tree) { $Tree = Split-Path -Parent $PSScriptRoot }
 if (-not (Test-Path -LiteralPath $Tree)) { throw ('нет дерева выпуска: ' + $Tree) }
+
+# ⚠️ Версию НЕЛЬЗЯ брать из `github.ref_name`: на выпуске это метка (`v2.0.1`), а прогон вручную
+# идёт с ВЕТКИ, и там `ref_name` = `main` — инструмент искал бы раздел `## main` и падал
+# (проверено 30.09.2026: ручной прогон 36663614401 упал ровно на этом). Берём <Version> из
+# единственного места — `src\DshPanel\DshPanel.csproj`; оттуда же её берёт установщик.
+if (-not $Version) {
+    $project = Join-Path $Tree 'src\DshPanel\DshPanel.csproj'
+    if (-not (Test-Path -LiteralPath $project)) { throw ('нет проекта панели: ' + $project) }
+
+    $found = (Select-String -LiteralPath $project -Pattern '<Version>([^<]+)</Version>').Matches
+    if (-not $found -or $found.Count -eq 0) { throw ('не нашёл <Version> в ' + $project) }
+    $Version = $found[0].Groups[1].Value
+    Write-Host ('версия взята из DshPanel.csproj: ' + $Version)
+}
 
 # Метка приходит из конвейера как `v2.0.1`, а раздел в CHANGELOG называется `## 2.0.1`.
 $version = $Version.TrimStart('v', 'V')
