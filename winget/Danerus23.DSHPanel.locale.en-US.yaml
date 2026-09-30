@@ -3,10 +3,10 @@
 # DSH Panel — en-US defaultLocale manifest (en-US is the DefaultLocale of the version file,
 # so this file is the defaultLocale manifest, not an extra locale one).
 # PackageName and Publisher must match Windows "Apps and features" for this install:
-# DisplayName = "DSH Panel", Publisher = "Danerus23", DisplayVersion = "2.0.0".
+# DisplayName = "DSH Panel", Publisher = "Danerus23", DisplayVersion = "2.0.1".
 
 PackageIdentifier: Danerus23.DSHPanel
-PackageVersion: 2.0.0
+PackageVersion: 2.0.1
 PackageLocale: en-US
 Publisher: Danerus23
 PublisherUrl: https://github.com/Danerus23
@@ -55,7 +55,7 @@ Tags:
 - windows
 - avalonia
 - dotnet
-ReleaseNotesUrl: https://github.com/Danerus23/dsh-panel/releases/tag/v2.0.0
+ReleaseNotesUrl: https://github.com/Danerus23/dsh-panel/releases/tag/v2.0.1
 Documentations:
 - DocumentLabel: README
   DocumentUrl: https://github.com/Danerus23/dsh-panel#readme

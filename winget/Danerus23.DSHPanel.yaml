@@ -6,7 +6,7 @@
 #
 # PackageVersion and the installer hash are filled in by tools\winget-manifest.ps1:
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\winget-manifest.ps1 -ReleaseTag v2.0.0
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\winget-manifest.ps1 -ReleaseTag v2.0.1
 #
 # Take the hash from the published release (SHA256SUMS.txt), not from a local build:
 # the release is built by CI and its bytes differ from a locally built installer. The
@@ -14,7 +14,7 @@
 # it refuses to combine a release tag with a different project version.
 
 PackageIdentifier: Danerus23.DSHPanel
-PackageVersion: 2.0.0
+PackageVersion: 2.0.1
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.12.0
