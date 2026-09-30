@@ -2,6 +2,25 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.0.1 - 2026-09-30
+
+**Accuracy and language.** A small release about the panel not confusing agents, speaking the panel's
+own language, and getting a problem report all the way to GitHub.
+
+* **The balance no longer confuses agents.** If you switched the active agent while a balance request
+  was in flight, the panel could show the **previous** agent's balance under the new agent's name.
+  Now an answer is applied only to the agent it was asked for, and the new agent is asked again right
+  away.
+* **The problem report is translated.** Its text was Russian whatever the panel language - now it
+  follows the panel language, and the report says that the panel log is kept in Russian as well.
+* **The update window.** Failure reasons are no longer substituted as Russian words into English and
+  Chinese sentences.
+* **The "Open on GitHub" link in the problem report works.** GitHub used to refuse it because the
+  whole report did not fit into the address - now the panel shortens it itself and says how many log
+  lines went in.
+* **The installer carries the panel icon again** (it had the Inno icon).
+* **README and logo updated.**
+
 ## 2.0.0 - 2026-09-29
 
 **The first 2.0 release.** The panel was rewritten from scratch: C# / Avalonia, .NET 10, **one exe**,
@@ -55,22 +74,3 @@ does not ship them.
 * **No code signing at all** - SmartScreen will warn on the first run.
 * **No DSH updates:** the panel updates only itself.
 * The peak table does not know Chinese holidays: the schedule is weekly.
-
-## 2.0.1 - 2026-09-30
-
-**Accuracy and language.** A small release about the panel not confusing agents, speaking the panel's
-own language, and getting a problem report all the way to GitHub.
-
-* **The balance no longer confuses agents.** If you switched the active agent while a balance request
-  was in flight, the panel could show the **previous** agent's balance under the new agent's name.
-  Now an answer is applied only to the agent it was asked for, and the new agent is asked again right
-  away.
-* **The problem report is translated.** Its text was Russian whatever the panel language - now it
-  follows the panel language, and the report says that the panel log is kept in Russian as well.
-* **The update window.** Failure reasons are no longer substituted as Russian words into English and
-  Chinese sentences.
-* **The "Open on GitHub" link in the problem report works.** GitHub used to refuse it because the
-  whole report did not fit into the address - now the panel shortens it itself and says how many log
-  lines went in.
-* **The installer carries the panel icon again** (it had the Inno icon).
-* **README and logo updated.**

@@ -144,6 +144,16 @@ jobs:
           [IO.File]::WriteAllLines($out, $lines, (New-Object Text.UTF8Encoding($false)))
           Get-Content $out
 
+      # ОПИСАНИЕ ВЫПУСКА — на трёх языках, с машинными метками `<!-- dsh-notes:xx -->`: только их
+      # разбирает панель, показывая человеку заметки на ЕГО языке (`Update\UpdateDecisions.PickNotes`).
+      # ⚠️ Раньше здесь стояло `--generate-notes`: это английский текст GitHub без меток, и панель
+      # показала бы его на всех трёх языках. Дыру не было видно, пока выпуски собирались руками
+      # (описание к ним ставили вручную) — 30.09.2026 выпускную часть впервые прогнали в конвейере.
+      - name: Собрать описание выпуска (три языка)
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: ./tools/release-notes.ps1 -Version '${{ github.ref_name }}' -Out dist/release-notes.md
+
       - name: Сохранить файлы выпуска
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -153,6 +163,7 @@ jobs:
             dist/dsh-panel-setup.exe
             dist/DshPanel.zip
             dist/SHA256SUMS.txt
+            dist/release-notes.md
 
   # Выпуск создаётся ТОЛЬКО по тегу: до тега файлы лежат артефактом и никому не видны.
   # ⚠️ Публикация выпуска — это то, что владелец разрешает отдельно (docs\RELEASE-V2.md §6):
@@ -177,9 +188,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = '${{ github.ref_name }}'
+          # Описание — файл, собранный шагом «Собрать описание выпуска (три языка)» из трёх
+          # CHANGELOG: три размеченных блока `<!-- dsh-notes:xx -->`. Заголовок выпуска — `$tag`,
+          # а внутри лежит имя версии без «v» (метка `v2.0.1` → разделы `## 2.0.1`).
           gh release create $tag `
             'release-files/dsh-panel-setup.exe' `
             'release-files/DshPanel.zip' `
             'release-files/SHA256SUMS.txt' `
             --title "DSH Panel $tag" `
-            --generate-notes
+            --notes-file 'release-files/release-notes.md'
