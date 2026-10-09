@@ -179,6 +179,14 @@ jobs:
       contents: write
 
     steps:
+      # ⚠️ БЕЗ ЭТОГО ШАГА ВЫПУСК НЕ СОЗДАЁТСЯ, и падение выглядит чужой ошибкой:
+      # `gh release create` в каталоге без репозитория отвечает «failed to run git: fatal: not a
+      # git repository» — то есть жалуется на git, а не на отсутствие checkout. Проверено тегом
+      # `v2.0.2` (прогон 37971873765): сборка выпускной части прошла целиком, а job `release` упал
+      # на этом. У сборки checkout есть, у выпуска его не было вовсе.
+      # actions/checkout v4.4.0 — тот же, что у job `build`.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
       - name: Забрать файлы выпуска
         uses: actions/download-artifact@v4
         with:
@@ -198,5 +206,5 @@ jobs:
             'release-files/dsh-panel-setup.exe' `
             'release-files/DshPanel.zip' `
             'release-files/SHA256SUMS.txt' `
-            --title "DSH Panel $tag" `
+            --title "DSH Panel $($tag.TrimStart('v'))" `
             --notes-file 'release-files/release-notes.md'

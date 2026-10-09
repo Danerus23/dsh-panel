@@ -2,7 +2,7 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
-## 2.0.2 - 2026-09-30
+## 2.0.2 - 2026-10-09
 
 **The panel no longer confuses "the money ran out" with "the key was rejected".**
 
