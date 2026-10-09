@@ -21,6 +21,18 @@ public sealed record BalanceResult(
     DateTimeOffset CheckedAt,
     string AgentId)
 {
+    /// <summary>
+    /// Сервер ОТВЕРГ ключ (401/403) — отдельно от «счёт недоступен».
+    ///
+    /// ⚠️ Зачем отдельное поле (находка владельца 30.09.2026). Он показал окно, где на счёте было
+    /// **−0.01**, а панель писала «Счёт недоступен: **ключ не принят**» — то есть называла не ту
+    /// причину. Пришло это из DeepSeek: на исчерпанном счёте сервис отвечает `is_available: false`
+    /// (это про ДЕНЬГИ), а ключ при этом принят — HTTP 200 и данные баланса на месте. Настоящее
+    /// «ключ не принят» — это 401/403, и раньше оно показывалось словами «баланс не запрашивался»
+    /// (<c>StatusText</c>), то есть две правды стояли МЕСТАМИ. Теперь у каждой своё место.
+    /// </summary>
+    public bool Rejected { get; init; }
+
     /// <summary>Запрос ещё не делался (или его нельзя делать в этом прогоне).</summary>
     public static BalanceResult NotRequested(string agentId) =>
         new(false, false, null, string.Empty, PanelStrings.BalanceNotRequested, string.Empty, string.Empty,
@@ -72,8 +84,11 @@ public sealed class HttpBalanceClient : IBalanceClient
 
             if (!response.IsSuccessStatusCode)
             {
+                // 401/403 — это про КЛЮЧ, остальные коды — про связь и сервис. Правды разные:
+                // «ключ не принят» человек чинит одним способом, «ответ не получен» — другим.
                 return BalanceResult.Failed(
-                    Redact($"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", key), agent.Id, now);
+                    Redact($"HTTP {(int)response.StatusCode} {response.ReasonPhrase}", key), agent.Id, now)
+                    with { Rejected = (int)response.StatusCode is 401 or 403 };
             }
 
             using var document = JsonDocument.Parse(body);

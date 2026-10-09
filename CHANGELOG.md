@@ -2,6 +2,22 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.0.2 - 2026-09-30
+
+**The panel no longer confuses "the money ran out" with "the key was rejected".**
+
+* On an exhausted account the panel said "Account unavailable: the key was rejected" — while the key
+  was accepted and the balance was simply used up. Now it names the real reason and **shows the
+  amount**: "Account unavailable: the balance is used up (-0.01 CNY)".
+* A genuinely rejected key (401/403) is described in terms of the key, and a connection failure
+  speaks for itself ("Balance not received"), with the reason on the details line. All three cases
+  used to look the same.
+* A rejected key or a failed request is no longer reported as "the balance has not been requested yet".
+
+**Under the hood (no visible change):** the panel's window placement is now written to the journal —
+rectangle, window state, display scale and screen areas. Those numbers are used to pin down a rare
+case where the window becomes very wide after a full computer restart. The test count is **1264**.
+
 ## 2.0.1 - 2026-09-30
 
 **Accuracy and language.** A small release about the panel not confusing agents, speaking the panel's

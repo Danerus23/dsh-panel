@@ -23,6 +23,46 @@ public class WindowPlacementTests
     /// <summary>Главный экран — область 0..1920, 0..1080.</summary>
     private static readonly PixelRect Primary = new(0, 0, 1920, 1080);
 
+    /// <summary>
+    /// Строка журнала о месте окна несёт ВСЕ числа: X, Y, ширину, высоту, состояние окна, масштаб
+    /// и рабочие области.
+    ///
+    /// ⚠️ Зачем эта проверка (находка владельца 30.09.2026). Окно панели бывает очень широким
+    /// ТОЛЬКО после полной перезагрузки, а после обычного перезапуска панели — нормальным. Причина
+    /// ищется по числам в журнале, поэтому строка обязана называть и записанное, и применённое,
+    /// и область: строка без числа не докажет ничего.
+    /// </summary>
+    [Fact]
+    public void Строка_журнала_о_месте_окна_несёт_числа()
+    {
+        var line = WindowPlacement.Describe(
+            PanelStrings.PanelLogWindowPlacementApplied,
+            new PixelRect(10, 20, 640, 480),
+            "Normal",
+            new[] { Primary },
+            1.0);
+
+        Assert.Contains("10,20", line, StringComparison.Ordinal);
+        Assert.Contains("640x480", line, StringComparison.Ordinal);
+        Assert.Contains("Normal", line, StringComparison.Ordinal);
+        Assert.Contains("1920x1080", line, StringComparison.Ordinal);
+    }
+
+    /// <summary>Областей не знаем — строка их не выдумывает: пусто, а не «0x0».</summary>
+    [Fact]
+    public void Строка_журнала_без_областей_их_не_выдумывает()
+    {
+        var line = WindowPlacement.Describe(
+            PanelStrings.PanelLogWindowPlacementSaved,
+            new PixelRect(0, 0, 640, 640),
+            "Minimized",
+            screens: null,
+            scale: 1);
+
+        Assert.DoesNotContain("0x0", line, StringComparison.Ordinal);
+        Assert.Contains("Minimized", line, StringComparison.Ordinal);
+    }
+
     /// <summary>Второй монитор СЛЕВА: его координаты отрицательны, и это ЗАКОННО.</summary>
     private static readonly PixelRect Left = new(-1920, 0, 1920, 1080);
 

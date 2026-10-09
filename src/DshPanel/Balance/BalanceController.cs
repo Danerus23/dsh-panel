@@ -220,8 +220,26 @@ public sealed class BalanceController : IBalanceControl, IDisposable
         get
         {
             if (!Allowed) return PanelStrings.BalanceLocked;
-            if (!Result.Ok) return PanelStrings.BalanceNotRequested;
-            if (!Result.Available) return PanelStrings.BalanceUnavailable;
+
+            // Отказ запроса: сервер ОТВЕРГ ключ, «ответа нет вовсе» и «ещё не спрашивали» — три
+            // разные правды, и слова у них разные. Прежняя редакция называла 401 «баланс не
+            // запрашивался» — это было неправдой (находка владельца 30.09.2026).
+            if (!Result.Ok)
+            {
+                if (Result.Rejected) return PanelStrings.BalanceKeyRejected;
+
+                return Result.Error.Length > 0 ? PanelStrings.BalanceFailed : PanelStrings.BalanceNotRequested;
+            }
+
+            // Ответ есть, но счёт недоступен: у DeepSeek это `is_available: false`, то есть
+            // ИСЧЕРПАННЫЕ ДЕНЬГИ, а не отвергнутый ключ. Сумму показываем прямо здесь: человек
+            // должен видеть −0.01, а не только вывод «недоступен».
+            if (!Result.Available)
+            {
+                return Result.Summary.Length > 0
+                    ? string.Format(CultureInfo.CurrentCulture, PanelStrings.BalanceUnavailableFormat, Result.Summary)
+                    : PanelStrings.BalanceUnavailable;
+            }
 
             return Result.Summary;
         }

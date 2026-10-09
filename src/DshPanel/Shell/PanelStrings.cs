@@ -432,11 +432,27 @@ public static class PanelStrings
     /// <summary>Ключа нет в файле ключей: имя ключа и путь (путь маскированный).</summary>
     public static string BalanceNoKeyFormat => Loc.T(nameof(BalanceNoKeyFormat));
 
+    /// <summary>
+    /// Запрос баланса не удался, и это НЕ про ключ: причину называет строка подробностей
+    /// («Баланс не получен: HTTP 500 …»). Отдельно от «ещё не запрашивали» — это разные состояния.
+    /// </summary>
+    public static string BalanceFailed => Loc.T(nameof(BalanceFailed));
+
     /// <summary>Запрос не удался.</summary>
     public static string BalanceFailedFormat => Loc.T(nameof(BalanceFailedFormat));
 
-    /// <summary>Ответ есть, но счёт недоступен (ключ не принят).</summary>
+    /// <summary>
+    /// Ответ есть, но счёт недоступен: у DeepSeek это <c>is_available: false</c> — ИСЧЕРПАННЫЕ
+    /// ДЕНЬГИ, а не отвергнутый ключ (находка владельца 30.09.2026: на счёте −0.01 панель
+    /// показывала «ключ не принят»). Сумма приходит подстановкой — человек должен видеть цифру.
+    /// </summary>
+    public static string BalanceUnavailableFormat => Loc.T(nameof(BalanceUnavailableFormat));
+
+    /// <summary>Ответ есть, но суммы в нём нет: счёт недоступен, а назвать число нечем.</summary>
     public static string BalanceUnavailable => Loc.T(nameof(BalanceUnavailable));
+
+    /// <summary>Сервер ОТВЕРГ ключ (401/403) — это про ключ, а не про деньги.</summary>
+    public static string BalanceKeyRejected => Loc.T(nameof(BalanceKeyRejected));
 
     /// <summary>В ответе не оказалось ни одной суммы.</summary>
     public static string BalanceNoData => Loc.T(nameof(BalanceNoData));
@@ -1354,6 +1370,17 @@ public static class PanelStrings
     public static string PanelLogBackupsUnavailable => Loc.T(nameof(PanelLogBackupsUnavailable));
 
     /// <summary>Строка журнала: панель завершается.</summary>
+    /// <summary>
+    /// Строка журнала: какое место окна панель ПРИМЕНИЛА при старте. Числа: X, Y, ширина, высота,
+    /// состояние окна, масштаб экрана, рабочие области. Заведена 30.09.2026 по находке владельца
+    /// («после полной перезагрузки окно разворачивается очень широко, а после обычного перезапуска
+    /// нормально»): без записи догадку нечем сменить на факт.
+    /// </summary>
+    public static string PanelLogWindowPlacementApplied => Loc.T(nameof(PanelLogWindowPlacementApplied));
+
+    /// <summary>Строка журнала: какое место окна панель ЗАПИСАЛА при завершении (те же числа).</summary>
+    public static string PanelLogWindowPlacementSaved => Loc.T(nameof(PanelLogWindowPlacementSaved));
+
     public static string PanelLogExit => Loc.T(nameof(PanelLogExit));
 
     /// <summary>Строка журнала: часы обновления баланса запущены.</summary>

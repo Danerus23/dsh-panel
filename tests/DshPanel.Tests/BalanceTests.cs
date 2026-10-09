@@ -1214,4 +1214,183 @@ public class BalanceTests
             RemoveTemp(dir);
         }
     }
+
+    // ------------------------------------------------ две правды вместо одной (находка 30.09.2026)
+    //
+    // Владелец показал окно, где на счёте было −0.01, а панель писала «Счёт недоступен: КЛЮЧ НЕ
+    // ПРИНЯТ». Так вышло потому, что DeepSeek на исчерпанном счёте отвечает `is_available: false`
+    // — это про ДЕНЬГИ, а ключ при этом принят (HTTP 200 и данные баланса на месте). Настоящее
+    // «ключ не принят» — это 401/403, и раньше оно показывалось словами «баланс ещё не
+    // запрашивался». То есть две правды стояли МЕСТАМИ. Проверки ниже держат каждую на своём месте.
+
+    /// <summary>Изолированная площадка с ключом доступа: панели он нужен, владельцу — нет.</summary>
+    private static string Credentials(string dir)
+    {
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, ".credentials.yaml");
+        File.WriteAllText(path, "DEEPSEEK_API_KEY: sk-1234567890abcdef\n", new UTF8Encoding(false));
+        return path;
+    }
+
+    /// <summary>Деньги кончились: панель называет ДЕНЬГИ и показывает сумму, а не «ключ не принят».</summary>
+    [Fact]
+    public void Исчерпанный_счёт_называется_деньгами_и_с_суммой()
+    {
+        var at = new DateTimeOffset(2026, 9, 30, 20, 36, 0, TimeSpan.Zero);
+
+        using var document = JsonDocument.Parse(
+            """{"is_available":false,"balance_infos":[{"currency":"CNY","total_balance":"-0.01","granted_balance":"0.00","topped_up_balance":"-0.01"}]}""");
+        var parsed = HttpBalanceClient.Parse(document.RootElement, AgentCatalog.DefaultId, at);
+
+        Assert.True(parsed.Ok);
+        Assert.False(parsed.Available);
+        Assert.False(parsed.Rejected, "исчерпанный счёт — это не отвергнутый ключ");
+        Assert.Equal(-0.01m, parsed.Total!.Value);
+        Assert.Contains("-0.01 CNY", parsed.Summary, StringComparison.Ordinal);
+
+        var dir = TempDir();
+        var client = new FakeClient();
+
+        try
+        {
+            var credentials = Credentials(dir);
+            client.Answer = _ => parsed;
+
+            var settings = new PanelSettings { ActiveAgent = AgentCatalog.DefaultId, BalanceAutoRefresh = false };
+            var controller = Controller(client, settings, credentials, (_, _, _) => { }, now: at);
+
+            controller.Refresh();
+            Assert.True(SpinWait.SpinUntil(() => !controller.Busy && controller.Result.Ok, 5000), "ответ не дошёл");
+
+            // Сумма обязана быть ВИДНА: человек чинит деньги, а не ключ.
+            Assert.Contains("-0.01 CNY", controller.StatusText, StringComparison.Ordinal);
+            Assert.NotEqual(PanelStrings.BalanceUnavailable, controller.StatusText);
+            Assert.NotEqual(PanelStrings.BalanceKeyRejected, controller.StatusText);
+        }
+        finally
+        {
+            RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>Сервер отверг ключ (401): слова про КЛЮЧ, а не про деньги.</summary>
+    [Fact]
+    public void Отвергнутый_ключ_называется_словами_про_ключ()
+    {
+        var at = new DateTimeOffset(2026, 9, 30, 20, 36, 0, TimeSpan.Zero);
+        var dir = TempDir();
+        var client = new FakeClient();
+
+        try
+        {
+            var credentials = Credentials(dir);
+            client.Answer = _ => BalanceResult
+                .Failed("HTTP 401 Unauthorized", AgentCatalog.DefaultId, at)
+                with { Rejected = true };
+
+            var settings = new PanelSettings { ActiveAgent = AgentCatalog.DefaultId, BalanceAutoRefresh = false };
+            var controller = Controller(client, settings, credentials, (_, _, _) => { }, now: at);
+
+            controller.Refresh();
+            Assert.True(SpinWait.SpinUntil(() => !controller.Busy && !controller.Result.Ok, 5000), "ответ не дошёл");
+
+            Assert.True(controller.Result.Rejected, "401 обязан быть назван отвергнутым ключом");
+            Assert.Equal(PanelStrings.BalanceKeyRejected, controller.StatusText);
+            Assert.NotEqual(PanelStrings.BalanceNotRequested, controller.StatusText);
+            Assert.Contains("401", controller.DetailText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>Отказ связи — тоже не про ключ: причину называет строка подробностей.</summary>
+    [Fact]
+    public void Отказ_связи_не_называет_ключ_виноватым()
+    {
+        var at = new DateTimeOffset(2026, 9, 30, 20, 36, 0, TimeSpan.Zero);
+        var dir = TempDir();
+        var client = new FakeClient();
+
+        try
+        {
+            var credentials = Credentials(dir);
+            client.Answer = _ => BalanceResult.Failed(
+                "HttpRequestException: соединение закрыто", AgentCatalog.DefaultId, at);
+
+            var settings = new PanelSettings { ActiveAgent = AgentCatalog.DefaultId, BalanceAutoRefresh = false };
+            var controller = Controller(client, settings, credentials, (_, _, _) => { }, now: at);
+
+            controller.Refresh();
+            Assert.True(SpinWait.SpinUntil(() => !controller.Busy && !controller.Result.Ok, 5000), "ответ не дошёл");
+
+            Assert.False(controller.Result.Rejected);
+            Assert.Equal(PanelStrings.BalanceFailed, controller.StatusText);
+            Assert.NotEqual(PanelStrings.BalanceKeyRejected, controller.StatusText);
+            Assert.Contains("HttpRequestException", controller.DetailText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// Ответ HTTP подставной: панель идёт по своей настоящей двери запроса.
+    ///
+    /// ⚠️ Переопределены ОБЕ двери, синхронная и асинхронная, и это не запас на будущее: панель
+    /// зовёт <c>HttpClient.Send</c> (синхронно), а у обработчика, переопределившего только
+    /// <c>SendAsync</c>, базовая <c>Send</c> бросает <c>NotSupportedException</c> — проверка
+    /// падала на «ответ не получен» и обвиняла код, которого не касалась. Нашлось прогоном.
+    /// </summary>
+    private sealed class StatusHandler : HttpMessageHandler
+    {
+        private readonly System.Net.HttpStatusCode _code;
+
+        public StatusHandler(System.Net.HttpStatusCode code) => _code = code;
+
+        protected override HttpResponseMessage Send(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            new(_code) { Content = new StringContent(string.Empty) };
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(Send(request, cancellationToken));
+    }
+
+    /// <summary>
+    /// Настоящий отказ ключа приходит КОДОМ ответа, и метку ставит клиент, а не проверка.
+    ///
+    /// ⚠️ Эта проверка заведена потому, что ПРЕДЫДУЩАЯ её не заменяла: мутация «`Rejected = false`
+    /// в клиенте» выжила — подставной клиент отдавал уже готовый ответ, и настоящая дверь запроса
+    /// (где и стоит разбор 401) не проверялась вовсе. Мутация нашла дыру в проверке, а не в коде.
+    /// </summary>
+    [Fact]
+    public void Отказ_ключа_приходит_кодом_ответа_и_клиент_это_видит()
+    {
+        var agent = AgentCatalog.Find(AgentCatalog.DefaultId);
+        var now = DateTimeOffset.Now;
+
+        foreach (var code in new[]
+        {
+            System.Net.HttpStatusCode.Unauthorized,
+            System.Net.HttpStatusCode.Forbidden,
+        })
+        {
+            using var http = new HttpClient(new StatusHandler(code));
+            var rejected = new HttpBalanceClient(http).Query(agent, "sk-1234567890abcdef", now);
+
+            Assert.False(rejected.Ok);
+            Assert.True(rejected.Rejected, $"{ (int)code } обязан пометить ключ отвергнутым");
+            Assert.DoesNotContain("sk-1234567890abcdef", rejected.Error, StringComparison.Ordinal);
+        }
+
+        // 500 — это про сервис, а не про ключ: человеку нельзя говорить «ключ не принят».
+        using var server = new HttpClient(new StatusHandler(System.Net.HttpStatusCode.InternalServerError));
+        var broken = new HttpBalanceClient(server).Query(agent, "sk-1234567890abcdef", now);
+
+        Assert.False(broken.Ok);
+        Assert.False(broken.Rejected, "500 — не про ключ");
+    }
 }

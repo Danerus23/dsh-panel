@@ -18,9 +18,13 @@ namespace DshPanel.Tests;
 ///
 /// Ни одна проверка здесь не поднимает настоящий сервер и не занимает чужой порт: разведка
 /// и убийца подставные, а порт берётся свободный. Единственное место, где запускается настоящий
-/// процесс, — «согласие забывается при подъёме своего сервера»: подъём без процесса не проверить,
-/// и там запускается <c>cmd.exe</c>, который сразу завершается. Ни данных владельца, ни сети
+/// процесс, — подъём своего сервера: без процесса его не проверить, и там запускается
+/// <c>cmd.exe</c>, занятый пингом петли (<see cref="LiveEngine"/>). Ни данных владельца, ни сети
 /// он не касается, а домашний каталог движка ему подставляется временный.
+///
+/// ⚠️ Здесь же жил источник «плавающих» падений всего класса (найден 30.09.2026): поддельный
+/// движок завершался САМ через 22 мс, а проверка судила о нём по одному мгновению. Разбор
+/// и замер — в <see cref="LiveEngine"/> и <see cref="StartWait"/>.
 /// </summary>
 public class OwnServerTests
 {
@@ -138,6 +142,43 @@ public class OwnServerTests
             files: files.StateFiles,
             foundServerEntryLink: () => files.Version1,
             linkProbe: linkProbe);
+
+    /// <summary>
+    /// Сколько проверка ЖДЁТ поднятый ею сервер.
+    ///
+    /// ⚠️ Не ноль. У контроллера ноль значит «не ждать вовсе»: цикл ожидания в
+    /// <c>WaitUntilRunning</c> не делает НИ ОДНОГО шага, и о живом ли процессе речь, проверка
+    /// решает по одному мгновению — а это и была гонка, из-за которой класс падал на полном
+    /// наборе. Здесь ожидание честное, с дедлайном; отвечать поддельный движок не умеет вовсе
+    /// (порт в этих проверках молчит), поэтому ожидание кончается по дедлайну, и это правильно:
+    /// проверкам ниже нужен ЖИВОЙ процесс панели, а не отвечающий сервер.
+    /// </summary>
+    private static readonly TimeSpan StartWait = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// ПОДДЕЛЬНЫЙ ДВИЖОК, КОТОРЫЙ ЖИВЁТ, ПОКА ЕГО НЕ ПОГАСЯТ.
+    ///
+    /// ⚠️ Почему не <c>cmd.exe /k</c>, как было раньше. <c>cmd.exe</c> завершается САМ, как только
+    /// ему нечего читать со входа, — а читать ему нечего: панель перенаправляет вывод и ошибки,
+    /// а ввод не перенаправляет. Замер 30.09.2026 на этой машине, ровно тем же способом, каким
+    /// процесс поднимает панель (<c>TryStartProcess</c>): <c>cmd.exe /k web --no-open --port N</c>
+    /// живёт <b>22 мс</b>, и <c>/c</c> — столько же. Контроллер ставит владельца и тут же ОДИН раз
+    /// спрашивает «процесс ещё жив?»; что он в этот миг успел, решала очередь планировщика,
+    /// а не проверка. На полном наборе (соседние классы идут параллельно) ответ запаздывал
+    /// к «уже вышел», панель ЧЕСТНО забывала владельца — и падала КАЖДЫЙ РАЗ РАЗНАЯ проверка
+    /// этого класса (замер: 8 прогонов полного набора, красных 3).
+    ///
+    /// Здесь движок — тот же <c>cmd.exe</c>, но занятый делом: он пингует петлю 30 раз (~29 с).
+    /// Пока идёт ping, cmd не завершится ни при каком вводе и ни при какой загрузке машины, —
+    /// и «жив ли движок» перестаёт быть догадкой. Хвост командной строки панели
+    /// (<c>web --no-open --port N</c>) уходит в <c>rem</c>: без этого его слова стали бы лишними
+    /// адресами для ping. Панель гасит движок ВМЕСТЕ С ДЕТЬМИ
+    /// (<c>Kill(entireProcessTree: true)</c>), поэтому за проверкой ping не остаётся; а если
+    /// проверка упадёт раньше гашения, ping доживёт свои 29 секунд и уйдёт сам.
+    /// </summary>
+    private static DshEngine LiveEngine() => new(
+        Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+        $"/c {Path.Combine(Environment.SystemDirectory, "ping.exe")} -n 30 127.0.0.1 >nul & rem");
 
     // ---------------------------------------------------------------- узнаём свой сервер
 
@@ -375,14 +416,14 @@ public class OwnServerTests
         var files = new Files();
         var log = new List<string>();
 
-        // `/k`: поддельный движок обязан дожить до гашения — иначе панель признала бы его ушедшим
+        // Движок обязан дожить до гашения — иначе панель признала бы его ушедшим
         // и пошла бы другой веткой.
-        var engine = new DshEngine(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/k");
+        var engine = LiveEngine();
 
         using var controller = Controller(
             world, files, log: log, locateEngine: () => engine, requestedPort: () => port);
 
-        controller.Start(TimeSpan.Zero);
+        controller.Start(StartWait);
         Assert.Equal(ServerOwner.Panel, controller.Owner);
 
         // Ссылки не было вовсе — движок её не печатал.
@@ -607,9 +648,9 @@ public class OwnServerTests
             Persists = persists,
         };
 
-        // `/k`: поддельный движок обязан дожить до конца проверки — иначе панель признала бы его
+        // Поддельный движок обязан дожить до конца проверки — иначе панель признала бы его
         // ушедшим и сняла ссылку раньше, чем мы её посмотрим.
-        var engine = new DshEngine(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/k");
+        var engine = LiveEngine();
 
         using var controller = new ServerController(
             @"C:\Temp\dsh-own-home",
@@ -626,7 +667,7 @@ public class OwnServerTests
 
         try
         {
-            controller.Start(TimeSpan.Zero);
+            controller.Start(StartWait);
             Assert.Equal(ServerOwner.Panel, controller.Owner);
 
             var url = $"http://127.0.0.1:{port}/?token=SECRET-TOKEN-42";
@@ -699,9 +740,9 @@ public class OwnServerTests
         var files = new Files();
         var log = new List<string>();
 
-        // `/k`, а не `/c`: поддельный движок обязан ПЕРЕЖИТЬ проверку, иначе панель успела бы
-        // признать процесс ушедшим и снять ссылку раньше, чем мы её посмотрим.
-        var engine = new DshEngine(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/k");
+        // Поддельный движок обязан ПЕРЕЖИТЬ проверку, иначе панель успела бы признать процесс
+        // ушедшим и снять ссылку раньше, чем мы её посмотрим.
+        var engine = LiveEngine();
 
         using var controller = Controller(
             world,
@@ -712,7 +753,7 @@ public class OwnServerTests
 
         try
         {
-            controller.Start(TimeSpan.Zero);
+            controller.Start(StartWait);
             Assert.Equal(ServerOwner.Panel, controller.Owner);
 
             var url = $"http://127.0.0.1:{port}/?token=SECRET-TOKEN-42";
@@ -742,9 +783,9 @@ public class OwnServerTests
     /// забыто. Иначе однажды панель приняла бы за «своё окружение» то, что придёт на этот порт
     /// после неё.
     ///
-    /// Подъём идёт на <c>cmd.exe</c>, который сразу завершается: настоящий движок проверке не нужен,
-    /// а «панель действительно подняла процесс» — нужен, потому что забывание согласия стоит именно
-    /// там. Домашний каталог движка у этого процесса — временный путь, а не `~/.dsh`.
+    /// Подъём идёт на живом <c>cmd.exe</c> (<see cref="LiveEngine"/>): настоящий движок проверке
+    /// не нужен, а «панель действительно подняла процесс» — нужен, потому что забывание согласия
+    /// стоит именно там. Домашний каталог движка у этого процесса — временный путь, а не `~/.dsh`.
     /// </summary>
     [Fact]
     public void При_подъёме_своего_сервера_согласие_на_этот_порт_забывается()
@@ -759,7 +800,7 @@ public class OwnServerTests
         var remembered = port;
         var log = new List<string>();
 
-        var engine = new DshEngine(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c");
+        var engine = LiveEngine();
 
         using var controller = Controller(
             world,
@@ -770,7 +811,7 @@ public class OwnServerTests
             locateEngine: () => engine,
             requestedPort: () => port);
 
-        controller.Start(TimeSpan.Zero);
+        controller.Start(StartWait);
 
         // Сервер поднят панелью — значит порт наш, и согласие про него больше не верно.
         Assert.Equal(ServerOwner.Panel, controller.Owner);
@@ -796,7 +837,7 @@ public class OwnServerTests
         var files = new Files();
 
         var remembered = 3080;
-        var engine = new DshEngine(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c");
+        var engine = LiveEngine();
 
         using var controller = Controller(
             world,
@@ -806,7 +847,7 @@ public class OwnServerTests
             locateEngine: () => engine,
             requestedPort: () => port);
 
-        controller.Start(TimeSpan.Zero);
+        controller.Start(StartWait);
 
         Assert.Equal(ServerOwner.Panel, controller.Owner);
         Assert.Equal(3080, remembered);

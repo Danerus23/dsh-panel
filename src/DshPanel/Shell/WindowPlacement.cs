@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia;
 
 namespace DshPanel.Shell;
@@ -152,6 +153,40 @@ public static class WindowPlacement
             position.Y,
             (int)Math.Round(Math.Max(0, clientSize.Width) * factor),
             (int)Math.Round(Math.Max(0, clientSize.Height) * factor));
+    }
+
+    /// <summary>
+    /// Строка журнала о месте главного окна: что панель ЗАПИСАЛА при завершении и что ПРИМЕНИЛА
+    /// при старте. Живёт здесь, потому что это ЧИСТОЕ описание прямоугольников — его проверяют
+    /// подставными числами, а окна у проверки нет вовсе.
+    ///
+    /// ⚠️ Зачем строка (находка владельца 30.09.2026). Окно панели бывает **очень широким только
+    /// после полной перезагрузки**, а после обычного перезапуска панели — нормальным. Широким окно
+    /// может стать лишь из широкого ЗАПИСАННОГО числа: при старте панель умеет только сузить его
+    /// до экрана. Значит плохую геометрию пишет системное завершение сеанса, а не рука человека.
+    /// Пока это догадка: числа ниже называют и записанное, и применённое, и состояние окна,
+    /// и рабочие области, — по ним причина называется фактом, а не версией.
+    /// </summary>
+    public static string Describe(
+        string format, PixelRect frame, string state, IReadOnlyList<PixelRect>? screens, double scale) =>
+        string.Format(
+            CultureInfo.CurrentCulture,
+            format,
+            frame.X,
+            frame.Y,
+            frame.Width,
+            frame.Height,
+            state,
+            scale,
+            ScreenList(screens));
+
+    /// <summary>Рабочие области одной строкой: «1920x1040, 1440x900». Областей нет — пустая строка.</summary>
+    private static string ScreenList(IReadOnlyList<PixelRect>? screens)
+    {
+        var parts = new List<string>();
+        foreach (var area in Areas(screens)) parts.Add(area.Width + "x" + area.Height);
+
+        return string.Join(", ", parts);
     }
 
     /// <summary>

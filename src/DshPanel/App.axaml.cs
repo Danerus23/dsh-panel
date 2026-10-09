@@ -729,6 +729,11 @@ public partial class App : Application
         var frame = WindowPlacement.Restore(
             saved.WindowX, saved.WindowY, saved.WindowWidth, saved.WindowHeight, areas);
 
+        // Числа в журнал: по ним видно, что панель ПРИМЕНИЛА и не подменила ли это зажатие по экрану.
+        _log(WindowPlacement.Describe(
+            PanelStrings.PanelLogWindowPlacementApplied, frame, window.WindowState.ToString(), areas,
+            window.RenderScaling));
+
         window.AttachPlacement(frame);
         _lastNormalPlacement = frame;
     }
@@ -757,6 +762,15 @@ public partial class App : Application
 
         var current = _lastNormalPlacement;
         if (current is null) return;
+
+        // ⚠️ Числа в журнал — ДО записи: именно они решают спор о широком окне после полной
+        // перезагрузки. В строке видно и то, что панель записывает, и состояние окна в этот миг.
+        _log(WindowPlacement.Describe(
+            PanelStrings.PanelLogWindowPlacementSaved,
+            current.Value,
+            window.WindowState.ToString(),
+            window.Screens.All.Select(screen => screen.WorkingArea).ToArray(),
+            window.RenderScaling));
 
         _settings.SetWindowPlacement(current.Value.X, current.Value.Y, current.Value.Width, current.Value.Height);
     }
