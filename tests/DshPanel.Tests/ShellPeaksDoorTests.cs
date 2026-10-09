@@ -5,6 +5,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Headless.XUnit;
 using DshPanel.Shell;
 using DshPanel.Tray;
+using DshPanel.Update;
 using DshPanel.Views;
 using Xunit;
 
@@ -36,7 +37,7 @@ public class ShellPeaksDoorTests
     /// <summary>Связка без значка и без показанного окна: только слот двери и журнал.</summary>
     private static (PanelShell Shell, List<string> Log) Stand(
         Func<Window>? createPeaks,
-        Func<Window>? createUpdate = null)
+        Func<Window>? createSettings = null)
     {
         var log = new List<string>();
         var tray = new TrayIconHost("проверка");
@@ -61,7 +62,7 @@ public class ShellPeaksDoorTests
                 createIssue: () => new IssueWindow(),
             checkUpdate: () => { },
             createPeaks: createPeaks,
-            createUpdate: createUpdate);
+            createSettings: createSettings);
 
         return (shell, log);
     }
@@ -127,56 +128,103 @@ public class ShellPeaksDoorTests
     }
 
     /// <summary>
-    /// ДВЕРЬ В ОКНО ОБНОВЛЕНИЯ — ТО ЖЕ ПРАВИЛО, ЧТО У «ПИКОВ»: одно окно на панель, повторная
-    /// просьба выводит на передний план уже открытое. Это не формальность — в окне обновления
-    /// живёт кнопка, запускающая замену файлов, и два таких окна означали бы две кнопки над одним
-    /// и тем же сценарием, какая из них «настоящая» — человеку не понять.
+    /// ПУНКТ МЕНЮ ЗНАЧКА «ОБНОВЛЕНИЕ ПАНЕЛИ…» ОТКРЫВАЕТ РАЗДЕЛ «ОБНОВЛЕНИЕ» НАСТРОЕК.
     ///
-    /// ⚠️ И вторая половина обещания: у панели БЕЗ построителя дверь говорит об отказе словами,
-    /// а не молчит (так выглядит прогон, где замену файлов готовить нечем).
+    /// Решение владельца 09.10.2026, дословно: *«Это не отдельное окно должно быть… Я не хочу
+    /// отдельно вызываемое окно»*. Прежде этот пункт открывал своё окно (`PanelShell.OpenUpdate`),
+    /// и у него был свой слот; теперь он ведёт в НАСТРОЙКИ — и проверяется это НАСТОЯЩИМ путём:
+    /// меню собирает сама связка (<see cref="PanelShell.BuildMenu"/>), пункт берётся из него,
+    /// щелчок по нему — вызов настоящего действия двери, а раздел читается у открытого окна.
+    /// Список действий, собранный проверкой заново, ничего бы не доказал.
+    ///
+    /// ⚠️ И вторая половина обещания: настройки, УЖЕ открытые на другом разделе, обязаны
+    /// переключиться на «Обновление» — иначе человек, у которого настройки открыты, нажал бы
+    /// пункт и не увидел обновления. Второго окна настроек при этом не заводится.
     /// </summary>
     [AvaloniaFact]
-    public void Дверь_обновления_открывает_одно_окно_и_говорит_об_отказе()
+    public void Пункт_меню_обновления_открывает_раздел_обновления_в_настройках()
     {
-        var built = new List<Window>();
-        var (shell, log) = Stand(
-            createPeaks: null,
-            createUpdate: () => { var window = new UpdateWindow(); built.Add(window); return window; });
+        var dir = PanelTestStand.TempDir();
 
-        using (shell)
+        try
         {
-            Assert.False(shell.UpdateOpen, "окно ещё не открывали, а слот считает его открытым");
+            var built = new List<Window>();
+            SettingsWindow? settings = null;
 
-            shell.OpenUpdate();
+            var (shell, _) = Stand(
+                createPeaks: null,
+                createSettings: () =>
+                {
+                    settings = PanelTestStand.SettingsStand(dir, update: new SilentUpdate());
+                    built.Add(settings);
 
-            Assert.True(shell.UpdateOpen, "окно открыто, а слот его не видит");
-            Assert.Single(built);
-            Assert.Contains(PanelStrings.UpdateOpenedLog, log);
+                    return settings;
+                });
 
-            shell.OpenUpdate();
+            using (shell)
+            {
+                var menu = shell.BuildMenu();
+                var item = menu.Items[10];
 
-            Assert.Single(built);
-            Assert.Contains(PanelStrings.UpdateRaisedLog, log);
+                Assert.False(item.IsSeparator);
+                Assert.Equal(PanelStrings.UpdateSectionMenuText, item.Text);
+                Assert.NotNull(item.Invoke);
 
-            // Человек закрыл окно — дверь снова строит его, а не выводит на передний план то,
-            // чего уже нет.
-            built[0].Close();
+                Assert.False(shell.SettingsOpen, "настройки ещё не открывали, а слот считает их открытыми");
 
-            Assert.False(shell.UpdateOpen, "окно закрыто, а слот всё ещё считает его открытым");
+                // Щелчок человека по пункту меню — настоящее действие настоящей связки.
+                item.Invoke!();
 
-            shell.OpenUpdate();
+                Assert.True(shell.SettingsOpen, "пункт меню не открыл настройки");
+                Assert.Single(built);
+                Assert.Equal(SettingsWindow.UpdateSection, settings!.VisibleSection);
 
-            Assert.Equal(2, built.Count);
+                // Второй щелчок при открытых настройках на ДРУГОМ разделе: окно то же, раздел —
+                // тот, за которым человек шёл.
+                settings.ShowSection(SettingsWindow.BackupSection);
+
+                Assert.Equal(SettingsWindow.BackupSection, settings.VisibleSection);
+
+                shell.BuildMenu().Items[10].Invoke!();
+
+                Assert.Single(built);
+                Assert.Equal(SettingsWindow.UpdateSection, settings.VisibleSection);
+            }
         }
-
-        var (without, refused) = Stand(createPeaks: null);
-
-        using (without)
+        finally
         {
-            without.OpenUpdate();
-
-            Assert.False(without.UpdateOpen);
-            Assert.Contains(PanelStrings.PanelLogUpdateWindowUnavailable, refused);
+            PanelTestStand.RemoveTemp(dir);
         }
+    }
+
+    /// <summary>
+    /// Состояние выпусков для раздела: сети нет вовсе, и разделу этого довольно — пункту меню
+    /// важно не «что показано», а «какой раздел открыт».
+    /// </summary>
+    private sealed class SilentUpdate : IUpdateControl
+    {
+        public UpdateRelease Result { get; } = UpdateRelease.Failed("проверка не делалась", DateTimeOffset.Now);
+
+        public bool Busy => false;
+
+        public bool Allowed => false;
+
+        public string Current => "2.0.0";
+
+        public bool Newer => false;
+
+        public bool Skipped => false;
+
+        public string SourceText => string.Empty;
+
+        public string StatusText => string.Empty;
+
+        public TrayStatusLine TrayLine => new(string.Empty, TrayTone.Neutral);
+
+        public event Action<string>? Announce { add { } remove { } }
+
+        public event Action? Changed { add { } remove { } }
+
+        public void Check() { }
     }
 }

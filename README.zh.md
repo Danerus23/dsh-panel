@@ -100,9 +100,10 @@ DSH 数据的备份是一个 ZIP 压缩包。面板会列出已有的备份；�
 
 ### 更新自己
 
-面板每天自动查询一次发布，用**面板自己的语言**显示发行说明，并支持“跳过此版本”。下载的内容
-会用 SHA-256 校验，解压时核对版本，文件替换由一个单独的脚本完成，**并且可以回退**到上一个
-版本。替换结果面板会用文字说明：已更新、已回退，或者替换的不是面板所在的那个目录。
+面板每天自动查询一次发布，用**面板自己的语言**显示发行说明，并支持“跳过此版本”。答复——既装的是
+什么、又出了什么——住在**设置的「更新」分区里**：更新没有单独的窗口。下载的内容会用 SHA-256
+校验，解压时核对版本，文件替换由一个单独的脚本完成，**并且可以回退**到上一个版本。替换结果面板
+会用文字说明：已更新、已回退，或者替换的不是面板所在的那个目录。
 
 ### 三种语言
 
@@ -144,7 +145,7 @@ DSH 数据的备份是一个 ZIP 压缩包。面板会列出已有的备份；�
 | 价格历史 | [price history](docs/screenshots/en/pricing-history.png) | [история цен](docs/screenshots/ru/pricing-history.png) | [价格历史](docs/screenshots/zh/pricing-history.png) |
 | 设置 | [settings](docs/screenshots/en/settings.png) | [настройки](docs/screenshots/ru/settings.png) | [设置](docs/screenshots/zh/settings.png) |
 | 关于 | [about](docs/screenshots/en/about.png) | [о программе](docs/screenshots/ru/about.png) | [关于](docs/screenshots/zh/about.png) |
-| 面板更新 | [update](docs/screenshots/en/update.png) | [обновление](docs/screenshots/ru/update.png) | [更新](docs/screenshots/zh/update.png) |
+| 面板更新（设置分区） | [update](docs/screenshots/en/update.png) | [обновление](docs/screenshots/ru/update.png) | [更新](docs/screenshots/zh/update.png) |
 
 ## 从源码构建
 

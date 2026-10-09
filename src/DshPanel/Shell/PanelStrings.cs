@@ -1378,13 +1378,21 @@ public static class PanelStrings
     /// </summary>
     public static string PanelLogWindowPlacementApplied => Loc.T(nameof(PanelLogWindowPlacementApplied));
 
-    /// <summary>Строка журнала: какое место окна панель ЗАПИСАЛА при завершении (те же числа).</summary>
+    /// <summary>Строка журнала: какое место окна панель ЗАПИСАЛА (те же числа). Слово «записала», а не
+    /// «при завершении»: запись идёт и при скрытии окна в трей — это не завершение работы панели.</summary>
     public static string PanelLogWindowPlacementSaved => Loc.T(nameof(PanelLogWindowPlacementSaved));
 
     public static string PanelLogExit => Loc.T(nameof(PanelLogExit));
 
     /// <summary>Строка журнала: часы обновления баланса запущены.</summary>
     public static string PanelLogBalanceClock => Loc.T(nameof(PanelLogBalanceClock));
+
+    /// <summary>
+    /// Строка журнала: часов нет, потому что у этого прогона нет нитки интерфейса. Не «поломка»,
+    /// а честный ответ: `new DispatcherTimer` на нитке без диспетчера создал бы его и забрал
+    /// нитку интерфейса у прогона проверок (см. <see cref="UiThread"/>).
+    /// </summary>
+    public static string PanelLogClockNoUiThread => Loc.T(nameof(PanelLogClockNoUiThread));
 
     /// <summary>Строка журнала: значок не встал — тип ошибки и её текст.</summary>
     public static string PanelLogTrayIconFailedFormat => Loc.T(nameof(PanelLogTrayIconFailedFormat));
@@ -1899,7 +1907,14 @@ public static class PanelStrings
     /// <summary>Отказ раскладки: имя группы не совпало с именем папки на диске.</summary>
     public static string ZipLayoutGroupMismatchFormat => Loc.T(nameof(ZipLayoutGroupMismatchFormat));
 
-    /// <summary>Отказ раскладки: вложенное имя группы — 7-Zip так не умеет.</summary>
+    /// <summary>
+    /// Причина раскладки: имя группы ВЛОЖЕННОЕ (так зовутся каталоги ключей — <c>keys/1-ssh</c>),
+    /// и потому архив пишет сама панель. Это НОРМА, а не отказ продукта: каталоги ключей носят
+    /// имена 1.x намеренно, чтобы человек читал архив как привык.
+    ///
+    /// ⚠️ Слова причины — по замечанию владельца 09.10.2026: прежняя редакция («имя группы «{0}»
+    /// вложенное — 7-Zip так не умеет») читалась как поломка копии, хотя копия снялась верно.
+    /// </summary>
     public static string ZipLayoutNestedGroupFormat => Loc.T(nameof(ZipLayoutNestedGroupFormat));
 
     /// <summary>Отказ раскладки: у источника нет имени папки — это корень диска.</summary>
@@ -2622,8 +2637,13 @@ public static class PanelStrings
     /// <summary>Пункт меню значка: проверить выпуски сразу, не дожидаясь суточного гейта.</summary>
     public static string CheckUpdateMenuText => Loc.T(nameof(CheckUpdateMenuText));
 
-    /// <summary>Пункт меню значка и кнопка главного окна: открыть окно «Обновление панели».</summary>
-    public static string UpdateWindowMenuText => Loc.T(nameof(UpdateWindowMenuText));
+    /// <summary>
+    /// Пункт меню значка: открыть РАЗДЕЛ «Обновление» окна настроек. Прежнее имя было
+    /// <c>UpdateWindowMenuText</c> — отдельного окна обновления в панели больше нет
+    /// (решение владельца 09.10.2026), и имя, оставшееся «про окно», врало бы о том, куда
+    /// ведёт пункт.
+    /// </summary>
+    public static string UpdateSectionMenuText => Loc.T(nameof(UpdateSectionMenuText));
 
     /// <summary>
     /// Строка состояния обновления, когда всё в порядке: «Обновление: проверено 28.09.2026, 14:32».
@@ -2632,16 +2652,14 @@ public static class PanelStrings
     /// </summary>
     public static string UpdateTrayCheckedFormat => Loc.T(nameof(UpdateTrayCheckedFormat));
 
-    /// <summary>Подсказка двери в окно обновления (кнопка главного окна).</summary>
-
-    /// <summary>Заголовок окна «Обновление панели».</summary>
-    public static string UpdateWindowTitle => Loc.T(nameof(UpdateWindowTitle));
-
-    /// <summary>Крупная шапка окна.</summary>
-    public static string UpdateWindowHeading => Loc.T(nameof(UpdateWindowHeading));
-
-    /// <summary>Серый подзаголовок окна: что здесь видно.</summary>
-    public static string UpdateWindowSubtitle => Loc.T(nameof(UpdateWindowSubtitle));
+    /// <summary>
+    /// Решение о версиях, когда выпуск НЕ новее установленной панели: «У вас последняя версия 2.0.2 —
+    /// обновляться не нужно». Замечание владельца 09.10.2026: до этой строки панель показывала
+    /// только «Последняя версия», и человек не понимал, надо ли что-то делать и зачем рядом
+    /// доступна кнопка «Пропустить эту версию». Строку показывает РАЗДЕЛ «Обновление» настроек
+    /// (`Update\UpdateLines.VerdictLine`) — отдельного окна у неё больше нет.
+    /// </summary>
+    public static string UpdateWindowLatestFormat => Loc.T(nameof(UpdateWindowLatestFormat));
 
     /// <summary>Кнопка «Проверить сейчас» — щелчок человека, мимо суточного гейта.</summary>
     public static string UpdateCheckNowButton => Loc.T(nameof(UpdateCheckNowButton));
@@ -2682,6 +2700,12 @@ public static class PanelStrings
     /// <summary>Подсказка кнопки «Пропустить эту версию».</summary>
     public static string TipUpdateSkipButton => Loc.T(nameof(TipUpdateSkipButton));
 
+    /// <summary>Подсказка НЕДОСТУПНОЙ кнопки «Пропустить эту версию»: пропускать нечего.</summary>
+    public static string TipUpdateSkipNothingNew => Loc.T(nameof(TipUpdateSkipNothingNew));
+
+    /// <summary>Подсказка недоступной кнопки «Пропустить эту версию», когда выпуски не проверены.</summary>
+    public static string TipUpdateSkipNothingToSkip => Loc.T(nameof(TipUpdateSkipNothingToSkip));
+
     /// <summary>Ответ после пропуска: что именно произошло, словами.</summary>
     public static string UpdateSkipDoneFormat => Loc.T(nameof(UpdateSkipDoneFormat));
 
@@ -2706,29 +2730,14 @@ public static class PanelStrings
     /// <summary>Прогон проверки замену файлов не готовит вовсе.</summary>
     public static string UpdateInstallUnavailable => Loc.T(nameof(UpdateInstallUnavailable));
 
-    /// <summary>«Подготовлено обновление v2.1.0» — то, что человек увидел после подготовки.</summary>
-    public static string UpdatePreparedTitleFormat => Loc.T(nameof(UpdatePreparedTitleFormat));
-
     /// <summary>Где лежит подготовленная сборка.</summary>
     public static string UpdatePreparedStagedFormat => Loc.T(nameof(UpdatePreparedStagedFormat));
-
-    /// <summary>Где лежит страховочная копия прежней панели (путь назад).</summary>
-    public static string UpdatePreparedBackupFormat => Loc.T(nameof(UpdatePreparedBackupFormat));
-
-    /// <summary>Где лежит сценарий замены файлов.</summary>
-    public static string UpdatePreparedScriptFormat => Loc.T(nameof(UpdatePreparedScriptFormat));
-
-    /// <summary>Где лежит журнал замены — по нему панель рассказывает итог при следующем запуске.</summary>
-    public static string UpdatePreparedLogFormat => Loc.T(nameof(UpdatePreparedLogFormat));
 
     /// <summary>Кнопка «Обновить и перезапустить панель» — отдельное нажатие, самое рискованное.</summary>
     public static string UpdateReplaceButton => Loc.T(nameof(UpdateReplaceButton));
 
     /// <summary>Подсказка кнопки замены: что она сделает с панелью.</summary>
     public static string TipUpdateReplaceButton => Loc.T(nameof(TipUpdateReplaceButton));
-
-    /// <summary>Пояснение у кнопки замены: панель закроется, сценарий заменит файлы и поднимет её.</summary>
-    public static string UpdateReplaceHint => Loc.T(nameof(UpdateReplaceHint));
 
     /// <summary>Сценарий замены не запустился — причина словами, а не молчанием.</summary>
     public static string UpdateLaunchFailedFormat => Loc.T(nameof(UpdateLaunchFailedFormat));
@@ -2741,18 +2750,6 @@ public static class PanelStrings
 
     /// <summary>Ход подготовки, когда размер файла неизвестен: процент был бы выдумкой.</summary>
     public static string UpdateProgressUnknownFormat => Loc.T(nameof(UpdateProgressUnknownFormat));
-
-    /// <summary>Подпись перед причиной отказа: «Обновление не подготовлено».</summary>
-    public static string UpdateRefusalTitle => Loc.T(nameof(UpdateRefusalTitle));
-
-    /// <summary>Строка журнала: окно обновления в этом прогоне не открывается.</summary>
-    public static string PanelLogUpdateWindowUnavailable => Loc.T(nameof(PanelLogUpdateWindowUnavailable));
-
-    /// <summary>Строка журнала: окно обновления открыто.</summary>
-    public static string UpdateOpenedLog => Loc.T(nameof(UpdateOpenedLog));
-
-    /// <summary>Строка журнала: окно обновления уже открыто — поднял его.</summary>
-    public static string UpdateRaisedLog => Loc.T(nameof(UpdateRaisedLog));
 
     /// <summary>Строка журнала: человек пропустил версию.</summary>
     public static string UpdateSkipSavedLogFormat => Loc.T(nameof(UpdateSkipSavedLogFormat));

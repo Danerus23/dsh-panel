@@ -43,7 +43,7 @@ public class PanelShellTests
         var settings = 0;
         var about = 0;
         var checkedNow = 0;
-        var updateWindow = 0;
+        var updateSection = 0;
         var exited = 0;
 
         var status = new TrayStatusLines(
@@ -59,7 +59,7 @@ public class PanelShellTests
             settings: () => settings++,
             about: () => about++,
             checkUpdate: () => checkedNow++,
-            updateWindow: () => updateWindow++,
+            updateSection: () => updateSection++,
             exit: () => exited++);
 
         Assert.Equal(13, menu.Items.Count);
@@ -119,9 +119,10 @@ public class PanelShellTests
         Assert.Equal(PanelStrings.AboutButton, menu.Items[8].Text);
 
         // ДВЕ ДВЕРИ ОБНОВЛЕНИЯ, и они разные по смыслу: «Проверить обновления» делает работу
-        // (идёт в сеть), «Обновление панели…» открывает окно с тем, что нашлось.
+        // (идёт в сеть), «Обновление панели…» открывает РАЗДЕЛ «Обновление» настроек — там видно,
+        // что нашлось. Отдельного окна обновления в панели нет (решение владельца 09.10.2026).
         Assert.Equal(PanelStrings.CheckUpdateMenuText, menu.Items[9].Text);
-        Assert.Equal(PanelStrings.UpdateWindowMenuText, menu.Items[10].Text);
+        Assert.Equal(PanelStrings.UpdateSectionMenuText, menu.Items[10].Text);
 
         Assert.True(menu.Items[11].IsSeparator);
         // У разделителя нечего вызывать: если он что-то делает, это ошибка сборки меню.
@@ -137,7 +138,7 @@ public class PanelShellTests
         Assert.Equal(0, settings);
         Assert.Equal(0, about);
         Assert.Equal(0, checkedNow);
-        Assert.Equal(0, updateWindow);
+        Assert.Equal(0, updateSection);
         Assert.Equal(0, exited);
 
         menu.Items[6].Invoke!();
@@ -145,7 +146,7 @@ public class PanelShellTests
         Assert.Equal(0, settings);
         Assert.Equal(0, about);
         Assert.Equal(0, checkedNow);
-        Assert.Equal(0, updateWindow);
+        Assert.Equal(0, updateSection);
         Assert.Equal(0, exited);
 
         menu.Items[7].Invoke!();
@@ -157,19 +158,19 @@ public class PanelShellTests
         menu.Items[8].Invoke!();
         Assert.Equal(1, about);
         Assert.Equal(0, checkedNow);
-        Assert.Equal(0, updateWindow);
+        Assert.Equal(0, updateSection);
         Assert.Equal(0, exited);
 
         // «Проверить обновления» идёт в СВОЮ цель, а не открывает окно: это два разных пункта,
         // и перепутать их значило бы заставлять человека ждать окна ради ответа «новее ничего нет».
         menu.Items[9].Invoke!();
         Assert.Equal(1, checkedNow);
-        Assert.Equal(0, updateWindow);
+        Assert.Equal(0, updateSection);
         Assert.Equal(0, exited);
 
         menu.Items[10].Invoke!();
         Assert.Equal(1, checkedNow);
-        Assert.Equal(1, updateWindow);
+        Assert.Equal(1, updateSection);
         Assert.Equal(0, exited);
 
         menu.Items[12].Invoke!();
@@ -335,11 +336,13 @@ public class PanelShellTests
     /// с ней, панель в трее — у курсора, и всегда в границах рабочего стола того экрана, где оно
     /// появляется.
     ///
-    /// ⚠️ Проверка читает РАЗМЕТКУ ШЕСТИ окон: пока `WindowStartupLocation` стоял там, ответов
-    /// на один вопрос было шесть, и «рядом с панелью» не получалось ни у одного. Число названо
-    /// списком, а не условием «во всех файлах»: у окон-ДИАЛОГОВ (`ConfirmStopWindow`,
-    /// `BackupStopWindow`, `UnsavedChangesWindow`) `CenterOwner` — законный ответ, они модальны
-    /// и открываются НАД своим родителем, а не рядом с панелью.
+    /// ⚠️ Проверка читает РАЗМЕТКУ ПЯТИ окон: пока `WindowStartupLocation` стоял там, ответов
+    /// на один вопрос было столько же, сколько этих окон, и «рядом с панелью» не получалось
+    /// ни у одного. Число названо списком, а не условием «во всех файлах»: у окон-ДИАЛОГОВ
+    /// (`ConfirmStopWindow`, `BackupStopWindow`, `UnsavedChangesWindow`) `CenterOwner` — законный
+    /// ответ, они модальны и открываются НАД своим родителем, а не рядом с панелью. Шестым в этом
+    /// списке было окно «Обновление панели» — его в панели больше нет (решение владельца
+    /// 09.10.2026: обновление живёт разделом настроек).
     /// </summary>
     [Fact]
     public void Окна_панели_не_задают_место_в_разметке()
@@ -350,7 +353,7 @@ public class PanelShellTests
         foreach (var name in new[]
                  {
                      "SettingsWindow.axaml", "BackupWindow.axaml", "PeakWindow.axaml", "AboutWindow.axaml",
-                     "UpdateWindow.axaml", "PricingHistoryWindow.axaml",
+                     "PricingHistoryWindow.axaml",
                  })
         {
             var path = Path.Combine(root, "src", "DshPanel", "Views", name);
@@ -366,13 +369,18 @@ public class PanelShellTests
     }
 
     /// <summary>
-    /// И все ШЕСТЬ дверей зовут ОДНО И ТО ЖЕ решение о месте: слот окон сам места не знает,
+    /// И все ПЯТЬ дверей зовут ОДНО И ТО ЖЕ решение о месте: слот окон сам места не знает,
     /// ему его дают (<see cref="PanelShell.Place"/>). Проверка читает связку: дверь, забывшая
     /// передать решение, была бы ровно тем, от чего эта работа и заведена, — окном, появляющимся
     /// там, где решит Windows.
     ///
     /// ⚠️ Список назван ЯВНО, а не «все вызовы `Open` в файле»: так проверка падает и тогда,
     /// когда новую дверь забыли и в список, и в общее решение.
+    ///
+    /// ⚠️ Дверь «Обновление панели…» идёт через ЭТОТ ЖЕ слот настроек — своего вызова `Open`
+    /// у неё нет и быть не должно (отдельного окна обновления в панели нет), поэтому и отдельной
+    /// строки в списке дверей у неё нет. Что она выбрана именно в раздел «Обновление» — сторожит
+    /// `ShellPeaksDoorTests.Пункт_меню_обновления_открывает_раздел_обновления_в_настройках`.
     /// </summary>
     [Fact]
     public void Все_двери_зовут_общее_решение_о_месте()
@@ -391,7 +399,6 @@ public class PanelShellTests
                      "_backups.Open(_createBackups, Place)",
                      "_peaks.Open(_createPeaks, Place)",
                      "_about.Open(_createAbout, Place)",
-                     "_update.Open(_createUpdate, Place)",
                      "_pricingHistory.Open(_createPricingHistory, Place)",
                  })
         {

@@ -16,6 +16,11 @@ namespace DshPanel.Shell;
 /// встала в тот же ряд по тому же доводу: «проверять обновления» — это тоже состояние, которое
 /// человек читает не открывая окна.
 ///
+/// ⚠️ **Пункт «Обновление панели…» открывает РАЗДЕЛ «Обновление» настроек, а не отдельное окно**
+/// (решение владельца 09.10.2026: *«Я не хочу отдельно вызываемое окно»*). Отдельного окна
+/// обновления у панели больше нет вовсе, поэтому и двери в него здесь быть не может: пункт ведёт
+/// туда же, куда «Настройки…», только сразу на нужный раздел.
+///
 /// ⚠️ Строки состояния — НЕ пункты: они серые и ничего не делают (<see cref="TrayMenuItem.Info"/>).
 ///
 /// ⚠️ **Собирается на КАЖДЫЙ показ меню**, а не один раз при старте: состояние меняется, и меню,
@@ -39,10 +44,13 @@ public static class PanelMenu
     /// <param name="about">Открыть окно «О программе».</param>
     /// <param name="checkUpdate">
     /// СПРОСИТЬ ВЫПУСКИ СЕЙЧАС — мимо суточного гейта. Это тот же щелчок человека, что кнопка
-    /// «Проверить сейчас» в окне обновления (`UpdateController.Check`), и второго способа попросить
-    /// проверку в панели быть не должно.
+    /// «Проверить сейчас» в разделе «Обновление» настроек (`UpdateController.Check`), и второго
+    /// способа попросить проверку в панели быть не должно.
     /// </param>
-    /// <param name="updateWindow">Открыть окно «Обновление панели» — дверь к тому, что нашлось.</param>
+    /// <param name="updateSection">
+    /// Открыть РАЗДЕЛ «Обновление» окна настроек — дверь к тому, что нашлось. Отдельного окна
+    /// обновления в панели нет (решение владельца 09.10.2026), поэтому и дверь ведёт в раздел.
+    /// </param>
     /// <param name="exit">Завершить панель целиком.</param>
     public static TrayMenu Build(
         Func<TrayStatusLines> status,
@@ -51,7 +59,7 @@ public static class PanelMenu
         Action settings,
         Action about,
         Action checkUpdate,
-        Action updateWindow,
+        Action updateSection,
         Action exit)
     {
         ArgumentNullException.ThrowIfNull(status);
@@ -60,7 +68,7 @@ public static class PanelMenu
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(about);
         ArgumentNullException.ThrowIfNull(checkUpdate);
-        ArgumentNullException.ThrowIfNull(updateWindow);
+        ArgumentNullException.ThrowIfNull(updateSection);
         ArgumentNullException.ThrowIfNull(exit);
 
         var lines = status() ?? throw new InvalidOperationException("строки состояния трея не собрались");
@@ -92,11 +100,12 @@ public static class PanelMenu
             TrayMenuItem.Command(PanelStrings.AboutButton, about),
 
             // ОБНОВЛЕНИЯ — двумя пунктами, и они разные по смыслу: «Проверить обновления» делает
-            // работу (идёт в сеть), «Обновление панели…» открывает окно с тем, что нашлось.
+            // работу (идёт в сеть), «Обновление панели…» открывает НАСТРОЙКИ на разделе
+            // «Обновление» — там видно, что нашлось, и оттуда же панель готовит замену.
             // Слить их в один значило бы либо не показать человеку результат проверки, либо
-            // заставить его каждый раз ждать окна ради ответа «новее ничего нет».
+            // заставить его каждый раз ждать открытия окна ради ответа «новее ничего нет».
             TrayMenuItem.Command(PanelStrings.CheckUpdateMenuText, checkUpdate),
-            TrayMenuItem.Command(PanelStrings.UpdateWindowMenuText, updateWindow),
+            TrayMenuItem.Command(PanelStrings.UpdateSectionMenuText, updateSection),
 
             TrayMenuItem.Separator(),
             TrayMenuItem.Command(PanelStrings.ExitText, exit),

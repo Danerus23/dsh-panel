@@ -22,7 +22,8 @@ namespace DshPanel.Tests;
 /// (<c>UpdateArchiveUnreadable</c>, <c>DownloadFailed</c>), поэтому различать случаи приходилось
 /// словами — а слова эти движок писал сам, русскими литералами, в
 /// <see cref="UpdatePreparation.Detail"/>. Detail же подставляется в строку, которую читает
-/// человек (<c>Views\UpdateWindow.axaml.cs</c>, <c>Views\SettingsWindow.axaml.cs</c>): на английском
+/// человек (<c>Views\SettingsWindow.axaml.cs</c> — единственное место с этим ответом: отдельного
+/// окна обновления в панели нет с 09.10.2026): на английском
 /// и китайском внутри английской и китайской фразы стоял русский текст — «Could not download the
 /// release file: файл сумм: …».
 ///

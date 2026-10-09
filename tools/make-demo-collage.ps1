@@ -43,7 +43,7 @@ $tiles = @(
     @{ File = 'peaks.png'; Caption = 'Peaks and rates — when it is cheaper' },
     @{ File = 'pricing-history.png'; Caption = 'Price history — what changed and when' },
     @{ File = 'settings.png'; Caption = 'Settings — language, theme, port, environment' },
-    @{ File = 'update.png'; Caption = 'Panel update — notes, download, replace' },
+    @{ File = 'update.png'; Caption = 'Panel update — the answer lives in the settings section' },
     @{ File = 'about.png'; Caption = 'About — version, links, report a problem' }
 )
 

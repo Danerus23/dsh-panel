@@ -69,6 +69,11 @@ public partial class App : Application
     /// </summary>
     public override void Initialize()
     {
+        // Нитка интерфейса запоминается ПЕРВЫМ делом: дальше панель берёт диспетчер только
+        // через дверь (`Shell\UiThread`), а дверь обязана знать, чья нитка интерфейс. Спросить
+        // её здесь можно: `Initialize` идёт на нитке платформы, и диспетчер у неё уже есть.
+        UiThread.Remember();
+
         AvaloniaXamlLoader.Load(this);
         PanelLook.Install(this);
     }
@@ -126,6 +131,11 @@ public partial class App : Application
     /// </summary>
     private void StartPanel(IClassicDesktopStyleApplicationLifetime desktop)
     {
+        // Второй раз, и не для перестраховки: `Initialize` могла пройти до того, как платформа
+        // обзавелась диспетчером, и тогда запоминать было нечего. Здесь панель уже живёт на
+        // своей нитке интерфейса — это её последний и верный случай.
+        UiThread.Remember();
+
         // Самотест связки подменяет журнал списком в памяти: прогон проверки не пишет владельцу
         // в его каталоги (красная линия 4), но проверяет, что нужные строки в журнал легли.
         var selfTest = ProgramOptions.ShellSelfTest;
@@ -264,7 +274,7 @@ public partial class App : Application
             () => _settings!.Settings,
             allowed: RunRights.LocalData(RunContext.Current, human),
             clock: () => DateTimeOffset.Now,
-            dispatch: action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
+            dispatch: action => UiThread.Post(action),
             log: log,
             notify: Notify,
             isolatedRun: isolated);
@@ -284,7 +294,7 @@ public partial class App : Application
             () => Loc.Language,
             allowed: RunRights.LocalData(RunContext.Current, human),
             clock: () => DateTimeOffset.Now,
-            dispatch: action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
+            dispatch: action => UiThread.Post(action),
             log: log,
             rememberCheckedAt: stamp => _settings!.SetPricingCheckedAt(stamp),
             rememberWindows: json => _settings!.SetPricingPeakWindows(json),
@@ -325,7 +335,7 @@ public partial class App : Application
             () => Views.AboutWindow.PanelVersion,
             allowed: RunRights.LocalData(RunContext.Current, human),
             clock: () => DateTimeOffset.Now,
-            dispatch: action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
+            dispatch: action => UiThread.Post(action),
             log: log,
             remember: traces => _settings!.SetUpdateChecked(traces),
             rememberCheckedAt: stamp => _settings!.SetUpdateCheckedAt(stamp),
@@ -333,7 +343,8 @@ public partial class App : Application
 
         _update.Start();
 
-        // ДВИЖОК УСТАНОВКИ — то, чем окно обновления готовит замену файлов. Право готовить
+        // ДВИЖОК УСТАНОВКИ — то, чем РАЗДЕЛ «Обновление» настроек готовит замену файлов
+        // (другого места у неё нет: отдельное окно обновления убрано 09.10.2026). Право готовить
         // приходит ИЗ ОДНОГО МЕСТА (`UpdateInstall.For`, тот же расчёт, что у копий): изолированный
         // прогон (там всё под своим корнем) или обычный запуск человеком. Прогон проверки без корня
         // замену файлов не готовит вовсе — и это не «постараемся», а отказ движка.
@@ -402,7 +413,7 @@ public partial class App : Application
             // Сообщения — через общую дверь изоляции (см. Notify ниже), а возврат из фоновой
             // копии — в нитку интерфейса: и сообщение, и журнал принадлежат панели.
             notify: Notify,
-            dispatch: action => Avalonia.Threading.Dispatcher.UIThread.Post(action));
+            dispatch: action => UiThread.Post(action));
 
         window.BackupsRequested += () => _shell?.OpenBackups();
 
@@ -425,10 +436,14 @@ public partial class App : Application
                 PanelStrings.UpdateAvailableFormat,
                 version));
 
-        // ДВЕРЬ В ОКНО ОБНОВЛЕНИЯ ПЕРЕЕХАЛА В НАСТРОЙКИ (замечание владельца 28.09.2026: кнопку
-        // обновления с главной панели убрать, а в настройках завести отдельный пункт). Здесь её
-        // больше нет; путь тот же — просьбу принимает связка `_shell.OpenUpdate`, и у окна
-        // по-прежнему ОДИН слот, поэтому второго окна обновления не бывает.
+        // ДВЕРЬ В ОБНОВЛЕНИЕ ПЕРЕЕХАЛА В НАСТРОЙКИ (замечание владельца 28.09.2026: кнопку
+        // обновления с главной панели убрать, а в настройках завести отдельный пункт), а
+        // 09.10.2026 отдельного ОКНА обновления не стало вовсе (слова владельца: «Я не хочу
+        // отдельно вызываемое окно»): весь ответ живёт разделом «Обновление» окна настроек,
+        // и пункт меню значка открывает ТО ЖЕ окно на этом разделе — связка делает это дверью
+        // `_shell.OpenUpdateSection`, а раздел выбирается у окна его же уговором
+        // (`IUpdateSectionWindow`). Поэтому второго окна с ответом об обновлении в панели нет
+        // ни одного, и построителя такого окна здесь тоже нет.
 
         // «О программе» — дверь ПЕРЕЕХАЛА в настройки (решение владельца 27.09.2026: «„о программе“
         // не туда воткнул. Предлагаю перенести вообще в настройки»). Окну для неё не нужно ничего:
@@ -509,16 +524,13 @@ public partial class App : Application
             createIssue: CreateIssueWindow,
 
             // Пункт меню «Проверить обновления» — тот же путь, что кнопка «Проверить сейчас»
-            // в окне обновления: щелчок человека идёт МИМО суточного гейта
+            // в разделе «Обновление» настроек: щелчок человека идёт МИМО суточного гейта
             // (`UpdateController.Check`). Второго способа попросить проверку в панели нет.
             checkUpdate: () => _update?.Check(),
 
             createSettings: CreateSettingsWindow,
             createBackups: CreateBackupWindow,
             createPeaks: CreatePeakWindow,
-
-            // Окну обновления нужны ДВА домена: проверка выпусков и движок установки.
-            createUpdate: CreateUpdateWindow,
 
             // Окну истории цен нужен ОДИН домен — контроллер цен: он же владелец истории,
             // и разойтись им нечем.
@@ -596,9 +608,9 @@ public partial class App : Application
     /// Что именно произошло 26.09.2026 в 23:10:12 без этой двери — в <see cref="ThemeApply"/>.
     /// </summary>
     private void ApplyThemeFromAnyThread(PanelTheme theme) => ThemeApply.Apply(
-        () => Avalonia.Threading.Dispatcher.UIThread.CheckAccess(),
+        UiThread.CheckAccess,
         ApplyTheme,
-        action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
+        action => UiThread.Post(action),
         theme,
 
         // Сбой применения темы говорим СВОЕЙ строкой: настройки к этому мгновению уже записаны,
@@ -671,7 +683,7 @@ public partial class App : Application
             log(PanelStrings.AutoStartStartingLog);
 
             // Занятость окна — ТОЛЬКО с нитки интерфейса: это состояние окна.
-            Avalonia.Threading.Dispatcher.UIThread.Post(() => window.BeginServerStart(PanelStrings.ServerStarting));
+            UiThread.Post(() => window.BeginServerStart(PanelStrings.ServerStarting));
 
             try
             {
@@ -681,7 +693,7 @@ public partial class App : Application
             {
                 // Чем бы подъём ни кончился — отказ, исключение, успех, — кнопки обязаны
                 // разблокироваться: занятость, пережившая неудачу, оставила бы окно мёртвым.
-                Avalonia.Threading.Dispatcher.UIThread.Post(window.EndServerStart);
+                UiThread.Post(window.EndServerStart);
             }
         });
     }
@@ -751,13 +763,18 @@ public partial class App : Application
     {
         if (_settings is null) return;
 
-        if (window.WindowState == WindowState.Normal)
+        // ⚠️ ЧТО ЗДЕСЬ БЫЛО НЕ ТАК (находка 09.10.2026 по журналу, а не по догадке).
+        // Прежде показание окна принималось по одному условию — «состояние Normal». Но скрытое
+        // в трее окно тоже отвечает «Normal» и при этом отдаёт ЧУЖУЮ геометрию: в журнале есть
+        // запись «0,0 589x677» из момента, когда окно было спрятано (закрытие шло через замену
+        // файлов). Место при этом соврало — а соври оно про РАЗМЕР, в файл уехало бы «во весь
+        // экран», и следующая панель открылась бы широкой. Ровно это владелец и видел после
+        // перезагрузки. Правило вынесено в чистую дверь: у невидимого окна места не спрашивают.
+        var reading = window.CurrentFrame();
+        if (WindowPlacement.WorthRemembering(
+                window.IsVisible, window.WindowState == WindowState.Normal, reading))
         {
-            var frame = window.CurrentFrame();
-
-            // Окно ещё не мерилось — запоминать нечего: нулевая геометрия в файле была бы
-            // «окно в углу экрана», а не «не задано».
-            if (frame.Width > 0 && frame.Height > 0) _lastNormalPlacement = frame;
+            _lastNormalPlacement = reading;
         }
 
         var current = _lastNormalPlacement;
@@ -768,7 +785,7 @@ public partial class App : Application
         _log(WindowPlacement.Describe(
             PanelStrings.PanelLogWindowPlacementSaved,
             current.Value,
-            window.WindowState.ToString(),
+            window.WindowState.ToString() + (window.IsVisible ? string.Empty : " (окно скрыто)"),
             window.Screens.All.Select(screen => screen.WorkingArea).ToArray(),
             window.RenderScaling));
 
@@ -788,8 +805,9 @@ public partial class App : Application
     {
         var window = new SettingsWindow();
 
-        // РАЗДЕЛУ «ОБНОВЛЕНИЕ» нужны те же два домена, что окну обновления: состояние выпусков
-        // и движок установки. Дверью он больше не связан (она стала разделом списка слева),
+        // РАЗДЕЛУ «ОБНОВЛЕНИЕ» нужны ДВА домена: состояние выпусков и движок установки —
+        // других мест, где панель готовит замену файлов, не осталось вовсе (отдельного окна
+        // обновления нет с 09.10.2026). Дверью он больше не связан (он стал разделом списка слева),
         // поэтому обновление приходит прямо сюда — решение владельца 28.09.2026: «это будет
         // просто нормальный пункт меню как и остальные во вкладке настройки».
         window.Attach(
@@ -855,34 +873,6 @@ public partial class App : Application
     {
         var window = new PricingHistoryWindow();
         window.Attach(_pricing!);
-        return window;
-    }
-
-    /// <summary>
-    /// Построить окно «Обновление панели». Подключается к ДВУМ доменам, и оба ему нужны: у проверки
-    /// выпусков он берёт состояние и кнопку «Проверить сейчас», у движка установки — подготовку
-    /// замены и запуск сценария.
-    ///
-    /// **Три двери, и каждая ведёт в своё место:**
-    /// * «запомнить пропуск» — владельцу настроек, тем же путём, что остальные одиночные решения
-    ///   (второго места правды у `updateSkippedVersion` нет);
-    /// * «открыть на GitHub» — окно открывает САМО, ровно по щелчку человека;
-    /// * «обновить и перезапустить панель» — связке: только она умеет закрыть панель целиком
-    ///   (<see cref="PanelShell.Exit"/>), и только после запуска сценария.
-    ///
-    /// ⚠️ Строится по просьбе (кнопка в шапке главного окна, пункт меню значка) и попадает в свой
-    /// слот связки (<see cref="PanelShell.OpenUpdate"/>) — поэтому второго такого окна не бывает.
-    /// </summary>
-    private Window CreateUpdateWindow()
-    {
-        var window = new UpdateWindow();
-
-        window.Attach(
-            _update,
-            _updateInstall,
-            skip: version => _settings?.SetUpdateSkippedVersion(version) ?? false,
-            exitRequested: () => _shell?.Exit());
-
         return window;
     }
 

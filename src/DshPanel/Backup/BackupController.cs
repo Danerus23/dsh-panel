@@ -806,7 +806,16 @@ public sealed class BackupController : IBackupControl, IDisposable
             return;
         }
 
-        _timer ??= new DispatcherTimer { Interval = ScheduleTick };
+        _timer ??= UiThread.NewTimer(ScheduleTick);
+
+        // Нитки интерфейса нет — часов нет: `new DispatcherTimer` на чужой нитке СОЗДАЛ бы
+        // диспетчер и забрал нитку интерфейса у прогона проверок (см. `Shell\UiThread`).
+        if (_timer is null)
+        {
+            _log(PanelStrings.PanelLogClockNoUiThread);
+            return;
+        }
+
         if (_timer.IsEnabled) return;
 
         _timer.Tick += (_, _) => Tick(_clock());

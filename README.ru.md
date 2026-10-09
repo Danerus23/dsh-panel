@@ -116,9 +116,10 @@
 ### Обновление себя
 
 Панель сама спрашивает выпуски раз в сутки, показывает заметки к выпуску **на языке панели** и
-умеет «пропустить эту версию». Скачанное проверяется по SHA-256, распаковывается со сверкой
-версии, а файлы заменяет отдельный сценарий **с откатом** на прежнюю версию. Итог замены панель
-сообщает словами: обновилось, откатилось или не нашлась та папка.
+умеет «пропустить эту версию». Ответ — и что стоит, и что вышло — живёт **в настройках, в разделе
+«Обновление»**: отдельного окна у обновления нет. Скачанное проверяется по SHA-256,
+распаковывается со сверкой версии, а файлы заменяет отдельный сценарий **с откатом** на прежнюю
+версию. Итог замены панель сообщает словами: обновилось, откатилось или не нашлась та папка.
 
 ### Три языка
 
@@ -164,7 +165,7 @@
 | История цен | [price history](docs/screenshots/en/pricing-history.png) | [история цен](docs/screenshots/ru/pricing-history.png) | [价格历史](docs/screenshots/zh/pricing-history.png) |
 | Настройки | [settings](docs/screenshots/en/settings.png) | [настройки](docs/screenshots/ru/settings.png) | [设置](docs/screenshots/zh/settings.png) |
 | О программе | [about](docs/screenshots/en/about.png) | [о программе](docs/screenshots/ru/about.png) | [关于](docs/screenshots/zh/about.png) |
-| Обновление панели | [update](docs/screenshots/en/update.png) | [обновление](docs/screenshots/ru/update.png) | [更新](docs/screenshots/zh/update.png) |
+| Обновление панели (раздел настроек) | [update](docs/screenshots/en/update.png) | [обновление](docs/screenshots/ru/update.png) | [更新](docs/screenshots/zh/update.png) |
 
 ## Сборка из исходников
 

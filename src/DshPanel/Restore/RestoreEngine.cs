@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Text;
 using DshPanel.Backup;
 using DshPanel.Isolation;
+using DshPanel.Platform;
 using DshPanel.Server;
 using DshPanel.Settings;
 using DshPanel.Shell;
@@ -1152,11 +1153,12 @@ public static class RestoreEngine
     {
         try
         {
-            // ⚠️ Ответ `cmd` приходит в КОДИРОВКЕ КОНСОЛИ (OEM, у русской Windows — 866), и читать
-            // его как UTF-8 значит получить мусор. А ответ — это и есть причина (находка В6), её
-            // нельзя терять дважды. Поэтому читаем ПОТОКИ и разбираем их тем, чем система пишет
-            // (см. <see cref="ReadAnswer"/>); `chcp 65001` для этого не годится — проверено 26.09.2026:
-            // встроенная команда `mklink` отвечает в кодировке консоли, как её ни перенастрой.
+            // ⚠️ Ответ `cmd` приходит в КОДИРОВКЕ КОНСОЛИ СИСТЕМЫ (OEM-кодовая страница Windows:
+            // у русской 866, у английской 437), и читать его как UTF-8 значит получить мусор.
+            // А ответ — это и есть причина (находка В6), её нельзя терять дважды. Поэтому читаем
+            // ПОТОКИ и разбираем их тем, чем система пишет (см. <see cref="ReadAnswer"/>);
+            // `chcp 65001` для этого не годится — проверено 26.09.2026: встроенная команда
+            // `mklink` отвечает в кодировке консоли, как её ни перенастрой.
             var start = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{path}\" \"{target}\"")
             {
                 UseShellExecute = false,
@@ -1203,10 +1205,23 @@ public static class RestoreEngine
     /// Ответ системы — в строку: переводы строк и метка убираются, слова не пересказываются.
     /// Здесь же восстанавливается кодировка: string, прочитанный как Latin1, байт-в-байт равен
     /// исходному, поэтому байты берутся обратно и разбираются той кодировкой, которой пишет
-    /// консоль системы (OEM), а если её не оказалось — CP866: русская Windows и есть тот случай,
-    /// ради которого ответ вообще понадобился.
+    /// консоль СИСТЕМЫ (OEM-кодовая страница Windows — <see cref="SystemCodePage"/>).
+    ///
+    /// ⚠️ **Не кодировкой КУЛЬТУРЫ процесса** (дефект п. 44, заведён 30.09.2026): культура — про
+    /// язык панели, а ответ приходит на языке Windows. Замерено 30.09.2026 на машине владельца:
+    /// одни и те же байты ответа <c>e1 ae a5 a4 a8 ad a5 …</c> при культуре ru-RU читаются
+    /// «соединение создано для …», а при культуре en-US (её OEMCodePage — 437) — «ß«Ññ¿¡Ñ¡¿Ñ
+    /// ß«ºñá¡« ñ½∩»; при de-DE (850) — «… ñ½´». Культура в выборе кодировки не участвует вовсе,
+    /// и это закреплено прогоном (<c>AnswerEncodingTests</c>).
+    ///
+    /// ⚠️ Если система не ответила вовсе — запасной путь CP866 (<see cref="SystemCodePage.RussianOem"/>):
+    /// кодовая страница русской Windows, тот самый случай, ради которого ответ и понадобился.
+    ///
+    /// <c>public</c> — не «на всякий случай»: это то самое место, где байты ответа становятся
+    /// словами, и проверка обязана пройти через него при РАЗНЫХ культурах процесса, а не смотреть
+    /// на выбор со стороны.
     /// </summary>
-    private static string ReadAnswer(string? raw)
+    public static string ReadAnswer(string? raw)
     {
         var text = (raw ?? string.Empty).Trim();
         if (text.Length == 0) return string.Empty;
@@ -1217,14 +1232,16 @@ public static class RestoreEngine
             // знает только UTF и Latin1, а OEM-кодировка Windows (866 у русской) — не знает.
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-            var oem = Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+            var oem = Encoding.GetEncoding(SystemCodePage.ForAnswer(SystemCodePage.Oem()));
             text = oem.GetString(Encoding.Latin1.GetBytes(text));
         }
         catch
         {
             try
             {
-                text = Encoding.GetEncoding(866).GetString(Encoding.Latin1.GetBytes(text));
+                // Спросить у системы не удалось (или такой кодовой страницы в .NET нет) — отвечаем
+                // CP866, кодовой страницей русской Windows: неточный ответ лучше молчания.
+                text = Encoding.GetEncoding(SystemCodePage.RussianOem).GetString(Encoding.Latin1.GetBytes(text));
             }
             catch
             {

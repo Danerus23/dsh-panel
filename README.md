@@ -118,10 +118,11 @@ keys together with a copy to hand over are refused** — the panel says why, in 
 ### Updating itself
 
 The panel asks for releases once a day, shows the release notes **in the panel's own language** and
-can “skip this version”. What it downloads is checked against SHA-256, unpacked with a version
-check, and the files are replaced by a separate script **that can roll back** to the previous
-version. The panel then tells you the outcome in words: updated, rolled back, or the panel folder
-was not the one it replaced.
+can “skip this version”. The answer — both what you have and what is out — lives **in the settings,
+in the “Update” section**: there is no separate update window. What the panel downloads is checked
+against SHA-256, unpacked with a version check, and the files are replaced by a separate script
+**that can roll back** to the previous version. The panel then tells you the outcome in words:
+updated, rolled back, or the panel folder was not the one it replaced.
 
 ### Three languages
 
@@ -168,7 +169,7 @@ Several panel windows at once.
 | Price history | [price history](docs/screenshots/en/pricing-history.png) | [история цен](docs/screenshots/ru/pricing-history.png) | [价格历史](docs/screenshots/zh/pricing-history.png) |
 | Settings | [settings](docs/screenshots/en/settings.png) | [настройки](docs/screenshots/ru/settings.png) | [设置](docs/screenshots/zh/settings.png) |
 | About | [about](docs/screenshots/en/about.png) | [о программе](docs/screenshots/ru/about.png) | [关于](docs/screenshots/zh/about.png) |
-| Panel update | [update](docs/screenshots/en/update.png) | [обновление](docs/screenshots/ru/update.png) | [更新](docs/screenshots/zh/update.png) |
+| Panel update (settings section) | [update](docs/screenshots/en/update.png) | [обновление](docs/screenshots/ru/update.png) | [更新](docs/screenshots/zh/update.png) |
 
 ## Building from source
 

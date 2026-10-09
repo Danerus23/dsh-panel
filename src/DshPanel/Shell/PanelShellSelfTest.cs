@@ -64,7 +64,18 @@ public sealed class PanelShellSelfTest
         // зеленела бы всегда: окна ещё нет ни у кого. Поймано мутацией 24.09.2026 — при
         // выключенном показе окна по щелчку проверка «щелчок открыл окно» всё равно проходила.
         var phase = 0;
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(Seconds) };
+        var timer = UiThread.NewTimer(TimeSpan.FromSeconds(Seconds));
+
+        // Часов нет — нитки интерфейса нет: связку проверять нечем, и «неприменимо» здесь
+        // было бы отпиской. Говорим провалом и уходим, не оставляя панель висеть.
+        if (timer is null)
+        {
+            Fail("нет нитки интерфейса — связке нечем проверять себя");
+            _exitRequested = true;
+            shell.Exit();
+            return;
+        }
+
         timer.Tick += (_, _) =>
         {
             if (phase++ == 0)

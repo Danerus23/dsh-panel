@@ -195,12 +195,23 @@ internal static class PanelTestStand
     ///
     /// <paramref name="update"/> — состояние выпусков для РАЗДЕЛА «Обновление»; без него раздел
     /// честно говорит, что в этом прогоне панель замену файлов не готовит.
+    ///
+    /// <paramref name="install"/> — движок установки для того же раздела. Без него кнопка
+    /// подготовки называет причиной «в этом прогоне не готовим», с ним — говорит про право и про
+    /// то, обновляться ли вообще; обе причины раздел обязан уметь показать.
+    ///
+    /// <paramref name="skipUpdate"/> — «запомнить пропущенную версию» (владелец настроек).
+    /// <paramref name="exitForUpdate"/> — «панель, закройся: сценарий замены запущен». Зовётся
+    /// ровно по нажатию последней кнопки, и проверка обязана это видеть.
     /// </summary>
     public static SettingsWindow SettingsStand(
         string dir,
         bool allowed = true,
         IPricingControl? pricing = null,
-        IUpdateControl? update = null)
+        IUpdateControl? update = null,
+        IUpdateInstall? install = null,
+        Func<string, bool>? skipUpdate = null,
+        Action? exitForUpdate = null)
     {
         var paths = AppPaths.Under(dir);
         var store = new SettingsStore(paths.SettingsFile);
@@ -210,7 +221,15 @@ internal static class PanelTestStand
             locateEngine: () => null, server: () => null, applyTheme: _ => { }, log: _ => { });
 
         var window = new SettingsWindow();
-        window.Attach(controller, autostart: null, balance: null, pricing: pricing, update: update);
+        window.Attach(
+            controller,
+            autostart: null,
+            balance: null,
+            pricing: pricing,
+            update: update,
+            install: install,
+            skipUpdate: skipUpdate,
+            exitForUpdate: exitForUpdate);
 
         return window;
     }

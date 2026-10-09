@@ -8,6 +8,7 @@ using DshPanel.Peak;
 using DshPanel.Pricing;
 using DshPanel.Settings;
 using DshPanel.Shell;
+using Avalonia.Headless.XUnit;
 using Xunit;
 
 namespace DshPanel.Tests;
@@ -591,8 +592,13 @@ public class PricingTests
     /// <summary>
     /// С ЧЕЛОВЕЧЕСКИМ ПРАВОМ ЧАСЫ ЗАПУСКАЮТСЯ и сразу делают первый такт: решение владельца —
     /// разбор ПРИ ЗАПУСКЕ панели. Строка об этом уходит в журнал.
+    ///
+    /// ⚠️ **Проверка идёт НА НИТКЕ ИНТЕРФЕЙСА, и это часть её предмета.** Часы панели заводятся
+    /// в нитке интерфейса (`Shell\UiThread`), а раньше эта проверка была обычной и проходила
+    /// только потому, что `new DispatcherTimer` с чужой нитки ЗАБИРАЛ нитку интерфейса себе —
+    /// то есть сама проверка была источником флейка оснастки (`docs\DESIGN.md` п. 46).
     /// </summary>
-    [Fact]
+    [AvaloniaFact]
     public void С_правом_часы_запускаются_и_первый_разбор_идёт_сразу()
     {
         var log = new List<string>();

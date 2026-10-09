@@ -62,6 +62,26 @@ public class WindowPlacementTests
         Assert.DoesNotContain("0x0", line, StringComparison.Ordinal);
         Assert.Contains("Minimized", line, StringComparison.Ordinal);
     }
+    /// <summary>
+    /// Показание СКРЫТОГО окна местом не считается.
+    ///
+    /// ⚠️ Находка 09.10.2026 по журналу владельца: спрятанное в трее окно отвечает «обычное»
+    /// состояние и отдаёт при этом чужую геометрию — в журнале есть запись «0,0 589x677» из такого
+    /// момента. Соври оно так же про РАЗМЕР — панель записала бы «во весь экран» и открылась бы
+    /// широкой; ровно это владелец и видел после перезагрузки. Поэтому у невидимого окна места
+    /// не спрашивают, и это проверяется отдельно от самой записи.
+    /// </summary>
+    [Fact]
+    public void Показание_скрытого_окна_местом_не_считается()
+    {
+        var good = new PixelRect(665, 177, 589, 677);
+
+        Assert.True(WindowPlacement.WorthRemembering(visible: true, normalState: true, good));
+        Assert.False(WindowPlacement.WorthRemembering(visible: false, normalState: true, good));
+        Assert.False(WindowPlacement.WorthRemembering(visible: true, normalState: false, good));
+        Assert.False(WindowPlacement.WorthRemembering(visible: true, normalState: true, new PixelRect(0, 0, 0, 0)));
+        Assert.False(WindowPlacement.WorthRemembering(visible: false, normalState: true, new PixelRect(0, 0, 589, 677)));
+    }
 
     /// <summary>Второй монитор СЛЕВА: его координаты отрицательны, и это ЗАКОННО.</summary>
     private static readonly PixelRect Left = new(-1920, 0, 1920, 1080);

@@ -84,6 +84,12 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        // Окно живёт на нитке интерфейса — она и есть нитка панели для общей двери
+        // (`Shell\UiThread`): фоновые опросы сервера возвращаются сюда, и дверь обязана
+        // знать, куда именно. Без этого фоновый ответ спрашивал бы `Dispatcher.UIThread`
+        // и в прогоне проверок ЗАБИРАЛ бы нитку интерфейса себе.
+        UiThread.Remember();
+
         // Значок окна — из одной точки правды (`Shell\PanelIcon.cs`): тот же рисунок лежит
         // в самом exe, и расходиться им нельзя.
         Icon = PanelIcon.Window;
@@ -661,7 +667,13 @@ public partial class MainWindow : Window
 
     private void StartPolling()
     {
-        _timer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _timer ??= UiThread.NewTimer(TimeSpan.FromSeconds(1));
+
+        // Нитки интерфейса нет — опроса не будет: `new DispatcherTimer` на чужой нитке СОЗДАЛ бы
+        // диспетчер и забрал нитку интерфейса у прогона проверок (см. `Shell\UiThread`).
+        // Молчать об этом нечем: окно в таком прогоне не живёт.
+        if (_timer is null) return;
+
         if (_timer.IsEnabled) return;
 
         _timer.Tick += (_, _) => Poll();
@@ -684,7 +696,7 @@ public partial class MainWindow : Window
         {
             server.Refresh();
             return server.Scan();
-        }).ContinueWith(task => Dispatcher.UIThread.Post(() =>
+        }).ContinueWith(task => UiThread.Post(() =>
         {
             _refreshing = false;
 
@@ -703,7 +715,7 @@ public partial class MainWindow : Window
         _busyText = busyText;
         Render();
 
-        Task.Run(work).ContinueWith(_ => Dispatcher.UIThread.Post(() =>
+        Task.Run(work).ContinueWith(_ => UiThread.Post(() =>
         {
             _busy = false;
             _busyText = string.Empty;

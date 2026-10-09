@@ -689,17 +689,6 @@ internal static class Program
             peaks.Attach(ShotBalance(), ShotPricing());
             window = peaks;
         }
-        else if (kind == StartModes.ShotUpdate)
-        {
-            // ОКНО ОБНОВЛЕНИЯ на кадре. Живой проверки здесь нет и быть не может (съёмка — прогон
-            // проверки, в сеть она не ходит), а показать кадр обязан СТРУКТУРУ заметок — заголовки,
-            // списки и отступы, ради которых разбор и делался. Поэтому состояние — ОБРАЗЕЦ
-            // (`ShotUpdateControl`), и он же честно называет себя примером. Движка установки
-            // у кадра НЕТ: кнопка подготовки в прогоне проверки недоступна и говорит об этом словами.
-            var updateWindow = new UpdateWindow();
-            updateWindow.Attach(ShotUpdateControl.For(Loc.Language));
-            window = updateWindow;
-        }
         else if (kind == StartModes.ShotIssue)
         {
             // ОКНО «СООБЩИТЬ О ПРОБЛЕМЕ» на кадре. Отчёт собирается из ПУСТЫХ фактов: съёмка —
@@ -739,9 +728,9 @@ internal static class Program
         }
 
         window.Show();
-        Dispatcher.UIThread.RunJobs();
+        UiThread.RunJobs();
         AvaloniaHeadlessPlatform.ForceRenderTimerTick();
-        Dispatcher.UIThread.RunJobs();
+        UiThread.RunJobs();
 
         var w = (int)Math.Ceiling(window.ClientSize.Width);
         var h = (int)Math.Ceiling(window.ClientSize.Height);
@@ -883,7 +872,7 @@ internal static class Program
                             inPeak: balance.Peak.InPeak,
 
                             // Строка обновления в самотесте берётся у ОБРАЗЦА — того же, что
-                            // на кадре окна обновления: живой проверки в прогоне проверки нет,
+                            // на кадре раздела «Обновление»: живой проверки в прогоне проверки нет,
                             // а состав меню обязан быть тем, что человек видит, вместе с тоном.
                             update: ShotUpdateControl.For(Loc.Language).TrayLine),
                         show: () => { },
@@ -891,7 +880,7 @@ internal static class Program
                         settings: () => { },
                         about: () => { },
                         checkUpdate: () => { },
-                        updateWindow: () => { },
+                        updateSection: () => { },
                         exit: () => { });
 
                     expectedItems = menu.Items.Count;
@@ -936,7 +925,19 @@ internal static class Program
                     report.Add($"ОШИБКА: {ex.GetType().Name} — {ex.Message}");
                 }
 
-                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(seconds) };
+                var timer = UiThread.NewTimer(TimeSpan.FromSeconds(seconds));
+
+                // Часов нет — нитки интерфейса нет. Самотесту тогда проверять нечего, и сказать
+                // об этом надо вслух: «зелено» из-за отсутствия часов было бы ложью.
+                if (timer is null)
+                {
+                    failed = true;
+                    report.Add("нет нитки интерфейса — часы самотеста не завелись");
+                    foreach (var line in report) Console.WriteLine("SELFTEST| " + line);
+                    lifetime.Shutdown();
+                    return;
+                }
+
                 timer.Tick += (_, _) =>
                 {
                     timer.Stop();

@@ -144,6 +144,10 @@ public static class ZipLayout
             if (prefix.Length == 0)
                 return new SevenZipFit(false, string.Format(CultureInfo.CurrentCulture, PanelStrings.ZipLayoutSourceNoGroupFormat, source.Directory));
 
+            // Вложенное имя группы — не «отказ продукта», а нормальный случай каталогов ключей
+            // (`keys/1-ssh`, имена взяты у 1.x намеренно): такую раскладку пишет САМА ПАНЕЛЬ,
+            // и слова причины говорят именно это. Прежняя редакция («7-Zip так не умеет») была
+            // прочитана владельцем как поломка копии (09.10.2026) — формулировка исправлена.
             if (prefix.Contains('/'))
                 return new SevenZipFit(false, string.Format(CultureInfo.CurrentCulture, PanelStrings.ZipLayoutNestedGroupFormat, prefix));
 

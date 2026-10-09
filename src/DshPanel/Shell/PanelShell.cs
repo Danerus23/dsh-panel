@@ -9,17 +9,23 @@ namespace DshPanel.Shell;
 
 /// <summary>
 /// Панель целиком: значок в трее, окно, окно настроек, окно копий, окно «Пики и тарифы»,
-/// окно «О программе», окно «Обновление панели» и окно «История цен» — меню между ними.
+/// окно «О программе» и окно «История цен» — меню между ними.
 ///
-/// Здесь и только здесь эти семеро знают друг о друге. Значок не знает про окно, окно не знает
+/// Здесь и только здесь эти шестеро знают друг о друге. Значок не знает про окно, окно не знает
 /// про значок — каждое из них проверяется отдельно, а связка собирается в одном месте,
 /// которое человек видит целиком за полминуты.
 ///
-/// **Шесть вспомогательных окон устроены одинаково, и это осознанно.** Все шесть строятся
+/// **Пять вспомогательных окон устроены одинаково, и это осознанно.** Все пять строятся
 /// по просьбе (функцией, а не готовым окном): панель живёт в трее месяцами, а окна, которые
-/// человек открывает раз в месяц, держать построенными незачем. Все шесть живут в своём слоте
+/// человек открывает раз в месяц, держать построенными незачем. Все пять живут в своём слоте
 /// (<see cref="SingleWindowSlot"/>), поэтому повторная просьба выводит на передний план уже
 /// открытое окно, а не заводит второе.
+///
+/// ⚠️ **Отдельного окна «Обновление панели» в панели БОЛЬШЕ НЕТ** (решение владельца 09.10.2026:
+/// *«Это не отдельное окно должно быть… Я не хочу отдельно вызываемое окно»*). Ответ об
+/// обновлении живёт РАЗДЕЛОМ «Обновление» окна настроек, и пункт меню значка открывает именно
+/// его (<see cref="OpenUpdateSection"/>) — той же дверью настроек, что и «Настройки…», поэтому
+/// второго окна настроек не бывает и у этого пути.
 /// </summary>
 public sealed class PanelShell : IDisposable
 {
@@ -44,16 +50,14 @@ public sealed class PanelShell : IDisposable
     /// а не показывает кнопку в никуда.
     /// </summary>
     private readonly Func<Window>? _createIssue;
-    private readonly Func<Window>? _createUpdate;
     private readonly Func<Window>? _createPricingHistory;
     private readonly SingleWindowSlot _settings = new();
     private readonly SingleWindowSlot _backups = new();
     private readonly SingleWindowSlot _peaks = new();
     private readonly SingleWindowSlot _about = new();
 
-    /// <summary>Шестое вспомогательное окно — «Сообщить о проблеме» (<c>DESIGN.md</c> п. 38).</summary>
+    /// <summary>Пятое вспомогательное окно — «Сообщить о проблеме» (<c>DESIGN.md</c> п. 38).</summary>
     private readonly SingleWindowSlot _issue = new();
-    private readonly SingleWindowSlot _update = new();
     private readonly SingleWindowSlot _pricingHistory = new();
 
     private bool _disposed;
@@ -115,14 +119,9 @@ public sealed class PanelShell : IDisposable
     /// </param>
     /// <param name="checkUpdate">
     /// Спросить выпуски СЕЙЧАС — пункт меню «Проверить обновления». Это тот же путь, что кнопка
-    /// «Проверить сейчас» в окне обновления, и он идёт МИМО суточного гейта: человек попросил.
-    /// Обязательный параметр: пункт меню, который ничего не делает, выглядит сломанным.
-    /// </param>
-    /// <param name="createUpdate">
-    /// Как построить окно «Обновление панели» — по той же причине, что настройки и копии. Окну
-    /// нужны два домена (проверка выпусков и движок установки), и построить его панель может
-    /// не всегда: в прогоне без права замену файлов готовить нечем, и тогда просьба честно уходит
-    /// строкой в журнал, а не молчанием.
+    /// «Проверить сейчас» в разделе «Обновление» настроек, и он идёт МИМО суточного гейта:
+    /// человек попросил. Обязательный параметр: пункт меню, который ничего не делает, выглядит
+    /// сломанным.
     /// </param>
     /// <param name="createPricingHistory">
     /// Как построить окно «История цен» — по той же причине: записи об изменениях читают редко,
@@ -150,7 +149,6 @@ public sealed class PanelShell : IDisposable
         Func<Window>? createSettings = null,
         Func<Window>? createBackups = null,
         Func<Window>? createPeaks = null,
-        Func<Window>? createUpdate = null,
         Func<Window>? createPricingHistory = null)
     {
         _tray = tray ?? throw new ArgumentNullException(nameof(tray));
@@ -168,7 +166,6 @@ public sealed class PanelShell : IDisposable
         _createSettings = createSettings;
         _createBackups = createBackups;
         _createPeaks = createPeaks;
-        _createUpdate = createUpdate;
         _createPricingHistory = createPricingHistory;
     }
 
@@ -187,15 +184,7 @@ public sealed class PanelShell : IDisposable
         // Меню ставится ПРОВАЙДЕРОМ, а не снимком: в шапке — состояние (сервер, агент, тариф,
         // обновление), и оно обязано быть свежим на каждый показ. Снимок, собранный здесь,
         // показывал бы состояние панели на момент её запуска — то есть врал бы весь день.
-        _tray.SetMenuProvider(() => PanelMenu.Build(
-            status: _trayStatus,
-            show: ShowPanel,
-            openAgent: OpenEntryLink,
-            settings: OpenSettings,
-            about: OpenAbout,
-            checkUpdate: _checkUpdate,
-            updateWindow: OpenUpdate,
-            exit: Exit));
+        _tray.SetMenuProvider(BuildMenu);
 
         // Щелчок и двойной щелчок делают одно и то же: у панели одно окно, и человек,
         // щёлкнувший по значку, ждёт его, а не меню.
@@ -205,6 +194,27 @@ public sealed class PanelShell : IDisposable
         _tray.Show();
         _log(PanelStrings.PanelLogTrayPlaced);
     }
+
+    /// <summary>
+    /// СОБРАТЬ МЕНЮ ЗНАЧКА НА СЕЙЧАС — тот же вызов, что уходит провайдером в значок
+    /// (<see cref="Start"/>). Состав и то, куда ведёт каждый пункт, живут в
+    /// <see cref="PanelMenu.Build"/>; здесь только «кто именно» для каждой двери.
+    ///
+    /// ⚠️ Отдельным методом, а не строкой внутри <see cref="Start"/>, по той же причине, что
+    /// и <see cref="ShouldShowAbout"/>: связку со значком в проверках не поднять (значок встаёт
+    /// на рабочий стол владельца), а обещание «пункт меню „Обновление панели…“ открывает раздел
+    /// „Обновление“ настроек» обязано проверяться прогоном НАСТОЯЩЕГО пути — через этот же вызов,
+    /// а не через список действий, собранный проверкой заново.
+    /// </summary>
+    internal TrayMenu BuildMenu() => PanelMenu.Build(
+        status: _trayStatus,
+        show: ShowPanel,
+        openAgent: OpenEntryLink,
+        settings: OpenSettings,
+        about: OpenAbout,
+        checkUpdate: _checkUpdate,
+        updateSection: OpenUpdateSection,
+        exit: Exit);
 
     /// <summary>
     /// Открыть настройки. Второго окна настроек не бывает: повторная просьба (пункт меню,
@@ -224,6 +234,49 @@ public sealed class PanelShell : IDisposable
         _log(_settings.Open(_createSettings, Place)
             ? PanelStrings.SettingsOpenedLog
             : PanelStrings.SettingsRaisedLog);
+    }
+
+    /// <summary>
+    /// ОТКРЫТЬ НАСТРОЙКИ НА РАЗДЕЛЕ «ОБНОВЛЕНИЕ» — это дверь пункта меню значка, который прежде
+    /// открывал отдельное окно «Обновление панели».
+    ///
+    /// Решение владельца 09.10.2026, дословно: *«Это не отдельное окно должно быть. Я просто просил
+    /// чтобы была разметка… Я не хочу отдельно вызываемое окно»*. Весь ответ об обновлении живёт
+    /// разделом окна настроек, и дверь ведёт ровно туда — второе место с тем же ответом разошлось бы
+    /// с первым.
+    ///
+    /// ⚠️ Дверь идёт через ТОТ ЖЕ слот настроек, что и «Настройки…»: второго окна настроек не бывает
+    /// (повторная просьба поднимает уже открытое), и раздел выбирается и у построенного, и у
+    /// поднятого окна — иначе человек, у которого настройки уже открыты на другом разделе,
+    /// нажал бы «Обновление панели…» и не увидел бы обновления.
+    ///
+    /// ⚠️ Номера разделов здесь нет и быть не должно: окно САМО знает, какой раздел у него
+    /// обновление (уговор <see cref="IUpdateSectionWindow"/>). Связка не знает, какое именно окно
+    /// ей вернут, — знает только, что это окно панели.
+    /// </summary>
+    public void OpenUpdateSection()
+    {
+        if (_disposed) return;
+
+        if (_createSettings is null)
+        {
+            _log(PanelStrings.PanelLogSettingsUnavailable);
+            return;
+        }
+
+        _log(_settings.Open(_createSettings, Place, RevealUpdateSection)
+            ? PanelStrings.SettingsOpenedLog
+            : PanelStrings.SettingsRaisedLog);
+    }
+
+    /// <summary>
+    /// Показать в открытом окне настроек РАЗДЕЛ «ОБНОВЛЕНИЕ». Окно, которое такого раздела не знает
+    /// (подставное в проверке), не ломается: дверь открывает его как есть, а причина видна в том,
+    /// что раздел не сменился.
+    /// </summary>
+    private static void RevealUpdateSection(Window window)
+    {
+        if (window is IUpdateSectionWindow sectioned) sectioned.ShowUpdateSection();
     }
 
     /// <summary>
@@ -304,38 +357,6 @@ public sealed class PanelShell : IDisposable
 
     /// <summary>Окно «О программе» сейчас открыто — для проверок без экрана.</summary>
     public bool AboutOpen => _about.IsOpen;
-
-    /// <summary>Окно «Обновление панели» сейчас открыто — для проверок без экрана.</summary>
-    public bool UpdateOpen => _update.IsOpen;
-
-    /// <summary>
-    /// Открыть окно «Обновление панели». Правило то же, что у остальных четырёх окон: второго
-    /// такого окна не бывает, повторная просьба выводит на передний план уже открытое.
-    ///
-    /// Прогон проверки владельцу не показывает ничего (красная линия 8) — тем же предикатом,
-    /// что и окно «О программе»: это вторая дверь, которую открывает меню, а не построение
-    /// главного окна, и предохранитель у неё обязан быть тот же.
-    /// </summary>
-    public void OpenUpdate()
-    {
-        if (_disposed) return;
-
-        if (_createUpdate is null)
-        {
-            _log(PanelStrings.PanelLogUpdateWindowUnavailable);
-            return;
-        }
-
-        if (!ShouldShowAbout(_isolated))
-        {
-            _log(PanelStrings.WindowSuppressedLog);
-            return;
-        }
-
-        _log(_update.Open(_createUpdate, Place)
-            ? PanelStrings.UpdateOpenedLog
-            : PanelStrings.UpdateRaisedLog);
-    }
 
     /// <summary>
     /// Показывать ли окно «О программе» в этом прогоне.
@@ -554,7 +575,6 @@ public sealed class PanelShell : IDisposable
         _peaks.Close();
         _about.Close();
         _issue.Close();
-        _update.Close();
         _pricingHistory.Close();
 
         _window.CloseForExit();
@@ -575,7 +595,6 @@ public sealed class PanelShell : IDisposable
         _peaks.Close();
         _about.Close();
         _issue.Close();
-        _update.Close();
         _pricingHistory.Close();
         _window.Dispose();
     }

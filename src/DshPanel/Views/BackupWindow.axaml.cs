@@ -113,6 +113,10 @@ public partial class BackupWindow : Window
     {
         InitializeComponent();
 
+        // Окно живёт на нитке интерфейса — она и есть нитка панели для общей двери
+        // (`Shell\UiThread`): замер объёма, копия и накат возвращаются сюда из фона.
+        UiThread.Remember();
+
         Icon = PanelIcon.Window;
 
         Title = PanelStrings.BackupWindowTitle;
@@ -615,7 +619,7 @@ public partial class BackupWindow : Window
         _estimating = scope;
         var backups = _backups;
 
-        Task.Run(() => backups.Estimate(scope)).ContinueWith(task => Dispatcher.UIThread.Post(() =>
+        Task.Run(() => backups.Estimate(scope)).ContinueWith(task => UiThread.Post(() =>
         {
             // Окно закрыли, пока считалось, — рисовать нечего и НЕЛЬЗЯ: органы окна уже не наши.
             if (_closed) return;
@@ -843,7 +847,7 @@ public partial class BackupWindow : Window
         // `BringIntoView()` уходит в ScrollViewer с прежними координатами панели. Проверено
         // прогоном: окно прокручивалось на 180 пикселей вместо нужных 600, то есть план
         // оставался за нижним краем — ровно тот дефект, от которого эта работа и заведена.
-        Dispatcher.UIThread.Post(
+        UiThread.Post(
             () =>
             {
                 if (_closed || !PlanPanel.IsVisible) return;
@@ -1074,7 +1078,7 @@ public partial class BackupWindow : Window
         StatusText.Text = busyText;
         Render();
 
-        Task.Run(work).ContinueWith(task => Dispatcher.UIThread.Post(() =>
+        Task.Run(work).ContinueWith(task => UiThread.Post(() =>
         {
             _busy = false;
 

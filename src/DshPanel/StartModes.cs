@@ -62,9 +62,6 @@ public static class StartModes
     /// <summary>Имя окна съёмки: «Пики и тарифы».</summary>
     public const string ShotPeaks = "peaks";
 
-    /// <summary>Имя окна съёмки: «Обновление панели».</summary>
-    public const string ShotUpdate = "update";
-
     /// <summary>
     /// Имя окна съёмки: «История цен».
     ///
@@ -94,10 +91,16 @@ public static class StartModes
     ///
     /// ⚠️ Порядок здесь — порядок показа в описании ключа; проверка его не требует, но
     /// переставлять просто так не надо: по нему читают строку отказа.
+    ///
+    /// ⚠️ **Имени «update» в списке больше НЕТ** (решение владельца 09.10.2026): отдельного окна
+    /// «Обновление панели» в панели не стало, и снимать по этому имени нечего. Ответ об обновлении
+    /// снимается кадром раздела настроек — `settings-update`. Проверка «имя есть в списке, а окна
+    /// в дереве нет» сторожит это отдельно (`ModeTests`): мёртвое имя обещало бы кадр окна, которого
+    /// не существует, и человек получил бы отказ уже на съёмке.
     /// </summary>
     public static readonly string[] ShotWindows =
     {
-        ShotSettings, ShotSettingsBalance, ShotSettingsUpdate, ShotSettingsServer, ShotBackup, ShotAbout, ShotPeaks, ShotUpdate,
+        ShotSettings, ShotSettingsBalance, ShotSettingsUpdate, ShotSettingsServer, ShotBackup, ShotAbout, ShotPeaks,
         ShotPricingHistory, ShotIssue,
     };
 

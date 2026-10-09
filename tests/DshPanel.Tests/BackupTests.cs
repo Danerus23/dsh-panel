@@ -159,6 +159,29 @@ public class BackupTests
         Assert.Equal(ZipWriterKind.SevenZip, быстрый.Writer);
     }
 
+    /// <summary>
+    /// ВЛОЖЕННОЕ ИМЯ ГРУППЫ закрывает быстрый путь через 7-Zip, и архив пишет САМА ПАНЕЛЬ.
+    /// Так зовутся каталоги ключей (<c>keys/1-ssh</c>) — имена взяты у 1.x намеренно, и этот
+    /// случай НОРМАЛЬНЫЙ, а не потеря.
+    ///
+    /// ⚠️ **Слова причины — замечание владельца 09.10.2026.** В журнале он увидел прежнюю строку
+    /// («имя группы «keys/1-ssh» вложенное — 7-Zip так не умеет») и прочитал её как поломку копии,
+    /// хотя копия снялась верно. Проверка держит обе половины: причина называет группу и говорит,
+    /// что архив пишет панель, — и не обвиняет 7-Zip в том, чего он не делал.
+    /// </summary>
+    [Fact]
+    public void Вложенное_имя_группы_пишется_своими_силами_и_сказано_как_норма()
+    {
+        var keys = new[] { new BackupSource(Path.Combine(Path.GetTempPath(), "1-ssh"), "keys/1-ssh") };
+
+        var choice = ZipLayout.ChooseWriter(keys, @"C:\Program Files\7-Zip\7z.exe");
+
+        Assert.Equal(ZipWriterKind.BuiltIn, choice.Writer);
+        Assert.Contains("keys/1-ssh", choice.Reason, StringComparison.Ordinal);
+        Assert.Contains("сама панель", choice.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("не умеет", choice.Reason, StringComparison.Ordinal);
+    }
+
     // --- поиск 7-Zip --------------------------------------------------------
 
     private static Func<string, string?> Env(params (string Name, string Value)[] values)

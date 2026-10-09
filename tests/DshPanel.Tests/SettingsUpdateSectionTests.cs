@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
@@ -26,8 +27,13 @@ namespace DshPanel.Tests;
 /// 1. **раздел есть в списке слева** и называется так, как назвал владелец;
 /// 2. **ряд действий стоит в ОДНУ строку** — меряется геометрией, а не взглядом на разметку:
 ///    четыре кнопки обязаны уложиться в ширину содержимого раздела;
-/// 3. **состояние показывается словами** теми же решениями ядра, что у окна обновления: номер
-///    с GitHub не выдаётся за новость, а заметки разбираются строками.
+/// 3. **состояние показывается словами** чистыми решениями ядра обновления
+///    (<see cref="UpdateLines"/>): номер с GitHub не выдаётся за новость, а заметки разбираются
+///    строками.
+///
+/// ⚠️ **Это единственное место, где панель показывает ответ об обновлении** (решение владельца
+/// 09.10.2026: *«Я не хочу отдельно вызываемое окно»*). Прежнее отдельное окно убрано, его кадр
+/// «свой же выпуск» (<c>update-latest-*</c>) снимается теперь отсюда.
 /// </summary>
 public class SettingsUpdateSectionTests
 {
@@ -91,15 +97,118 @@ public class SettingsUpdateSectionTests
         public void Check() => Checks++;
     }
 
-    /// <summary>Окно настроек с подставным состоянием выпусков: живой путь тот же, сети нет.</summary>
-    private static SettingsWindow Stand(string dir, FakeUpdate? update)
+    /// <summary>
+    /// Окно настроек с подставным состоянием выпусков: живой путь тот же, сети нет.
+    /// </summary>
+    private static SettingsWindow Stand(
+        string dir,
+        FakeUpdate? update,
+        FakeInstall? install = null,
+        Func<string, bool>? skipUpdate = null,
+        Action? exitForUpdate = null)
     {
-        var window = PanelTestStand.SettingsStand(dir, update: update);
+        var window = PanelTestStand.SettingsStand(
+            dir,
+            update: update,
+            install: install,
+            skipUpdate: skipUpdate,
+            exitForUpdate: exitForUpdate);
+
         window.Show();
         PanelTestStand.Settle();
 
         return window;
     }
+
+    /// <summary>
+    /// ДОЖДАТЬСЯ ФОНОВОЙ РАБОТЫ: нажатие «Скачать и подготовить» уходит в фоновую задачу, и её
+    /// исход проверка обязана увидеть. Опрос ОГРАНИЧЕН по времени: не дождались — провал с
+    /// названной причиной, а не повисший прогон.
+    /// </summary>
+    private static void WaitFor(Func<bool> done, string what)
+    {
+        var until = DateTime.UtcNow.AddSeconds(15);
+
+        while (!done() && DateTime.UtcNow < until)
+        {
+            PanelTestStand.Settle();
+            System.Threading.Thread.Sleep(10);
+        }
+
+        Assert.True(done(), what);
+    }
+
+    /// <summary>
+    /// Движок установки, каким его видит раздел: ничего не качает и ничего не пишет.
+    ///
+    /// ⚠️ Право он проверяет САМ, как настоящий (<c>UpdateInstall.Prepare</c> отвечает отказом
+    /// <see cref="UpdateRefusal.NotAllowed"/>): раздел по праву только ПОКАЗЫВАЕТ кнопку, а решает
+    /// движок, и подставной обязан повторять это, иначе проверка «без права отказывает» проверяла
+    /// бы собственную выдумку.
+    /// </summary>
+    private sealed class FakeInstall : IUpdateInstall
+    {
+        public FakeInstall(bool allowed = true, UpdatePreparation? answer = null, string launch = "")
+        {
+            Allowed = allowed;
+            Answer = answer;
+            LaunchError = launch;
+        }
+
+        public bool Allowed { get; }
+
+        /// <summary>Что движок ответит на «подготовить». <c>null</c> — отказ «обновляться некуда».</summary>
+        public UpdatePreparation? Answer { get; set; }
+
+        public string LaunchError { get; }
+
+        public int Prepared { get; private set; }
+
+        public int Launched { get; private set; }
+
+        public string LastRelease { get; private set; } = string.Empty;
+
+        public ReleaseAssets LastAssets { get; private set; } = ReleaseAssets.None;
+
+        public UpdatePreparation Prepare(string release, ReleaseAssets assets, Action<UpdateProgress>? progress = null)
+        {
+            Prepared++;
+            LastRelease = release;
+            LastAssets = assets;
+
+            progress?.Invoke(new UpdateProgress(UpdateStage.Archive, "DshPanel.zip", 50, 100));
+
+            if (!Allowed)
+            {
+                return UpdatePreparation.Refuse(UpdateRefusal.NotAllowed, "у прогона нет права готовить замену файлов");
+            }
+
+            return Answer ?? UpdatePreparation.Refuse(UpdateRefusal.AlreadyLatest, "выпуск не новее");
+        }
+
+        public string Launch(UpdatePreparation preparation)
+        {
+            Launched++;
+
+            return LaunchError;
+        }
+    }
+
+    /// <summary>
+    /// Готовая подготовка — тот же ответ, что отдаёт настоящее ядро, и с путями, в которых есть имя
+    /// человека: так проверяется, что раздел показывает путь МАСКОЙ (красная линия 7).
+    /// </summary>
+    private static UpdatePreparation Prepared() => new(
+        true,
+        UpdateRefusal.None,
+        string.Empty,
+        "2.1.0",
+        @"C:\Users\person\AppData\Local\DshPanel2\state\update\2.1.0",
+        @"C:\Users\person\AppData\Local\DshPanel2\state\update\backup-2.0.0",
+        @"C:\Users\person\AppData\Local\Programs\DSH Panel",
+        @"C:\Users\person\AppData\Local\DshPanel2\state\update\update.cmd",
+        @"C:\Users\person\AppData\Local\DshPanel2\state\update\update.log",
+        "\"\"update.cmd\" \"42\" \"C:\\Panel\" \"C:\\Staged\" \"C:\\Backup\" \"C:\\Log\" \"Mutex\" \"\"\"");
 
     /// <summary>
     /// РАЗДЕЛ «ОБНОВЛЕНИЕ» ЕСТЬ В СПИСКЕ — последним, как и остальные разделы настроек.
@@ -132,7 +241,7 @@ public class SettingsUpdateSectionTests
 
     /// <summary>
     /// КНОПКИ ДЕЙСТВИЙ — В ОДНУ СТРОКУ. Это главное обещание раздела: владелец назвал переносимый
-    /// ряд в окне обновления «сделано очень небрежно».
+    /// ряд «сделано очень небрежно», когда тот складывался в две строки.
     ///
     /// ⚠️ Проверка МЕРЯЕТ ГЕОМЕТРИЮ на минимальной высоте и при выбранном разделе: четыре кнопки
     /// обязаны уложиться в ширину содержимого, а самая правая — не выйти за правый край.
@@ -268,8 +377,8 @@ public class SettingsUpdateSectionTests
     }
 
     /// <summary>
-    /// ПРОГОН БЕЗ ПРАВА ГОТОВИТЬ ЗАМЕНУ: кнопка недоступна и говорит причину словами — как
-    /// в окне обновления, тем же решением (<see cref="UpdateWindow.PrepareState"/>).
+    /// ПРОГОН БЕЗ ПРАВА ГОТОВИТЬ ЗАМЕНУ: кнопка недоступна и говорит причину словами — тем же
+    /// решением, что у всякого, кто показывает состояние обновления (<see cref="UpdateLines.PrepareState"/>).
     /// </summary>
     [AvaloniaFact]
     public void Без_права_подготовка_называет_причину()
@@ -289,6 +398,467 @@ public class SettingsUpdateSectionTests
 
             Assert.False(prepare.IsEnabled);
             Assert.True(hint.Length > 0, "кнопка недоступна, а причины не названо");
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// НА СВОЁМ ЖЕ ВЫПУСКЕ РАЗДЕЛ ГОВОРИТ ТО ЖЕ, ЧТО ОКНО: обновляться не нужно и пропускать
+    /// нечего. Правило одно на два места (замечание владельца 09.10.2026), и проверяется здесь
+    /// НАСТОЯЩЕЙ кнопкой раздела — иначе окно и настройки разошлись бы, а человек читает оба.
+    /// </summary>
+    [AvaloniaFact]
+    public void На_своём_выпуске_раздел_не_предлагает_пропускать()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = Stand(dir, new FakeUpdate(latest: "2.0.0", current: "2.0.0"));
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            var verdict = window.FindControl<TextBlock>("UpdateVerdictText")!.Text ?? string.Empty;
+            var skip = window.FindControl<Button>("UpdateSkipButton")!;
+
+            Assert.Contains("2.0.0", verdict, StringComparison.Ordinal);
+            Assert.False(skip.IsEnabled, "пропускать нечего: версия уже установлена");
+            Assert.Equal(
+                Avalonia.Controls.ToolTip.GetTip(skip) as string,
+                PanelStrings.TipUpdateSkipNothingNew);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// НА СВОЁМ ЖЕ ВЫПУСКЕ РАЗДЕЛ ГОВОРИТ, ЧТО ДЕЛАТЬ НЕЧЕГО, — и обе кнопки это подтверждают
+    /// делом, а кадр этого состояния снимается С РАЗДЕЛА.
+    ///
+    /// ⚠️ Здесь живёт кадр <c>update-latest-*</c>, который прежде снимался с окна обновления
+    /// (`PanelTestStand.SaveFrame`). Окна больше нет (решение владельца 09.10.2026), а кадр
+    /// остался: он был доказательством для владельца — он смотрел ГЛАЗАМИ, что на своём выпуске
+    /// панель не предлагает обновиться и не предлагает пропускать. Прогон без права в сеть
+    /// (`--shot settings-update`) показывает «проверка не делалась», а не «своя же версия»,
+    /// поэтому состояние «свой выпуск» снимается только отсюда.
+    /// </summary>
+    [AvaloniaFact]
+    public void На_своём_выпуске_раздел_говорит_обновляться_не_нужно_и_кадр_этого_виден()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = PanelTestStand.SettingsStand(
+                dir,
+                update: new FakeUpdate(latest: "2.0.0", current: "2.0.0"),
+                install: new FakeInstall());
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            window.Show();
+            PanelTestStand.Settle();
+
+            var verdict = window.FindControl<TextBlock>("UpdateVerdictText")!.Text ?? string.Empty;
+            var skip = window.FindControl<Button>("UpdateSkipButton")!;
+            var prepare = window.FindControl<Button>("UpdatePrepareButton")!;
+
+            Assert.Contains("2.0.0", verdict, StringComparison.Ordinal);
+            Assert.Contains("не нужно", verdict, StringComparison.OrdinalIgnoreCase);
+
+            Assert.False(skip.IsEnabled, "пропускать нечего: версия уже установлена");
+            Assert.Equal(PanelStrings.TipUpdateSkipNothingNew, Avalonia.Controls.ToolTip.GetTip(skip) as string);
+
+            Assert.False(prepare.IsEnabled, "готовить нечего: выпуск не новее установленной панели");
+            Assert.Equal(
+                PanelStrings.UpdateAlreadyLatest,
+                window.FindControl<TextBlock>("UpdateHintText")!.Text);
+
+            var frame = PanelTestStand.SaveFrame(window, "update-latest-" + Guid.NewGuid().ToString("N")[..8]);
+
+            Assert.True(File.Exists(frame), "кадр не сохранён: " + frame);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// РЕШЕНИЕ СТОИТ ПЕРЕД ВЕРСИЯМИ — тот же порядок, что был у прежнего окна обновления,
+    /// и та же причина.
+    /// ⚠️ Замечание владельца 09.10.2026: в окне порядок поправили, а в разделе настроек он остался
+    /// СТАРЫМ — и владелец увидел это сразу («дизайн пункта обновления старый»). Проверяется
+    /// ГЕОМЕТРИЕЙ показанного раздела, а не порядком строк в разметке: строку можно переставить
+    /// в файле и не увидеть на экране.
+    /// </summary>
+    [AvaloniaFact]
+    public void Раздел_ставит_решение_перед_версиями()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = Stand(dir, new FakeUpdate());
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            var verdict = window.FindControl<TextBlock>("UpdateVerdictText")!;
+            var current = window.FindControl<TextBlock>("UpdateCurrentText")!;
+            var github = window.FindControl<TextBlock>("UpdateGithubText")!;
+
+            Assert.True(verdict.Bounds.Height > 0, "строка решения не показана — мерить нечего");
+            Assert.True(
+                verdict.Bounds.Y < current.Bounds.Y,
+                $"решение ниже версии: решение Y={verdict.Bounds.Y}, версия Y={current.Bounds.Y}");
+            Assert.True(
+                current.Bounds.Y < github.Bounds.Y,
+                $"порядок «установлено / на GitHub» сломан: {current.Bounds.Y} / {github.Bounds.Y}");
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// НЕПРОВЕРЕННОЕ СОСТОЯНИЕ НЕ ПОВТОРЯЕТ ОДНУ ФРАЗУ ДВАЖДЫ: «Обновление ещё не проверялось» —
+    /// это решение, и строка «когда проверяли» обязана молчать (замечание владельца 09.10.2026
+    /// по кадру раздела: две одинаковые строки подряд читаются как сбой).
+    /// </summary>
+    [AvaloniaFact]
+    public void Раздел_не_повторяет_одну_фразу_дважды()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = Stand(dir, new FakeUpdate(ok: false));
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            var verdict = window.FindControl<TextBlock>("UpdateVerdictText")!;
+            var source = window.FindControl<TextBlock>("UpdateSourceText")!;
+
+            Assert.Equal(PanelStrings.UpdateNeverChecked, verdict.Text);
+            Assert.False(source.IsVisible, "строка «когда проверяли» повторяет решение: «" + source.Text + "»");
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    // ------------------------------------------- ТРИ КНОПКИ РАЗДЕЛА: ЧТО ПРОИСХОДИТ ПО НАЖАТИЮ
+    //
+    // ⚠️ Здесь закрыт долг, названный в `NEXT.md` и `UNRELEASED.md` §5: после удаления окна
+    // обновления (09.10.2026) три действия раздела — «Пропустить эту версию», «Скачать
+    // и подготовить» и «Обновить и перезапустить панель» — не нажимала НИ ОДНА проверка: их
+    // стерёг удалённый файл окна. Правила были проверены на чистом уровне, а сами нажатия — нет.
+    // Путь замены файлов — самый опасный в продукте, и он обязан быть покрыт нажатием.
+
+    /// <summary>
+    /// «СКАЧАТЬ И ПОДГОТОВИТЬ» ПО НАЖАТИЮ КНОПКИ: работа доходит до движка, карточка замены
+    /// появляется, а сценарий замены НЕ запускается и панель закрыться не просит.
+    ///
+    /// ⚠️ Проверка идёт НАЖАТИЕМ настоящей кнопки в показанном разделе, и исход дожидается
+    /// опросом: нажатие уходит в фоновую задачу (скачивание в сотни мегабайт на нитке интерфейса
+    /// заморозило бы окно). Шов <c>PrepareNow</c> — тот же путь, а не второй: обработчик кнопки
+    /// зовёт именно его, поэтому «мимо шва» нажатие пройти не может.
+    /// </summary>
+    [AvaloniaFact]
+    public void Подготовка_по_нажатию_кнопки_идёт_через_движок_и_замену_не_запускает()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var install = new FakeInstall(answer: Prepared());
+            var exits = 0;
+            var window = Stand(dir, new FakeUpdate(), install, exitForUpdate: () => exits++);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            var prepare = window.FindControl<Button>("UpdatePrepareButton")!;
+
+            Assert.True(prepare.IsEnabled, "готовить есть что, а кнопка недоступна");
+
+            prepare.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            WaitFor(
+                () => window.UpdatePrepared is not null,
+                "нажатие «Скачать и подготовить» не дошло до готового ответа");
+
+            Assert.Equal(1, install.Prepared);
+            Assert.Equal("v2.1.0", install.LastRelease);
+            Assert.Equal(0, install.Launched);
+            Assert.Equal(0, exits);
+            Assert.True(window.UpdatePrepared!.Ok);
+
+            // Карточка замены появляется ТОЛЬКО после подготовки, путь показан МАСКОЙ (имени
+            // человека в окне быть не должно — красная линия 7), и кнопка доступна, но не нажата.
+            var replace = window.FindControl<Button>("UpdateReplaceButton")!;
+            var staged = window.FindControl<TextBlock>("UpdatePreparedText")!.Text ?? string.Empty;
+
+            Assert.True(replace.IsVisible, "карточка замены не показана после подготовки");
+            Assert.True(replace.IsEnabled, "замена доступна, а кнопка молчит");
+            Assert.Contains("~", staged, StringComparison.Ordinal);
+            Assert.DoesNotContain("person", staged, StringComparison.Ordinal);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ЗАМЕНА ЗАПУСКАЕТСЯ ОТДЕЛЬНЫМ НАЖАТИЕМ и только тогда просит панель закрыться: сценарий
+    /// обязан дождаться выхода панели, иначе он не сможет заменить занятые файлы.
+    ///
+    /// ⚠️ Мутация «после подготовки сразу запускаем замену» падает ИМЕННО здесь: до нажатия
+    /// запусков ноль, а панель закрыться не просили ни разу.
+    /// </summary>
+    [AvaloniaFact]
+    public void Замена_запускается_отдельным_нажатием_и_просит_панель_закрыться()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var install = new FakeInstall(answer: Prepared());
+            var exits = 0;
+            var window = Stand(dir, new FakeUpdate(), install, exitForUpdate: () => exits++);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.PrepareNow();
+
+            Assert.Equal(1, install.Prepared);
+            Assert.Equal(0, install.Launched);
+            Assert.Equal(0, exits);
+
+            window.FindControl<Button>("UpdateReplaceButton")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            Assert.Equal(1, install.Launched);
+            Assert.Equal(1, exits);
+            Assert.Equal(string.Empty, window.UpdateStatusLine);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// НЕУДАЧНЫЙ ЗАПУСК ЗАМЕНЫ ВИДЕН СЛОВАМИ, и панель при этом НЕ закрывается: человек обязан
+    /// узнать, что обновление не началось, а не остаться без панели и без объяснения.
+    /// </summary>
+    [AvaloniaFact]
+    public void Неудачный_запуск_замены_виден_словами_и_панель_не_закрывается()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var install = new FakeInstall(answer: Prepared(), launch: "система не создала процесс");
+            var exits = 0;
+            var window = Stand(dir, new FakeUpdate(), install, exitForUpdate: () => exits++);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.PrepareNow();
+
+            window.FindControl<Button>("UpdateReplaceButton")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            Assert.Equal(1, install.Launched);
+            Assert.Equal(0, exits);
+
+            Assert.Contains("система не создала процесс", window.UpdateStatusLine, StringComparison.Ordinal);
+            Assert.Contains(
+                "система не создала процесс",
+                window.FindControl<TextBlock>("UpdateStatusText")!.Text ?? string.Empty,
+                StringComparison.Ordinal);
+
+            // Панель не закрыта, и путь назад остался на месте: вторая попытка возможна.
+            Assert.True(window.FindControl<Button>("UpdateReplaceButton")!.IsVisible);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ЗАМЕНУ НЕЛЬЗЯ ЗАПУСТИТЬ БЕЗ ПОДГОТОВКИ: сценария ещё нет, и нажимать нечего. Это не
+    /// формальность — «обновить» без подготовленной сборки значило бы заменить папку неизвестно чем.
+    /// Проверяется ДВУМЯ дверями: кнопки в этом состоянии не существует для человека (не видна
+    /// и недоступна), а щелчок по ней, если бы он как-то случился, ничего не запускает.
+    /// </summary>
+    [AvaloniaFact]
+    public void Без_подготовки_замена_не_запускается()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var install = new FakeInstall();
+            var exits = 0;
+            var window = Stand(dir, new FakeUpdate(), install, exitForUpdate: () => exits++);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            var replace = window.FindControl<Button>("UpdateReplaceButton")!;
+
+            Assert.False(replace.IsVisible, "кнопка замены показана до подготовки");
+            Assert.False(replace.IsEnabled, "кнопка замены доступна до подготовки");
+
+            replace.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            Assert.Equal(0, install.Launched);
+            Assert.Equal(0, exits);
+
+            // И тем же ответом отвечает шов: до подготовки запускать нечего.
+            Assert.False(window.ReplaceNow());
+            Assert.Equal(0, install.Launched);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ПОДГОТОВКА БЕЗ ПРАВА ОТКАЗЫВАЕТ — и отказывает не только серая кнопка: прогон проверки
+    /// права готовить замену не имеет, и движок обязан ответить ОТКАЗОМ, а не сделать работу.
+    /// Проверяется через тот же шов, каким идёт нажатие: кнопка недоступна, а позванная работа
+    /// называет причину словами словаря и ничего не готовит.
+    ///
+    /// ⚠️ Мутация «право спрашивать перестали» (движок готовит, когда права нет) падает здесь.
+    /// </summary>
+    [AvaloniaFact]
+    public void Подготовка_без_права_отказывает_словами()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var install = new FakeInstall(allowed: false, answer: Prepared());
+            var window = Stand(dir, new FakeUpdate(), install);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            Assert.False(window.FindControl<Button>("UpdatePrepareButton")!.IsEnabled, "кнопка подготовки доступна без права");
+            Assert.Equal(
+                PanelStrings.UpdateRefusedLocked,
+                window.FindControl<TextBlock>("UpdateHintText")!.Text);
+
+            window.PrepareNow();
+
+            Assert.Null(window.UpdatePrepared);
+            Assert.Equal(PanelStrings.UpdateRefusedLocked, window.UpdateStatusLine);
+            Assert.Equal(1, install.Prepared);
+            Assert.Equal(0, install.Launched);
+
+            // Отказ подготовки не открывает карточку замены: заменять нечего.
+            Assert.False(window.FindControl<Button>("UpdateReplaceButton")!.IsVisible);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// «ПРОПУСТИТЬ ЭТУ ВЕРСИЮ» ПО НАЖАТИЮ КНОПКИ ЗАПОМИНАЕТСЯ И ГОВОРИТ ОБ ЭТОМ. Записать
+    /// настройку — единственный способ пообещать молчание о выпуске; не записалось — раздел
+    /// говорит словами, а не делает вид.
+    /// </summary>
+    [AvaloniaFact]
+    public void Кнопка_пропустить_запоминает_версию_и_говорит_об_этом()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var asked = new List<string>();
+            var window = Stand(dir, new FakeUpdate(), skipUpdate: version => { asked.Add(version); return true; });
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            var skip = window.FindControl<Button>("UpdateSkipButton")!;
+
+            Assert.True(skip.IsEnabled, "выпуск новее, а пропустить нельзя");
+
+            skip.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            Assert.Equal(new[] { "v2.1.0" }, asked);
+            Assert.Equal(
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.UpdateSkipDoneFormat,
+                    "v2.1.0"),
+                window.UpdateStatusLine);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ПРОПУСК НЕ ЗАПИСАЛСЯ (прогон без права) — РАЗДЕЛ ГОВОРИТ ОБ ЭТОМ: сделать вид, что пропуск
+    /// запомнен, значило бы обещать молчание, которого не будет.
+    /// </summary>
+    [AvaloniaFact]
+    public void Пропуск_который_не_записался_сказан_словами()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = Stand(dir, new FakeUpdate(), skipUpdate: _ => false);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.FindControl<Button>("UpdateSkipButton")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            Assert.Equal(PanelStrings.UpdateSkipFailed, window.UpdateStatusLine);
 
             window.CloseQuietly();
         }

@@ -47,7 +47,7 @@ namespace DshPanel.Views;
 /// Поле, которое ничего не меняет, вреднее пустого места: человек ставит галочку, ничего
 /// не происходит, и он перестаёт верить остальным.
 /// </summary>
-public partial class SettingsWindow : Window, IQuietClose
+public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
 {
     private ISettingsControl? _settings;
     private IAutostartControl? _autostart;
@@ -55,17 +55,17 @@ public partial class SettingsWindow : Window, IQuietClose
     private IPricingControl? _pricing;
     private AutostartPanelModel _autostartModel = new();
 
-    /// <summary>Проверка выпусков для РАЗДЕЛА «Обновление» — тот же контроллер, что у окна обновления.</summary>
+    /// <summary>Проверка выпусков для РАЗДЕЛА «Обновление» — единственное место, где он показан.</summary>
     private IUpdateControl? _update;
 
     /// <summary>Движок установки для того же раздела: готовит замену файлов и запускает сценарий.</summary>
     private IUpdateInstall? _install;
 
-    /// <summary>«Запомнить пропущенную версию» — владелец настроек, как у окна обновления.</summary>
+    /// <summary>«Запомнить пропущенную версию» — владелец настроек, как и у прочих одиночных решений.</summary>
     private Func<string, bool>? _skipUpdate;
 
     /// <summary>
-    /// Закрыть панель ПОСЛЕ запуска сценария замены — та же дверь, что у окна обновления
+    /// Закрыть панель ПОСЛЕ запуска сценария замены — общая дверь панели
     /// (<c>PanelShell.Exit</c>). Единственный случай, когда панель просят завершиться, и зовётся
     /// он ровно по щелчку человека.
     /// </summary>
@@ -95,6 +95,11 @@ public partial class SettingsWindow : Window, IQuietClose
     public SettingsWindow()
     {
         InitializeComponent();
+
+        // Окно живёт на нитке интерфейса — она и есть нитка панели для общей двери
+        // (`Shell\UiThread`): подготовка обновления в разделе «Обновление» возвращается сюда
+        // из фона, и дверь обязана знать, куда.
+        UiThread.Remember();
 
         Icon = PanelIcon.Window;
 
@@ -132,9 +137,9 @@ public partial class SettingsWindow : Window, IQuietClose
         CheckEnvironmentButton.Content = PanelStrings.SettingsCheckEnvironment;
         SaveButton.Content = PanelStrings.SettingsSave;
 
-        // РАЗДЕЛ «ОБНОВЛЕНИЕ»: подписи ставятся здесь, подписи и подсказки — из словаря. Тексты
-        // те же, что у окна обновления, где они означают то же самое: два набора слов для одного
-        // действия однажды разошлись бы.
+        // РАЗДЕЛ «ОБНОВЛЕНИЕ»: подписи ставятся здесь, подписи и подсказки — из словаря. Один
+        // набор слов на одно действие — второго места с тем же ответом в панели нет
+        // (отдельного окна обновления не стало 09.10.2026), и разойтись этим словам не с чем.
         UpdateSectionTitle.Text = PanelStrings.UpdateSectionTitle;
         UpdateSectionSubtitleText.Text = PanelStrings.UpdateSectionSubtitle;
         UpdateCheckButton.Content = PanelStrings.UpdateCheckNowButton;
@@ -430,6 +435,16 @@ public partial class SettingsWindow : Window, IQuietClose
         return chosen;
     }
 
+    /// <summary>
+    /// ПОКАЗАТЬ РАЗДЕЛ «ОБНОВЛЕНИЕ» — уговор <see cref="IUpdateSectionWindow"/>, которым
+    /// пользуется дверь связки `PanelShell.OpenUpdateSection` (пункт меню значка «Обновление панели…»).
+    ///
+    /// ⚠️ Номер раздела живёт ЗДЕСЬ и только здесь (<see cref="UpdateSection"/>): связка не знает,
+    /// какое окно ей вернут, и второй копии этого числа в панели быть не должно — разойдясь, дверь
+    /// открывала бы соседний раздел.
+    /// </summary>
+    public int ShowUpdateSection() => ShowSection(UpdateSection);
+
     /// <summary>Что сейчас показывает окно — для проверок без экрана: номер видимого раздела.</summary>
     public int VisibleSection
     {
@@ -666,8 +681,9 @@ public partial class SettingsWindow : Window, IQuietClose
         _balance = balance;
         _pricing = pricing;
 
-        // РАЗДЕЛ «ОБНОВЛЕНИЕ» — решение владельца 28.09.2026. Ему нужны ТЕ ЖЕ два домена, что окну
-        // обновления: состояние выпусков и движок установки. Ни сервера, ни копий ему не нужно.
+        // РАЗДЕЛ «ОБНОВЛЕНИЕ» — решение владельца 28.09.2026. Ему нужны ДВА домена: состояние
+        // выпусков и движок установки. Ни сервера, ни копий ему не нужно, и второго места с этим
+        // ответом в панели нет вовсе: отдельное окно обновления убрано 09.10.2026.
         if (_update is not null) _update.Changed -= RenderUpdateSection;
 
         _update = update;
@@ -899,10 +915,9 @@ public partial class SettingsWindow : Window, IQuietClose
     ///
     /// **Ни одного своего решения здесь нет.** Сравнение версий, выбор заметок по языку, «пропущена
     /// ли эта версия», «можно ли готовить замену» — всё это живёт в ядре обновления, и раздел
-    /// показывает ГОТОВЫЕ ответы теми же чистыми функциями, что окно обновления
-    /// (<see cref="UpdateWindow.VerdictLine"/> и соседи). Второго сравнения версий в панели быть
-    /// не должно: оно однажды разошлось бы с первым, и человек увидел бы два разных ответа
-    /// об одном выпуске в двух местах.
+    /// показывает ГОТОВЫЕ ответы чистыми функциями <see cref="UpdateLines"/> (`VerdictLine` и соседи).
+    /// Второго сравнения версий в панели быть не должно: оно однажды разошлось бы с первым,
+    /// и человек увидел бы два разных ответа об одном выпуске в двух местах.
     ///
     /// ⚠️ **Связки может не быть вовсе** (окно строят проверки вида, съёмка кадра): тогда раздел
     /// честно говорит «в этом прогоне панель замену файлов не готовит», а не молчит и не обещает.
@@ -919,26 +934,29 @@ public partial class SettingsWindow : Window, IQuietClose
         var latest = result?.Latest ?? string.Empty;
         var skipped = update?.Skipped == true;
 
-        UpdateCurrentText.Text = UpdateWindow.CurrentLine(current);
-        UpdateGithubText.Text = UpdateWindow.GithubLine(ok, latest);
+        UpdateCurrentText.Text = UpdateLines.CurrentLine(current);
+        UpdateGithubText.Text = UpdateLines.GithubLine(ok, latest);
 
-        UpdatePublishedText.Text = UpdateWindow.PublishedLine(ok, result?.Published);
+        UpdatePublishedText.Text = UpdateLines.PublishedLine(ok, result?.Published);
         UpdatePublishedText.IsVisible = UpdatePublishedText.Text?.Length > 0;
 
-        UpdateVerdictText.Text = UpdateWindow.VerdictLine(ok, latest, current, skipped);
-        PanelLook.Tone(UpdateVerdictText, UpdateWindow.VerdictTone(ok, latest, current, skipped));
+        UpdateVerdictText.Text = UpdateLines.VerdictLine(ok, latest, current, skipped);
+        PanelLook.Tone(UpdateVerdictText, UpdateLines.VerdictTone(ok, latest, current, skipped));
 
-        UpdateSourceText.Text = update?.SourceText ?? PanelStrings.UpdateNeverChecked;
+        // Строка «когда проверяли» молчит, когда повторяет решение: в непроверенном состоянии
+        // они говорили одно и то же ДВАЖДЫ подряд — владелец увидел это на кадре раздела.
+        UpdateSourceText.Text = UpdateLines.SourceLine(update?.SourceText, UpdateVerdictText.Text);
+        UpdateSourceText.IsVisible = UpdateSourceText.Text.Length > 0;
 
-        // ЗАМЕТКИ: своё поле с прокруткой и постоянной высотой — как в окне обновления. Пустые
-        // заметки говорят о себе словами: пустое место читалось бы как «не догрузилось».
+        // ЗАМЕТКИ: своё поле с прокруткой и постоянной высотой. Пустые заметки говорят о себе
+        // словами: пустое место читалось бы как «не догрузилось».
         var notes = UpdateNotes.Parse(result?.Notes);
         UpdateNotesView.Fill(UpdateNotesPanel, notes);
         UpdateNotesEmptyText.IsVisible = notes.Count == 0;
         UpdateNotesScroll.IsVisible = notes.Count > 0;
 
         var assets = result?.Assets ?? ReleaseAssets.None;
-        var (ready, hint) = UpdateWindow.PrepareState(_install, ok, assets);
+        var (ready, hint) = UpdateLines.PrepareState(_install, ok, update?.Newer == true, assets);
 
         UpdateHintText.Text = hint;
         UpdatePrepareButton.Content = _updateBusy
@@ -953,13 +971,23 @@ public partial class SettingsWindow : Window, IQuietClose
             UpdateCheckButton,
             update?.Allowed == true ? PanelStrings.TipUpdateCheckNowButton : PanelStrings.UpdateRefusedLocked);
 
-        UpdateSkipButton.IsEnabled = ok && latest.Trim().Length > 0 && !_updateBusy;
-        UpdateGithubButton.IsEnabled = UpdateWindow.GithubAddress(result?.PageUrl).Length > 0;
+        // Пропускать нечего, когда обновляться некуда — то же правило и та же причина, что были
+        // у прежнего окна обновления (замечание владельца 09.10.2026): кнопка на своём же выпуске
+        // обещала бы молчание о версии, которая уже стоит.
+        var newer = update?.Newer == true;
+
+        UpdateSkipButton.IsEnabled = newer && !_updateBusy;
+        PanelToolTip.Set(UpdateSkipButton, UpdateLines.SkipTip(ok, latest, newer));
+
+        UpdateGithubButton.IsEnabled = UpdateLines.GithubAddress(result?.PageUrl).Length > 0;
 
         UpdateStatusText.Text = _updateStatus;
 
         var prepared = _updatePrepared is { Ok: true };
 
+        // Карточка замены — вокруг «последнего нажатия»: появляется ТОЛЬКО после подготовки
+        // (до неё показывать нечего), и панель заменяет файлы ровно по этой кнопке.
+        UpdateReplaceCard.IsVisible = prepared;
         UpdatePreparedText.IsVisible = prepared;
         UpdateReplaceButton.IsVisible = prepared;
 
@@ -980,7 +1008,7 @@ public partial class SettingsWindow : Window, IQuietClose
     /// <summary>Открыть страницу выпуска в браузере — ТОЛЬКО по щелчку человека.</summary>
     public void OpenUpdateOnGithub()
     {
-        var address = UpdateWindow.GithubAddress(_update?.Result.PageUrl);
+        var address = UpdateLines.GithubAddress(_update?.Result.PageUrl);
         var error = ProductLinks.Open(address);
 
         if (error.Length > 0) _updateStatus = error;
@@ -1013,6 +1041,12 @@ public partial class SettingsWindow : Window, IQuietClose
     /// <summary>
     /// «Скачать и подготовить» — в фоне: скачивание в сотни мегабайт на нитке интерфейса заморозило
     /// бы окно. Файлы панели при этом НЕ заменяются: замену запускает отдельная кнопка.
+    ///
+    /// ⚠️ **Работа вынесена в СИНХРОННЫЙ шов <see cref="PrepareNow"/>** — тем же приёмом, каким
+    /// это было у прежнего окна обновления (`UpdateWindow.PrepareNow`, убрано 09.10.2026). Шов
+    /// заведён потому, что нажатие уходило в фоновую задачу, а дождаться её проверке нечем:
+    /// три кнопки раздела остались без прямых проверок. Нажатие и проверка идут ОДНИМ путём —
+    /// нажатие дожидается того же шва, а не ходит мимо него.
     /// </summary>
     public void PrepareUpdate()
     {
@@ -1027,36 +1061,11 @@ public partial class SettingsWindow : Window, IQuietClose
         {
             try
             {
-                var result = _update.Result;
-                var preparation = _install.Prepare(
-                    result.Latest,
-                    result.Assets,
-                    progress => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                    {
-                        UpdateProgressBar.IsVisible = true;
-                        UpdateProgressText.Text = UpdateWindow.ProgressLine(progress);
-                        UpdateProgressBar.IsIndeterminate = progress.Percent < 0;
-
-                        if (progress.Percent >= 0) UpdateProgressBar.Value = progress.Percent;
-                    }));
-
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                {
-                    _updatePrepared = preparation;
-
-                    if (!preparation.Ok)
-                    {
-                        _updateStatus = UpdateRefusalLines.Line(preparation);
-                    }
-
-                    _updateBusy = false;
-                    UpdateProgressBar.IsVisible = false;
-                    RenderUpdateSection();
-                });
+                PrepareNow();
             }
             catch (Exception error)
             {
-                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                OnUi(() =>
                 {
                     _updateStatus = $"{error.GetType().Name}: {error.Message}";
                     _updateBusy = false;
@@ -1068,15 +1077,76 @@ public partial class SettingsWindow : Window, IQuietClose
     }
 
     /// <summary>
+    /// САМА подготовка — без фона: скачать, сверить, распаковать, снять страховочную копию
+    /// и написать сценарий замены. Файлы панели не заменяются и здесь: замену запускает человек
+    /// отдельной кнопкой.
+    ///
+    /// Ход подготовки приходит от движка ЗВОНКАМИ, и каждый возвращается на нитку интерфейса
+    /// (<see cref="OnUi"/>): рисовать из фоновой нитки нельзя. Готовый ответ применяется той же
+    /// дверью — поэтому шов, позванный С нитки интерфейса, отвечает сразу, а не «когда-нибудь».
+    /// </summary>
+    internal void PrepareNow()
+    {
+        var update = _update;
+        var install = _install;
+
+        if (update is null || install is null) return;
+
+        var result = update.Result;
+        var preparation = install.Prepare(
+            result.Latest,
+            result.Assets,
+            progress => OnUi(() => ReportProgress(progress)));
+
+        OnUi(() =>
+        {
+            // ⚠️ Отказ НЕ становится «тем, что подготовлено»: держать в этом поле неготовую сборку
+            // значило бы оставить открытой дверь замены — она спрашивает готовый ответ, а не «то,
+            // что вернул движок». Отказ человек читает словами (<see cref="UpdateRefusalLines"/>),
+            // а подготовленным считается только успех.
+            _updatePrepared = preparation.Ok ? preparation : null;
+
+            if (!preparation.Ok)
+            {
+                _updateStatus = UpdateRefusalLines.Line(preparation);
+            }
+
+            _updateBusy = false;
+            UpdateProgressBar.IsVisible = false;
+            RenderUpdateSection();
+        });
+    }
+
+    /// <summary>Ход подготовки на экране: этап, имя файла и проценты (минус — «сколько, неизвестно»).</summary>
+    private void ReportProgress(UpdateProgress progress)
+    {
+        UpdateProgressBar.IsVisible = true;
+        UpdateProgressText.Text = UpdateLines.ProgressLine(progress);
+        UpdateProgressBar.IsIndeterminate = progress.Percent < 0;
+
+        if (progress.Percent >= 0) UpdateProgressBar.Value = progress.Percent;
+    }
+
+    /// <summary>
     /// «Обновить и перезапустить панель» — отдельным нажатием и только после подготовки. При
     /// неудаче раздел говорит причину словами и панель НЕ закрывается.
     /// </summary>
-    public void ReplaceUpdate()
+    public void ReplaceUpdate() => ReplaceNow();
+
+    /// <summary>
+    /// САМА замена — синхронный шов нажатия; ответ: запущен ли сценарий. Отдельной дверью, а не
+    /// прямо в обработчике кнопки, по той же причине, что и у подготовки: проверка проходит ровно
+    /// тот же путь и видит и запуск, и просьбу панели закрыться, и слова отказа.
+    ///
+    /// Ничего не готовили — запускать нечего: «обновить» без подготовленной сборки значило бы
+    /// заменить папку неизвестно чем.
+    /// </summary>
+    internal bool ReplaceNow()
     {
         var install = _install;
         var preparation = _updatePrepared;
 
-        if (install is null || preparation is null) return;
+        if (install is null || preparation is null) return false;
 
         var error = install.Launch(preparation);
 
@@ -1088,11 +1158,24 @@ public partial class SettingsWindow : Window, IQuietClose
                 error);
 
             RenderUpdateSection();
-            return;
+            return false;
         }
 
         _updateStatus = string.Empty;
         _exitForUpdate?.Invoke();
+
+        return true;
+    }
+
+    /// <summary>
+    /// Работа на нитке интерфейса: мы на ней — делаем сразу, нет — отправляем дверью
+    /// (<see cref="UiThread"/>). Второго обращения к диспетчеру в панели быть не должно, а
+    /// «отправить и не знать, приняли ли» здесь не годится: ответ о подготовке — не мелочь.
+    /// </summary>
+    private static void OnUi(Action action)
+    {
+        if (UiThread.CheckAccess()) action();
+        else UiThread.Post(action);
     }
 
     /// <summary>Строка состояния раздела — для проверок без экрана.</summary>

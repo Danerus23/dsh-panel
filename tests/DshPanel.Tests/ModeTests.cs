@@ -160,4 +160,50 @@ public class ModeTests
             "в разборе съёмки снова завелись свои имена окон (должны браться из StartModes.ShotWindows): " +
             string.Join(", ", literals));
     }
+
+    /// <summary>
+    /// В ДЕРЕВЕ НЕТ ОКНА ОБНОВЛЕНИЯ, И ИМЕНИ <c>update</c> В СПИСКЕ СЪЁМКИ ТОЖЕ НЕТ.
+    ///
+    /// Решение владельца 09.10.2026, дословно: *«Это не отдельное окно должно быть… Я не хочу
+    /// отдельно вызываемое окно»*. Обе половины этого решения сторожатся ЗДЕСЬ, и обе — про
+    /// ОТСУТСТВИЕ, которое ничем другим не поймать:
+    ///
+    /// * файлов окна в дереве быть не должно вовсе: окно, оставленное «на всякий случай», снова
+    ///   завело бы второе место с тем же ответом;
+    /// * имени <c>update</c> не должно быть в списке съёмки: имя, оставшееся от удалённого окна,
+    ///   обещало бы кадр, которого не существует, и человек получил бы отказ уже на съёмке
+    ///   (отказ «незнакомое имя окна» при этом остаётся честным — см. проверку выше).
+    ///
+    /// ⚠️ Проверяется КОДОМ, а не взглядом: список съёмки читается у <see cref="StartModes"/>,
+    /// а файлы — на диске. Кадр раздела обновления у съёмки остался и называется
+    /// <c>settings-update</c> — он и есть замена удалённому имени.
+    /// </summary>
+    [Fact]
+    public void Окна_обновления_в_дереве_нет_и_имени_update_в_съёмке_тоже()
+    {
+        Assert.DoesNotContain("update", StartModes.ShotWindows);
+        Assert.False(StartModes.KnowsShotWindow("update"), "имя «update» снова стало знакомым разбору съёмки");
+
+        // Замена на месте: кадр раздела «Обновление» настроек — в списке, и он знаком разбору.
+        Assert.Contains(StartModes.ShotSettingsUpdate, StartModes.ShotWindows);
+        Assert.True(StartModes.KnowsShotWindow(StartModes.ShotSettingsUpdate));
+
+        var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
+        Assert.False(string.IsNullOrEmpty(root), "не нашёл корень репозитория");
+
+        var views = Path.Combine(root, "src", "DshPanel", "Views");
+
+        foreach (var name in new[] { "UpdateWindow.axaml", "UpdateWindow.axaml.cs" })
+        {
+            var path = Path.Combine(views, name);
+            Assert.False(File.Exists(path), $"окно обновления вернулось в дерево: {path}");
+        }
+
+        // И пункт меню значка больше НЕ про окно: имя строки, оставшееся «про окно», врало бы
+        // о том, куда ведёт пункт (сам переход в раздел сторожит `ShellPeaksDoorTests`).
+        var shell = File.ReadAllText(Path.Combine(root, "src", "DshPanel", "Shell", "PanelMenu.cs"));
+
+        Assert.Contains("PanelStrings.UpdateSectionMenuText", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("UpdateWindowMenuText", shell, StringComparison.Ordinal);
+    }
 }

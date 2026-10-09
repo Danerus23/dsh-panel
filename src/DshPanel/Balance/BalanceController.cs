@@ -302,7 +302,16 @@ public sealed class BalanceController : IBalanceControl, IDisposable
             return;
         }
 
-        _timer ??= new DispatcherTimer { Interval = TickInterval };
+        _timer ??= UiThread.NewTimer(TickInterval);
+
+        // Нитки интерфейса нет — часов нет: `new DispatcherTimer` на чужой нитке СОЗДАЛ бы
+        // диспетчер и забрал нитку интерфейса у прогона проверок (см. `Shell\UiThread`).
+        if (_timer is null)
+        {
+            _log(PanelStrings.PanelLogClockNoUiThread);
+            return;
+        }
+
         if (_timer.IsEnabled) return;
 
         _timer.Tick += (_, _) => Tick(_clock());

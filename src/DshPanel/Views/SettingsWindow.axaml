@@ -268,9 +268,11 @@
               „обновления“»*. Прежде обновление было кнопкой-дверью внизу окна, и это читалось как
               чужой элемент среди разделов.
 
-              ⚠️ **ОКНО «ОБНОВЛЕНИЕ ПАНЕЛИ» ОСТАЛОСЬ** — в него ведёт пункт меню значка. Здесь тот же
-              ответ, но СВОИМИ словами о том же состоянии: второй реализации решений нет, строки
-              собираются теми же чистыми функциями (`Views\UpdateWindow.VerdictLine` и соседи).
+              ⚠️ **ОТДЕЛЬНОГО ОКНА ОБНОВЛЕНИЯ БОЛЬШЕ НЕТ** (решение владельца 09.10.2026: *«Я не хочу
+              отдельно вызываемое окно»*): весь ответ об обновлении живёт ЗДЕСЬ, а пункт меню значка
+              «Обновление панели…» открывает настройки РОВНО на этом разделе (`PanelShell.OpenUpdateSection`).
+              Второй реализации решений нет, строки собираются теми же чистыми функциями
+              (`Update\UpdateLines.VerdictLine` и соседи).
 
               ⚠️ **КНОПКИ ДЕЙСТВИЙ — В ОДИН РЯД** (там же, слова владельца: «Кнопки пропустить,
               проверить и т.д. можно было в 1 ряд поместить»). Поэтому это `StackPanel` по
@@ -282,46 +284,72 @@
               <TextBlock x:Name="UpdateSectionTitle" Classes="sectionTitle" />
               <TextBlock x:Name="UpdateSectionSubtitleText" Classes="hint" />
 
-              <!-- Что стоит, что на GitHub, когда выпущен и чем это кончилось. Тон строки решения —
-               тот же язык, что у строк состояния в меню значка. -->
-              <TextBlock x:Name="UpdateCurrentText" FontSize="16" FontWeight="SemiBold" />
-              <TextBlock x:Name="UpdateGithubText" />
-              <TextBlock x:Name="UpdatePublishedText" Classes="hint" TextWrapping="Wrap" />
-              <TextBlock x:Name="UpdateVerdictText" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
-              <TextBlock x:Name="UpdateSourceText" Classes="hint" TextWrapping="Wrap" />
+              <!--
+                ⚠️ **ТРИ КАРТОЧКИ, КАК В КАДРЕ ОКНА** — выбор ВЛАДЕЛЬЦА 09.10.2026. Он показал кадр
+                окна обновления («вот как быть должно») и свой раздел настроек («вот что я вижу»):
+                содержание совпало, а вид — нет, потому что в окне три блока лежали ТРЕМЯ карточками,
+                а раздел был плоским. Он выбрал этот вариант из трёх отрисованных.
 
-              <!-- Ряд действий: проверить, открыть страницу выпуска, пропустить версию, скачать
-                   и подготовить. Все четыре — в ОДНОМ ряду, как и просил владелец. -->
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button x:Name="UpdateCheckButton" />
-                <Button x:Name="UpdateGithubButton" />
-                <Button x:Name="UpdateSkipButton" />
-                <Button x:Name="UpdatePrepareButton" />
-              </StackPanel>
+                Остальные разделы настроек остаются плоскими (`Баланс и тариф`, `Сервер`) — это их
+                стиль, и он не трогается. Здесь карточки нужны по существу: у раздела ТРИ разных
+                ответа (что стоит и что на GitHub · что можно сделать · что нового).
+              -->
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <!-- РЕШЕНИЕ — ПЕРВОЙ СТРОКОЙ, версии и дата — под ним. Тон строки решения — тот же
+                       язык, что у строк состояния в меню значка. -->
+                  <TextBlock x:Name="UpdateVerdictText" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBlock x:Name="UpdateCurrentText" />
+                  <TextBlock x:Name="UpdateGithubText" />
+                  <TextBlock x:Name="UpdatePublishedText" Classes="hint" TextWrapping="Wrap" />
+                  <TextBlock x:Name="UpdateSourceText" Classes="hint" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
 
-              <TextBlock x:Name="UpdateHintText" Classes="hint" TextWrapping="Wrap" />
-              <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap" />
-              <ProgressBar x:Name="UpdateProgressBar" Minimum="0" Maximum="100" IsVisible="False" />
-              <TextBlock x:Name="UpdateProgressText" Classes="hint" TextWrapping="Wrap" />
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <!-- Ряд действий: проверить, открыть страницу выпуска, пропустить версию, скачать
+                       и подготовить. Все четыре — в ОДНОМ ряду, как и просил владелец. -->
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="UpdateCheckButton" />
+                    <Button x:Name="UpdateGithubButton" />
+                    <Button x:Name="UpdateSkipButton" />
+                    <Button x:Name="UpdatePrepareButton" />
+                  </StackPanel>
 
-              <!-- Заметки к выпуску: своё поле с прокруткой и ПОСТОЯННОЙ высотой — то же решение,
-                   что в окне обновления и по той же причине (замечание владельца: кнопки не должны
-                   уезжать за край из-за длинного текста). -->
-              <TextBlock x:Name="UpdateNotesTitleText" FontWeight="SemiBold" Margin="0,4,0,0" />
-              <TextBlock x:Name="UpdateNotesEmptyText" Classes="hint" TextWrapping="Wrap" />
-              <ScrollViewer x:Name="UpdateNotesScroll"
-                            Height="180"
-                            VerticalScrollBarVisibility="Visible"
-                            HorizontalScrollBarVisibility="Disabled">
-                <StackPanel x:Name="UpdateNotesPanel" Spacing="4" />
-              </ScrollViewer>
+                  <TextBlock x:Name="UpdateHintText" Classes="hint" TextWrapping="Wrap" />
+                  <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap" />
+                  <ProgressBar x:Name="UpdateProgressBar" Minimum="0" Maximum="100" IsVisible="False" />
+                  <TextBlock x:Name="UpdateProgressText" Classes="hint" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <!-- Заметки к выпуску: своё поле с прокруткой и ПОСТОЯННОЙ высотой — то же решение,
+                       что было в окне, и по той же причине (замечание владельца: кнопки не должны
+                       уезжать за край из-за длинного текста). -->
+                  <TextBlock x:Name="UpdateNotesTitleText" FontWeight="SemiBold" />
+                  <TextBlock x:Name="UpdateNotesEmptyText" Classes="hint" TextWrapping="Wrap" />
+                  <ScrollViewer x:Name="UpdateNotesScroll"
+                                Height="180"
+                                VerticalScrollBarVisibility="Visible"
+                                HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="UpdateNotesPanel" Spacing="4" />
+                  </ScrollViewer>
+                </StackPanel>
+              </Border>
 
               <!-- Замена файлов — ОТДЕЛЬНЫМ нажатием и только после подготовки: это единственная
                    дверь продукта, которая подменяет саму панель. До подготовки здесь нечего
-                   показывать, поэтому весь блок скрыт. -->
-              <TextBlock x:Name="UpdatePreparedText" TextWrapping="Wrap" IsVisible="False" />
-              <Button x:Name="UpdateReplaceButton" Classes="accent" HorizontalAlignment="Left"
-                      IsVisible="False" />
+                   показывать, поэтому весь блок скрыт. Карточкой — как в окне обновления: это
+                   «последнее нажатие», и оно обязано быть видно отдельно от прочего. -->
+              <Border Classes="card" IsVisible="False" x:Name="UpdateReplaceCard">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="UpdatePreparedText" TextWrapping="Wrap" />
+                  <Button x:Name="UpdateReplaceButton" Classes="accent" HorizontalAlignment="Left" />
+                </StackPanel>
+              </Border>
             </StackPanel>
           </Grid>
         </ScrollViewer>

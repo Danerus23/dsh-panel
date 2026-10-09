@@ -2,6 +2,33 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.0.3 - 2026-10-10
+
+**The window no longer opens full-screen, and the update answer moved into Settings.**
+
+* **A very wide window after a full restart - fixed.** The panel no longer remembers the placement of
+  an INVISIBLE window: a window hidden in the tray reported someone else's geometry, and after a
+  restart the panel opened full-screen. A hidden window is not asked for its placement at all now.
+* **The update has no separate window any more.** The answer to "what do I have and what is out"
+  lives in Settings, in the "Update" section, and the tray menu item opens Settings on that section.
+  The section is built as **three cards** (state · actions · "What's new in this version"), and
+  **the verdict comes first**: "You have the latest version 2.0.3 - no need to update".
+* **"Skip this version" is available only when the release REALLY is newer**; when it is not, the
+  button names the reason in its tooltip. "Download and prepare" on your own release says
+  "nothing to update to" - it used to be available and did nothing.
+* **The "last checked" line no longer repeats the verdict:** in the unchecked state the same sentence
+  stood twice in a row and read like a failure.
+* **Backups: the words about keys stopped scaring people.** The journal now says "layout `keys/…`:
+  the panel writes the archive itself" instead of "group name `keys/1-ssh` is nested - 7-Zip cannot
+  do that". The behaviour did not change; the words did, and the old line read like a broken backup.
+
+**Under the hood (no visible change):** the test run no longer fails "every other time" - the panel
+reaches the UI thread only through its own door, and source-level gates guard that; console output is
+decoded with the SYSTEM code page rather than the culture one (on English Windows with a Russian
+culture a failure reason arrived as mojibake); self-update has been verified on a live installation
+in a virtual machine - file replacement, reading the outcome and the rollback branch. The test count
+is **1271**.
+
 ## 2.0.2 - 2026-10-09
 
 **The panel no longer confuses "the money ran out" with "the key was rejected".**
