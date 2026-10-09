@@ -60,6 +60,13 @@ jobs:
         shell: pwsh
         run: ./tools/check-dictionaries.ps1
 
+      # Паритет истории версий: раздел новой версии есть ВО ВСЕХ ТРЁХ CHANGELOG, непустой и стоит
+      # первым. 30.09.2026 выпускная часть конвейера упала ровно на этом (искался раздел `## main`),
+      # и узнали об этом только на теге. Теперь вопрос задаётся до тега — словами и кодом 1.
+      - name: Паритет истории версий (три CHANGELOG)
+        shell: pwsh
+        run: ./tools/check-changelogs.ps1
+
       - name: Восстановить пакеты по замкам
         shell: pwsh
         run: dotnet restore DshPanel.slnx --locked-mode
