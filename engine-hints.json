@@ -1,0 +1,37 @@
+{
+  "format": 1,
+  "versions": [
+    {
+      "version": "0.1.5-rc.2",
+      "verified": true,
+      "notes": {
+        "ru": [
+          "Панель проверена на этой версии целиком: все 8 умений подтверждены живым прогоном в изоляции, список вызовов — 84 из 84.",
+          "Умения панель проверяет сама при работе: запись здесь — подсказка, а не разрешение."
+        ],
+        "en": [
+          "The panel was verified on this version in full: all 8 skills were confirmed by a live run in isolation, the call inventory — 84 of 84.",
+          "The panel still checks its skills itself while it works: this entry is a hint, not a permission."
+        ],
+        "zh": [
+          "面板已在此版本上完整验证：8 项能力全部由隔离环境中的实际运行确认，调用清单为 84/84。",
+          "面板在工作时仍会自行检查能力：此处的记录只是提示，而不是许可。"
+        ]
+      },
+      "troubles": {
+        "ru": [
+          "«Ответ на вопрос агента» проверен только на открытие канала: настоящий вопрос и ответ пробой не проверялись.",
+          "«Постановка задачи» и «Отмена» проверены по объявлению движка: проба их не зовёт, чтобы не начать и не прервать работу агента."
+        ],
+        "en": [
+          "The agent question answer is verified only for opening the channel: a real question and answer round trip has not been checked.",
+          "Task prompt and cancel are verified by the engine's declaration: the probe does not call them, so as not to start or interrupt the agent's work."
+        ],
+        "zh": [
+          "「回答代理提问」只验证了通道能否打开：真正的一问一答尚未检查。",
+          "「下发任务」和「取消」按引擎的声明验证：检查不会调用它们，以免开始或中断代理的工作。"
+        ]
+      }
+    }
+  ]
+}
