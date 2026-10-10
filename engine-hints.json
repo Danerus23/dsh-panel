@@ -32,6 +32,38 @@
           "「下发任务」和「取消」按引擎的声明验证：检查不会调用它们，以免开始或中断代理的工作。"
         ]
       }
+    },
+    {
+      "version": "0.2.0-rc.2",
+      "verified": false,
+      "notes": {
+        "ru": [
+          "Проба панели на этой версии НЕ пройдена: список вызовов — 77 из 84, и из умений панели не подтверждается «Версия движка» (панель не читает раскладку этой версии).",
+          "Ставить её вместо проверенной нельзя, пока панель не научится её раскладке, а проба не станет зелёной."
+        ],
+        "en": [
+          "The panel's probe does NOT pass on this version: the call inventory is 77 of 84, and the panel's \"Engine version\" skill is not confirmed (the panel cannot read this version's layout).",
+          "Do not put it in place of the verified version until the panel learns that layout and the probe goes green."
+        ],
+        "zh": [
+          "面板的检查在此版本上未通过：调用清单为 77/84，面板能力中的「引擎版本」也未能确认（面板读不懂此版本的目录布局）。",
+          "在面板学会该布局、检查转为通过之前，不要用它替换已验证版本。"
+        ]
+      },
+      "troubles": {
+        "ru": [
+          "Семь вызовов движок больше не признаёт: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, workspaceFiles/readAll, workspaceFiles/readRelated, subagents/list.",
+          "Формат журнала сессий — v4: сессии, созданные этой версией, движок 0.1.5-rc.2 не открывает («log format v4, but this harness reads only v3»). Сессии, созданные раньше, эта версия открывает."
+        ],
+        "en": [
+          "Seven calls are no longer recognised: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, workspaceFiles/readAll, workspaceFiles/readRelated, subagents/list.",
+          "The session log format is v4: sessions created by this version are not opened by engine 0.1.5-rc.2 (\"log format v4, but this harness reads only v3\"). Sessions created earlier are opened by this version."
+        ],
+        "zh": [
+          "有七个调用不再被识别：agentPresets/copy、agentPresets/deletePreset、settings/canOpenAgentPresetDirectory、settings/openAgentPresetDirectory、workspaceFiles/readAll、workspaceFiles/readRelated、subagents/list。",
+          "会话日志格式为 v4：此版本创建的会话，引擎 0.1.5-rc.2 无法打开（「log format v4, but this harness reads only v3」）。此前创建的会话，此版本可以打开。"
+        ]
+      }
     }
   ]
 }
