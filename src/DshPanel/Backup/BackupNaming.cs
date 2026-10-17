@@ -79,6 +79,15 @@ public static class BackupNaming
     public const string SafetyPrefix = "dsh2-before-restore-";
 
     /// <summary>
+    /// ВТОРОЙ предохранительный префикс: копия ПЕРЕД ПОДМЕНОЙ ВЕРСИИ ДВИЖКА
+    /// (<c>dsh2-before-engine-…zip</c>, этап E3.2). Вид у неё ТОТ ЖЕ — <see cref="BackupFileKind.Safety"/>,
+    /// и это не мелочь: ротация удаляет только обычные копии, а предохранительные не трогает
+    /// (правило в <c>BackupRotation</c>: они не входят в предел `keep` и в список удаляемых).
+    /// Будь у неё свой вид, правило пришлось бы писать вторым местом.
+    /// </summary>
+    public const string EnginePrefix = "dsh2-before-engine-";
+
+    /// <summary>
     /// Префикс обычной копии ПРЕЖНЕЙ панели (1.x, <c>..\dsh-tray\BackupService.cs:204</c>).
     ///
     /// Имя выбрано по СМЫСЛУ, а не по номеру версии: «прежняя панель» — то же слово, которым накат
@@ -136,6 +145,7 @@ public static class BackupNaming
 
         if (text.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)) return BackupFileKind.Copy;
         if (text.StartsWith(SafetyPrefix, StringComparison.OrdinalIgnoreCase)) return BackupFileKind.Safety;
+    if (text.StartsWith(EnginePrefix, StringComparison.OrdinalIgnoreCase)) return BackupFileKind.Safety;
 
         // Оба имени прежней панели — один вид (см. комментарий вида): для 2.0 они значат одно и то же.
         if (text.StartsWith(LegacyPrefix, StringComparison.OrdinalIgnoreCase)

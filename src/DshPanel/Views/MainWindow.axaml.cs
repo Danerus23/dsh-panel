@@ -76,6 +76,12 @@ public partial class MainWindow : Window
     private string _busyText = string.Empty;
 
     /// <summary>
+    /// Набор портов найденных серверов, для которого уже собраны кнопки в списке. Нужен, чтобы
+    /// не пересобирать их каждую секунду: осмотр идёт раз в секунду, а пересборка съедала бы фокус.
+    /// </summary>
+    private string _renderedFoundPorts = string.Empty;
+
+    /// <summary>
     /// InitializeComponent, а не AvaloniaXamlLoader.Load(this): только первый прописывает
     /// поля, объявленные в разметке через x:Name. С Load(this) окно рисуется, а поля остаются
     /// null — и первое же обращение к кнопке падает. Поймал тест окна 24.09.2026.
@@ -158,7 +164,7 @@ public partial class MainWindow : Window
 
         // Пояснение к встраиванию берётся из строк, а не из разметки: строка про подтверждение
         // должна меняться в одном месте вместе с остальными.
-        AdoptHintText.Text = PanelStrings.AdoptHint;
+        AdoptNoteText.Text = PanelStrings.AdoptNote;
 
         // Дверь в копии осталась, а карточка копий из главного окна ушла (решение владельца
         // 26.09.2026): здесь оперативная информация, а карточка дублировала раздел настроек.
@@ -199,7 +205,7 @@ public partial class MainWindow : Window
         // и второй такой же текст разошёлся бы с первым. Ставится постоянно, потому что список
         // бывает недоступен (прогон проверки, один агент) — а у недоступного органа подсказка
         // и нужнее всего.
-        PanelToolTip.Set(AgentBox, PanelStrings.SettingsActiveAgentHint);
+        PanelToolTip.Set(AgentBox, PanelStrings.SettingsActiveAgentNote);
     }
 
     /// <summary>Человек попросил настройки. Окно панели не решает, где они, — оно только сообщает.</summary>
@@ -255,6 +261,7 @@ public partial class MainWindow : Window
             PanelStrings.ServerDetaching);
 
         AdoptServerButton.Click += (_, _) => AdoptCandidate();
+        RecoverOwnServerButton.Click += (_, _) => RequestRecoverOwnServer();
 
         Render();
         StartPolling();
@@ -390,7 +397,7 @@ public partial class MainWindow : Window
             // на «почему менять нельзя»), и только потом сказать про отказ записи. Наоборот
             // человек про отказ не узнал бы вовсе.
             RenderAgent();
-            AgentHintText.Text = PanelStrings.SettingsSaveFailed;
+            AgentNoteText.Text = PanelStrings.SettingsSaveFailed;
             return false;
         }
 
@@ -420,8 +427,8 @@ public partial class MainWindow : Window
         var writable = _agentSettings is { Writable: true };
 
         AgentBox.IsEnabled = writable && AgentCatalog.HasChoice;
-        AgentHintText.Text = writable
-            ? PanelStrings.SettingsActiveAgentHint
+        AgentNoteText.Text = writable
+            ? PanelStrings.SettingsActiveAgentNote
             : PanelStrings.SettingsReadOnlyNote;
     }
 
@@ -589,6 +596,52 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// ВЗЯТЬ ПОД УПРАВЛЕНИЕ ИМЕННО ЭТОТ СЕРВЕР — а не «первый найденный». Нужно, когда найденных
+    /// два: у каждого своя кнопка, и нажатие на неё и есть согласие человека взять **этот**.
+    /// </summary>
+    private void AdoptFound(FoundServer found)
+    {
+        if (_server is null || _busy) return;
+
+        RunInBackground(() => _server.Adopt(found), PanelStrings.ServerAdopting);
+    }
+
+    /// <summary>
+    /// КНОПКА НА КАЖДЫЙ НАЙДЕННЫЙ СЕРВЕР, когда их несколько.
+    ///
+    /// ⚠️ **Пересобирается только когда сменился НАБОР портов.** Осмотр идёт раз в секунду, и
+    /// пересборка кнопок каждую секунду съедала бы фокус и мигала бы под рукой у человека.
+    /// Подсказка у каждой кнопки та же, что у одиночной: согласие даётся нажатием на **свой**
+    /// сервер, и слова о том, что панель берёт и как это отменить, — общие.
+    /// </summary>
+    private void RenderFoundServers()
+    {
+        var candidates = _model.ManyCandidates ? _model.Candidates : Array.Empty<FoundServer>();
+        var ports = string.Join(",", candidates.Select(found => found.Port));
+
+        if (ports == _renderedFoundPorts) return;
+        _renderedFoundPorts = ports;
+
+        FoundServersList.Children.Clear();
+
+        foreach (var found in candidates)
+        {
+            var button = new Button
+            {
+                Content = _model.AdoptLabel(found),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                IsEnabled = !_busy,
+            };
+
+            var server = found;
+            button.Click += (_, _) => AdoptFound(server);
+            PanelToolTip.Set(button, PanelStrings.AdoptNote);
+
+            FoundServersList.Children.Add(button);
+        }
+    }
+
+    /// <summary>
     /// Остановка. Для СВОЕГО сервера — сразу; для встроенного — сначала подтверждение, и каждый
     /// раз заново (решение владельца 24.09.2026). Решение о том, нужно ли спрашивать, принимает
     /// предикат, а не эта строка кода.
@@ -663,6 +716,59 @@ public partial class MainWindow : Window
         // Многоточие и текст «Перезапускаю…» человек видит в строке состояния — как у соседних
         // кнопок. Ссылка входа обновляется сама: её ловит Start, своего пути для неё нет.
         RunInBackground(() => _server.Restart(StartTimeout, confirmed), PanelStrings.ServerRestarting);
+    }
+
+    /// <summary>
+    /// Шов ТОЛЬКО для проверок без экрана: чем ответить на вопрос «поднять свой сервер заново?».
+    /// У обычного запуска это свойство <c>null</c>, и ответ даёт человек в
+    /// <see cref="ConfirmStopWindow"/> — том же окне, что у «Остановить» и «Перезапустить».
+    /// </summary>
+    internal Func<bool>? RecoverConfirmedForTests { get; set; }
+
+    /// <summary>
+    /// ПОДНЯТЬ СВОЙ СЕРВЕР ЗАНОВО — единственный путь из состояния «сервер поднят не панелью»
+    /// (решение владельца 13.10.2026, ответы 1 и 2).
+    ///
+    /// ⚠️ **СПРАШИВАЕТ ВСЕГДА, и это не тот же предикат, что у «Остановить».** Там спрашивают
+    /// про ВСТРОЕННЫЙ сервер, и запомненное согласие снимает вопрос; здесь гасится сервер, которым
+    /// панель НЕ управляет, и согласия на него не бывает по определению — человек отвечает на это
+    /// нажатие. Вопрос задаётся ДО гашения: через найденный сервер может идти его работа.
+    ///
+    /// Отказ — «ничего не произошло»: панель не трогает чужой процесс. Предохранитель всё равно
+    /// в контроллере (<see cref="IServerControl.RecoverOwnServer"/>): окно спрашивает, решает он.
+    /// </summary>
+    private async void RequestRecoverOwnServer()
+    {
+        if (_server is null || _busy) return;
+
+        var confirmed = false;
+
+        if (RecoverConfirmedForTests is not null)
+        {
+            confirmed = RecoverConfirmedForTests();
+        }
+        else
+        {
+            var state = _server.State;
+            var dialog = new ConfirmStopWindow();
+
+            // ВОПРОС У ЭТОГО ДЕЙСТВИЯ СВОЙ (решение владельца 13.10.2026, ответ 2): гасится
+            // сервер, которым панель НЕ управляет, и человек обязан услышать, что через него
+            // может идти его работа, что панель поднимет вместо него своё и что это необратимо.
+            dialog.AttachQuestion(
+                PanelStrings.SrvRecoverTitle,
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.SrvRecoverConfirmFormat, state.Port, state.ProcessName, state.Pid));
+
+            confirmed = await dialog.ShowDialog<bool>(this);
+        }
+
+        if (!confirmed) return;
+
+        RunInBackground(
+            () => _server.RecoverOwnServer(StartTimeout, confirmed: true),
+            PanelStrings.ServerRestarting);
     }
 
     private void StartPolling()
@@ -753,8 +859,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        ServerStatusText.Text = _model.StatusText;
-        ServerDetailText.Text = _model.DetailText;
+        // СЕРВЕР ПОДНЯТ НЕ ПАНЕЛЬЮ — СВОИМИ СЛОВАМИ, а не общим «сервер работает» (решение
+        // владельца 13.10.2026, ответ 1): у этого положения ДРУГОЙ смысл, чем у «взятого чужого».
+        // Крупная строка называет, что случилось и на каком порту; подробность под ней говорит,
+        // что за этим следует (телефон и обновление сервера DSH).
+        ServerStatusText.Text = _model.NotStartedByPanel ? _model.NotStartedByPanelTitle : _model.StatusText;
+        ServerDetailText.Text = _model.NotStartedByPanel ? _model.NotStartedByPanelNote : _model.DetailText;
 
         // ПОДПИСИ КНОПОК СЕРВЕРА МЕНЯЮТСЯ по состоянию («Перезапустить» и «Остановить» просят
         // подтверждения, когда сервер найден и взят под управление), поэтому они ставятся ЗДЕСЬ
@@ -795,15 +905,33 @@ public partial class MainWindow : Window
         DetachServerButton.Content = _model.DetachButtonText;
         DetachServerButton.IsVisible = _model.CanDetach;
 
+        // «СЕРВЕР ПОДНЯТ НЕ ПАНЕЛЬЮ» — своё положение, свои слова и своя кнопка (решение владельца
+        // 13.10.2026, ответ 1). Строка называет состояние и говорит, что за ним следует; кнопка
+        // даёт ОДИН путь назад. У «взятого чужого» этого нет: там «Отвязаться» (вернуть как было).
+        RecoverOwnServerButton.Content = _model.RecoverOwnServerButtonText;
+        RecoverOwnServerButton.IsVisible = _model.CanRecoverOwnServer && !_busy;
+
+        // ПОДСКАЗКА ОБЯЗАТЕЛЬНА: это действие ГАСИТ найденный сервер, и «что произойдёт по нажатию»
+        // человек обязан видеть до щелчка, а не узнавать из вопроса (ворота `ButtonTooltipTests`).
+        PanelToolTip.Set(RecoverOwnServerButton, PanelStrings.TipRecoverOwnServerButton);
+        NotStartedByPanelText.Text = _model.NotStartedByPanelNote;
+        NotStartedByPanelText.IsVisible = _model.NotStartedByPanel;
+
         var found = _model.FoundText;
         FoundServerPanel.IsVisible = found.Length > 0;
         FoundServerText.Text = found;
+
+        // ОДИН найденный сервер — прежняя кнопка без порта: обычный случай менять нечем.
+        // НЕСКОЛЬКО — своя кнопка на каждого (её подпись называет порт), и общая кнопка прячется:
+        // без порта она была бы загадкой «какой из двух».
         AdoptServerButton.Content = _model.AdoptButtonText;
         AdoptServerButton.IsEnabled = _model.CanAdopt && !_busy;
+        AdoptServerButton.IsVisible = _model.CanAdopt && !_model.ManyCandidates;
+        RenderFoundServers();
 
         // Подсказка «Взять под управление» — тоже готовая строка: она уже говорит словами,
         // что именно панель берёт и как это отменить.
-        PanelToolTip.Set(AdoptServerButton, PanelStrings.AdoptHint);
+        PanelToolTip.Set(AdoptServerButton, PanelStrings.AdoptNote);
 
         // Состояние разложено — оно известно СВЕЖИМ. Сообщаем об этом ТОЛЬКО здесь, а не в ветке
         // «идёт действие»: в ней состояние ещё не устоялось, и красить значок в цвет «работает»

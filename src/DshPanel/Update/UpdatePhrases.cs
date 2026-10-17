@@ -47,6 +47,10 @@ public static class UpdateRefusalLines
     /// <summary>
     /// Строка для человека по готовому ответу движка: ключ плюс значения. Отказа нет —
     /// пустая строка (окну нечего показывать).
+    ///
+    /// ⚠️ Рядом с причиной отказа идёт СТРОКА ПРО НЕУДАВШУЮСЯ УБОРКУ, если она не удалась:
+    /// папка обновления осталась на диске, и человек об этом узнаёт там же, где читает ответ
+    /// движка, а не только в журнале.
     /// </summary>
     public static string Line(UpdatePreparation? preparation)
     {
@@ -54,8 +58,19 @@ public static class UpdateRefusalLines
 
         var key = preparation.RefusalKey;
 
-        return Fill(key, Text(key), preparation.Detail, preparation.DetailMore);
+        return Fill(key, Text(key), preparation.Detail, preparation.DetailMore)
+            + CleanupTail(preparation.CleanupKey, preparation.CleanupReason);
     }
+
+    /// <summary>
+    /// ХВОСТ ПРО НЕУДАВШУЮСЯ УБОРКУ — ОДНИМ МЕСТОМ на панель. Пустой ключ — уборка удалась,
+    /// и хвоста нет вовсе. Причина подставляется ЗНАЧЕНИЕМ (тип и сообщение среды): слова
+    /// обрамления живут в словаре, и второго набора подписей здесь не будет.
+    /// </summary>
+    public static string CleanupTail(string? cleanupKey, string? reason) =>
+        string.IsNullOrEmpty(cleanupKey)
+            ? string.Empty
+            : " " + Fill(cleanupKey, Text(cleanupKey), reason ?? string.Empty, string.Empty);
 
     /// <summary>
     /// ЗНАЧЕНИЯ В ГОТОВЫЙ ТЕКСТ: «<c>Format</c>» в имени ключа значит «сюда идут значения отказа».
@@ -91,6 +106,8 @@ public static class UpdateRefusalLines
         "UpdateArchiveSumMismatchFormat" => PanelStrings.UpdateArchiveSumMismatchFormat,
         "UpdateArchiveMissing" => PanelStrings.UpdateArchiveMissing,
         "UpdateUnpackFolderMissing" => PanelStrings.UpdateUnpackFolderMissing,
+        // Предмет сообщения — ПУТЬ, а не архив: ключ свой (замечание владельца, 10.10.2026).
+        "UpdateUnpackFolderOccupied" => PanelStrings.UpdateUnpackFolderOccupied,
         "UpdateArchiveUnreadable" => PanelStrings.UpdateArchiveUnreadable,
         "UpdateArchiveEmpty" => PanelStrings.UpdateArchiveEmpty,
         "UpdateArchiveUnsafeFormat" => PanelStrings.UpdateArchiveUnsafeFormat,
@@ -102,6 +119,11 @@ public static class UpdateRefusalLines
         "UpdateSetupSumMismatchFormat" => PanelStrings.UpdateSetupSumMismatchFormat,
         "UpdateNoBackup" => PanelStrings.UpdateNoBackup,
         "UpdateWriteFailedFormat" => PanelStrings.UpdateWriteFailedFormat,
+
+        // Отказ УБОРКИ. Ключ приходит не значением `UpdateRefusal`, а рядом с ответом движка
+        // (`UpdatePreparation.CleanupKey`) и с итогом замены (`UpdateOutcome.CleanupKey`) —
+        // уборка может не удаться и после удачного обновления.
+        "UpdateCleanupFailedFormat" => PanelStrings.UpdateCleanupFailedFormat,
 
         // Ключ «панель не знает отказа» тоже приходит ОТ ЯДРА — оно отдаёт его на значение, которого
         // само не знает (журнал или выпуск правили руками). Значит строка ему нужна, и она есть.
@@ -160,30 +182,57 @@ public static class UpdateOutcomeLines
     /// СТРОКА В ЖУРНАЛ о том, чем кончилось обновление: у применившегося — короткая (человеку
     /// говорить нечего, но факт смены версии должен быть объясним), у остальных — техническая
     /// причина (<see cref="UpdateOutcome.Detail"/>).
+    ///
+    /// ⚠️ Неудавшаяся уборка дописывается СЮДА ВСЕГДА — и к удачному итогу тоже: папка обновления
+    /// осталась на диске, и это ровно тот случай, когда молчание журнала стоило бы человеку
+    /// незамеченного мусора.
     /// </summary>
     public static string JournalLine(UpdateOutcome outcome)
     {
         ArgumentNullException.ThrowIfNull(outcome);
 
-        return outcome.Failed
-            ? string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateLogFormat, outcome.Detail)
-            : string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateAppliedLogFormat, outcome.Version);
+        var line = outcome.Verdict == UpdateVerdict.Applied
+            ? string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateAppliedLogFormat, outcome.Version)
+            : string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateLogFormat, outcome.Detail);
+
+        if (!outcome.CleanupFailed) return line;
+
+        // Здесь ПРИЧИНА уборки — значение (тип и сообщение среды), а слова обрамления живут
+        // в словаре. Собирается тем же `Fill`, что и строка отказа: второго правила нет.
+        var reason = string.Format(
+            CultureInfo.CurrentCulture,
+            "{0}: {1}",
+            "cleanup",
+            outcome.CleanupReason);
+
+        return line + UpdateRefusalLines.CleanupTail(outcome.CleanupKey, reason);
     }
 
     /// <summary>
-    /// ТЕКСТ СООБЩЕНИЯ ЧЕЛОВЕКУ. Пусто — сообщать нечего (обновление применилось: панель и так
-    /// обновилась, и шарик об этом был бы шумом). Непусто — и тогда сказано и ЧТО не применилось,
-    /// и ПОЧЕМУ, словами словаря по ключу ядра.
+    /// ТЕКСТ СООБЩЕНИЯ ЧЕЛОВЕКУ. Пусто — сообщать нечего (обновление применилось и за собой
+    /// убрало: панель и так обновилась, и шарик об этом был бы шумом). Непусто — и тогда сказано
+    /// и ЧТО не применилось, и ПОЧЕМУ, словами словаря по ключу ядра.
+    ///
+    /// ⚠️ Два случая, и оба НАДО сказать: обновление не применилось (версия, причина) и уборка
+    /// не удалась (осталась папка обновления, которую человеку придётся убрать руками).
     /// </summary>
     public static string Notice(UpdateOutcome? outcome)
     {
-        if (outcome is null || !outcome.Failed) return string.Empty;
+        if (outcome is null) return string.Empty;
 
-        return string.Format(
-            CultureInfo.CurrentCulture,
-            PanelStrings.UpdateNoticeFailedFormat,
-            outcome.Version,
-            UpdateReasonLines.Text(outcome.ReasonKey));
+        var notice = outcome.Verdict == UpdateVerdict.Applied
+            ? string.Empty
+            : string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.UpdateNoticeFailedFormat,
+                outcome.Version,
+                UpdateReasonLines.Text(outcome.ReasonKey));
+
+        if (!outcome.CleanupFailed) return notice;
+
+        var cleanup = UpdateRefusalLines.CleanupTail(outcome.CleanupKey, outcome.CleanupReason).Trim();
+
+        return notice.Length > 0 ? notice + " " + cleanup : cleanup;
     }
 }
 

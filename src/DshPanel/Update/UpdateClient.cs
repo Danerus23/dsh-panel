@@ -48,6 +48,17 @@ public sealed record UpdateRelease(
     /// <summary>Спросили — и не получилось. Причина называется словами, а не кодом.</summary>
     public static UpdateRelease Failed(string error, DateTimeOffset at) =>
         new(false, error, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, at);
+
+    /// <summary>
+    /// ОТКАЗ ПО ЧИСЛУ ЗАПРОСОВ (403/429) — отдельная примета, а не строка причины. Нужна она
+    /// **отступу**: после такого отказа панель не спрашивает выпуски несколько часов
+    /// (<see cref="UpdateDecisions.RateLimitBackoff"/>), и решать это по ЧЕЛОВЕЧЕСКОЙ фразе
+    /// («лимит запросов исчерпан») было бы гаданием по переводу — фраза переводится, а примета нет.
+    ///
+    /// ⚠️ Отдельным свойством, а не полем записи: поле заставило бы КАЖДОЕ место, собирающее
+    /// ответ (окно, проверки, восстановление из настроек), называть примету, которой у него нет.
+    /// </summary>
+    public bool RateLimited { get; init; }
 }
 
 /// <summary>
@@ -67,6 +78,59 @@ public readonly record struct UpdateTraces(
     string PageUrl,
     string Notes,
     string NotesRaw);
+
+/// <summary>
+/// ПОСЛЕДНЯЯ ПОПЫТКА СПРОСИТЬ ВЫПУСКИ: **когда была и чем кончилась**. Отдельно от
+/// <see cref="UpdateTraces"/> и нарочно.
+///
+/// **Зачем отдельно.** Следы описывают УДАЧНЫЙ ответ — он и показывается человеку («доступна
+/// версия 2.1.0», «проверено 11.10, 15:04»). Попытка описывает САМО ДЕЛО: попробовали, и не вышло.
+/// Смешав их, панель либо теряла прежний ответ после отказа сети (окно выглядело как «ещё
+/// не проверялось» после настоящей работы), либо выдавала неудачу за проверку.
+///
+/// **Что даёт попытка:** (1) человек видит, когда панель стучалась и чем это кончилось;
+/// (2) часы знают, что после отказа по числу запросов нельзя пробовать несколько часов, —
+/// иначе следующий запуск панели снова ушёл бы в выеденный лимит.
+///
+/// Живёт в настройках тремя полями: отметка, вид и причина
+/// (<see cref="Settings.PanelSettings.UpdateAttemptAt"/> и соседи).
+/// </summary>
+public sealed record UpdateAttempt(DateTimeOffset At, bool Ok, bool RateLimited, string Error)
+{
+    /// <summary>Попытки не было (или она не сохранилась): «не знаем» честнее выдуманной даты.</summary>
+    public static UpdateAttempt None { get; } = new(default, false, false, string.Empty);
+
+    /// <summary>Вид для настроек: слова переводимы, а примета — нет, поэтому хранится она.</summary>
+    public const string KindOk = "ok";
+    public const string KindLimited = "limited";
+    public const string KindFailed = "failed";
+
+    /// <summary>Попытка была — есть что показывать и о чём помнить.</summary>
+    public bool Any => At != default;
+
+    /// <summary>Попытка была и не удалась — только такие и держат отступ.</summary>
+    public bool Failed => Any && !Ok;
+
+    /// <summary>Вид попытки для настроек.</summary>
+    public string Kind => Ok ? KindOk : RateLimited ? KindLimited : KindFailed;
+
+    /// <summary>
+    /// ПРОЧИТАТЬ ПОПЫТКУ ИЗ НАСТРОЕК. Отметка не разобралась — попытки нет: без времени
+    /// и отступ не посчитать, а «не знаем когда» хуже честного «не помним».
+    /// </summary>
+    public static UpdateAttempt Parse(string? at, string? kind, string? error)
+    {
+        if (!Pricing.PricingDecisions.TryParse(at, out var moment)) return None;
+
+        var token = (kind ?? string.Empty).Trim().ToLowerInvariant();
+
+        return new UpdateAttempt(
+            moment,
+            string.Equals(token, KindOk, StringComparison.Ordinal),
+            string.Equals(token, KindLimited, StringComparison.Ordinal),
+            (error ?? string.Empty).Trim());
+    }
+}
 
 /// <summary>
 /// ОТКУДА ПАНЕЛЬ УЗНАЁТ О ВЫПУСКАХ. Отдельный уговор — чтобы окно и решения проверялись
@@ -128,10 +192,13 @@ public sealed class HttpUpdateClient : IUpdateClient
 
             // 403 и 429 — лимит GitHub на число запросов с адреса (60 в час без токена).
             // Иначе человек видит «HTTP 403» и не понимает, что делать.
+            //
+            // ⚠️ Кроме слов ставится ПРИМЕТА (`RateLimited`): по ней панель берёт отступ
+            // в несколько часов и не добавляет своих запросов в выеденный лимит.
             if (response.StatusCode == HttpStatusCode.Forbidden
                 || (int)response.StatusCode == 429)
             {
-                return Fail(PanelStrings.UpdateRateLimited, now);
+                return Fail(PanelStrings.UpdateRateLimited, now) with { RateLimited = true };
             }
 
             if (!response.IsSuccessStatusCode)

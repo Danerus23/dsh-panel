@@ -96,6 +96,7 @@ public class RestoreTableViewTests
             paths,
             () => owner.Settings,
             allowed: true,
+            mayTakeMachineEngineData: false,
             locateEngine: () => null,
             log: _ => { },
             settingsOwner: owner);
@@ -394,6 +395,7 @@ public class RestoreTableViewTests
                 AppPaths.Under(Path.Combine(root, "данные")),
                 () => settings,
                 allowed: true,
+                mayTakeMachineEngineData: false,
                 locateEngine: () => null,
                 log: _ => { },
                 settingsOwner: owner);

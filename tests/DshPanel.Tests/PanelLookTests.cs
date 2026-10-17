@@ -49,6 +49,22 @@ public class PanelLookTests
     /// <summary>Ключ ресурса подложки карточки: у неё считается контраст цвета состояния.</summary>
     private const string CardBackgroundKey = "SystemControlBackgroundChromeMediumLowBrush";
 
+    /// <summary>
+    /// СКОЛЬКО ЗАГОЛОВКОВ РАЗДЕЛОВ ВИДНО В ОКНЕ НАСТРОЕК — ЧИСЛО ПОСЧИТАНО, А НЕ ВЗЯТО «НА ГЛАЗ».
+    ///
+    /// Находка П-1 промежуточной приёмки R1–R7 (17.10.2026): обе проверки заголовков требовали
+    /// «не меньше четырёх», то есть **не падали**, если заголовков станет три, — тот же класс
+    /// «проверка не может упасть», что и остальные находки серии.
+    ///
+    /// Замер: временная проба показала **7** `TextBlock` с классом `sectionTitle` в ПОКАЗАННОМ окне
+    /// (`SettingsStand` + `Show()` + `Settle()`, 18.10.2026): «Общее» · «Резервное копирование» ·
+    /// «Баланс и тариф» · «Сервер» · «Обновление» · «Телефон» · «В этом запуске телефоном не
+    /// управляют…» — седьмой не название раздела, а строка с тем же классом; она входит в счёт, и
+    /// это записано, чтобы число не выглядело ошибкой. Меняется окно — проверка падает и НАЗЫВАЕТ
+    /// найденные тексты. Отчёт: `_team\c4\r22-kadry.md`.
+    /// </summary>
+    private const int SectionTitleCount = 7;
+
     private static Application App => Application.Current!;
 
     /// <summary>Кисть тона в этой теме или падение: «нет кисти» — это и есть дефект.</summary>
@@ -115,6 +131,80 @@ public class PanelLookTests
 
         return (BoxShadows)value!;
     }
+
+    /// <summary>
+    /// ПЛОТНАЯ МЕТКА СОСТОЯНИЯ ЧИТАЕТСЯ В ОБЕИХ ТЕМАХ — и слово на ней, и она сама на карточке.
+    ///
+    /// **От какого случая (решение владельца 14.10.2026).** На разделе «Сервер» состояния стояли
+    /// обычным текстом и состоянием не читались; принят рендер с плотной меткой (GOV.UK Tag).
+    /// У метки ДВА числа, и оба обязаны пройти порог: **слово на подложке метки** (WCAG 2.2
+    /// SC 1.4.3, 4,5:1) и **подложка метки на карточке** (SC 1.4.11, 3:1) — иначе метка сливается
+    /// с карточкой и перестаёт читаться как метка.
+    ///
+    /// ⚠️ Числа берутся у <see cref="PanelLook.Tag"/> — У ТОЙ ЖЕ двери, которой красит вид:
+    /// проверка мерит ровно то, что видит человек. Замер владельца на принятом рендере: слово
+    /// на метке 6,88 / 5,62 / 5,32 (светлая) и 7,21 / 7,42 / 8,78 (тёмная), метка на карточке
+    /// 5,32…7,68.
+    ///
+    /// Мутация, которая обязана упасть здесь: **взять цвет метки из палитры значка, не пересчитав
+    /// его** (у тонов значка чернила подобраны под ФОН ОКНА, а не под подложку метки).
+    /// </summary>
+    [AvaloniaFact]
+    public void Метки_состояний_читаются_в_обеих_темах()
+    {
+        var tones = new[] { TrayTone.Good, TrayTone.Warning, TrayTone.Bad };
+
+        foreach (var variant in new[] { ThemeVariant.Light, ThemeVariant.Dark })
+        {
+            var dark = variant == ThemeVariant.Dark;
+            var background = (ISolidColorBrush)Brush(CardBackgroundKey, variant);
+
+            foreach (var tone in tones)
+            {
+                var key = PanelLook.TagKey(tone);
+                var plate = (ISolidColorBrush)Brush(key, variant);
+                var ink = (ISolidColorBrush)Brush(PanelLook.TagTextKey(tone), variant);
+
+                // 1) СЛОВО НА МЕТКЕ. Слово внутри метки — это ещё и WCAG 1.4.1 (цвет не один),
+                //    но читаемость слова — отдельное обещание, и оно мерится числом.
+                var onTag = TrayPalette.Contrast(ToRgb(ink.Color), ToRgb(plate.Color));
+
+                Assert.True(
+                    onTag >= TrayPalette.TextContrastFloor,
+                    $"{variant}/{key}: слово на метке читается на {onTag:0.00} — ниже порога " +
+                    $"{TrayPalette.TextContrastFloor:0.0}: состояние не прочитать");
+
+                // 2) МЕТКА НА КАРТОЧКЕ: подложка метки обязана отличаться от карточки заметно —
+                //    иначе метка не читается как метка (SC 1.4.11, порог 3:1).
+                var onCard = TrayPalette.Contrast(ToRgb(plate.Color), ToRgb(background.Color));
+
+                Assert.True(
+                    onCard >= NonTextContrastFloor,
+                    $"{variant}/{key}: метка на карточке читается на {onCard:0.00} — ниже порога " +
+                    $"{NonTextContrastFloor:0.0}: метка сливается с карточкой");
+            }
+
+            // 3) И ЦВЕТА ЖИВУТ В ТАБЛИЦЕ, А НЕ В РАЗМЕТКЕ: та же дверь отдаёт их проверке и виду.
+            var (lightPlate, lightInk) = PanelLook.Tag(TrayTone.Good, dark: false);
+            var (darkPlate, darkInk) = PanelLook.Tag(TrayTone.Good, dark: true);
+
+            Assert.NotEqual(lightPlate, darkPlate);
+            Assert.NotEqual(lightInk, darkInk);
+
+            // И серое состояние — СЕРЫМ ТЕКСТОМ, без плашки: у него нет подложки вовсе,
+            // а читается оно на карточке не хуже прочего текста.
+            var grey = PanelLook.GreyText(dark);
+            var greyOnCard = TrayPalette.Contrast(ToRgb(grey), ToRgb(background.Color));
+
+            Assert.True(
+                greyOnCard >= TrayPalette.TextContrastFloor,
+                $"{variant}: серое состояние читается на {greyOnCard:0.00} — ниже порога " +
+                $"{TrayPalette.TextContrastFloor:0.0}");
+        }
+    }
+
+    /// <summary>Порог WCAG 2.2 SC 1.4.11 для нетекстовых элементов: 3:1.</summary>
+    private const double NonTextContrastFloor = 3.0;
 
     /// <summary>
     /// КИСТИ ТОНОВ РАЗНЫЕ В ДВУХ ТЕМАХ. Это и есть доказательство, что цвет приходит ОТ ТЕМЫ,
@@ -332,8 +422,9 @@ public class PanelLookTests
     }
 
     /// <summary>
-    /// ЗАГОЛОВКИ РАЗДЕЛОВ ЗАМЕТНЕЕ ПОДСКАЗОК: крупнее, полужирные и цветом акцента. Мерятся
-    /// настоящие заголовки показанного окна настроек.
+    /// ЗАГОЛОВКИ РАЗДЕЛОВ ЗАМЕТНЕЕ ПОДСКАЗОК: крупнее, полужирные и цветом из ПАЛИТРЫ ВИДА
+    /// (не акцентом каркаса — см. <see cref="Заголовки_разделов_проходят_пол_контраста"/> и E-01).
+    /// Мерятся настоящие заголовки показанного окна настроек.
     /// </summary>
     [AvaloniaFact]
     public void Заголовки_разделов_заметнее_подсказок()
@@ -346,14 +437,17 @@ public class PanelLookTests
             window.Show();
             PanelTestStand.Settle();
 
-            var accent = (ISolidColorBrush)Brush("AccentButtonBackground", window.ActualThemeVariant);
+            var ink = (ISolidColorBrush)Brush(PanelLook.SectionTitleKey, window.ActualThemeVariant);
 
             var titles = window.GetVisualDescendants()
                 .OfType<TextBlock>()
                 .Where(block => block.Classes.Contains("sectionTitle"))
                 .ToList();
 
-            Assert.True(titles.Count >= 4, $"заголовков с классом sectionTitle найдено {titles.Count} — ожидались четыре");
+            Assert.True(
+                titles.Count == SectionTitleCount,
+                $"заголовков с классом sectionTitle найдено {titles.Count} — ожидалось ровно {SectionTitleCount}: "
+                + string.Join(" | ", titles.Select(title => title.Text)));
 
             var hints = window.GetVisualDescendants()
                 .OfType<TextBlock>()
@@ -371,7 +465,7 @@ public class PanelLookTests
                     $"заголовок {title.Name} не крупнее подсказки ({title.FontSize:0.#} против {hintSize:0.#})");
 
                 Assert.Equal(FontWeight.SemiBold, title.FontWeight);
-                Assert.Equal(accent.Color, ((ISolidColorBrush)title.Foreground!).Color);
+                Assert.Equal(ink.Color, ((ISolidColorBrush)title.Foreground!).Color);
             }
 
             window.CloseQuietly();
@@ -380,6 +474,116 @@ public class PanelLookTests
         {
             PanelTestStand.RemoveTemp(dir);
         }
+    }
+
+    /// <summary>
+    /// ЗАГОЛОВКИ РАЗДЕЛОВ ПРОХОДЯТ ПОЛ КОНТРАСТА 4,5:1 — И ЭТО ПРОВЕРЯЕТСЯ, А НЕ ОБЕЩАЕТСЯ.
+    ///
+    /// **От какого случая (находка E-01 приёмки C1, 17.10.2026).** Заголовки набирались акцентной
+    /// кистью каркаса КАК ЦВЕТОМ ТЕКСТА: `#0078D7` давал **4,02:1** на светлой карточке `#F2F2F2`
+    /// и **3,15:1** на тёмной `#2B2B2B` при поле 4,5:1 (WCAG 1.4.3: 20 точек SemiBold — обычный
+    /// текст, а не крупный, у него пол тоже 4,5). Прежняя проверка
+    /// (<see cref="Заголовки_разделов_заметнее_подсказок"/>) закрепляла РАВЕНСТВО акценту и контраст
+    /// не мерила — то есть зелёная проверка держала дефект.
+    ///
+    /// **Чем меряется.** Тем же счётом, что у палитры значка (<see cref="TrayPalette.Contrast"/>,
+    /// порог <see cref="TrayPalette.TextContrastFloor"/>): своих формул проверка не заводит. Цвет
+    /// берётся у ПАЛИТРЫ (<see cref="PanelLook.SectionTitleKey"/>), а не литералом, и он же
+    /// сверяется с тем, чем НАРИСОВАНЫ заголовки показанного окна, — поэтому проверка видит и
+    /// подмену цвета в палитре, и возврат стиля к акценту.
+    ///
+    /// Мутация, которая обязана упасть здесь: в `App.axaml` у стиля `TextBlock.sectionTitle` вернуть
+    /// <c>Foreground</c> на `{DynamicResource AccentButtonBackground}` (так было до правки E-01).
+    /// </summary>
+    [AvaloniaFact]
+    public void Заголовки_разделов_проходят_пол_контраста()
+    {
+        // (1) Палитра обеих тем: цвет заголовка против подложки карточки.
+        foreach (var variant in new[] { ThemeVariant.Light, ThemeVariant.Dark })
+        {
+            var background = (ISolidColorBrush)Brush(CardBackgroundKey, variant);
+            var ink = (ISolidColorBrush)Brush(PanelLook.SectionTitleKey, variant);
+
+            var contrast = TrayPalette.Contrast(ToRgb(ink.Color), ToRgb(background.Color));
+
+            Assert.True(
+                contrast >= TrayPalette.TextContrastFloor,
+                $"{variant}: цвет заголовка раздела ({PanelLook.SectionTitleKey}) даёт контраст " +
+                $"{contrast:0.00} против карточки — ниже порога {TrayPalette.TextContrastFloor:0.0}");
+        }
+
+        // (2) Настоящее окно: те же чернила и та же подложка, что видит человек.
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = PanelTestStand.SettingsStand(dir);
+            window.Show();
+            PanelTestStand.Settle();
+
+            var variant = window.ActualThemeVariant;
+            var palette = (ISolidColorBrush)Brush(PanelLook.SectionTitleKey, variant);
+
+            var titles = window.GetVisualDescendants()
+                .OfType<TextBlock>()
+                .Where(block => block.Classes.Contains("sectionTitle"))
+                .ToList();
+
+            Assert.True(
+                titles.Count == SectionTitleCount,
+                $"заголовков с классом sectionTitle найдено {titles.Count} — ожидалось ровно {SectionTitleCount}: "
+                + string.Join(" | ", titles.Select(title => title.Text)));
+
+            foreach (var title in titles)
+            {
+                var ink = ((ISolidColorBrush)title.Foreground!).Color;
+                Assert.Equal(palette.Color, ink);
+
+                var backdrop = NearestBackdrop(title, window);
+                Assert.True(
+                    backdrop is not null,
+                    $"заголовок «{title.Text}»: подложка не найдена — контраст мерить не на чем");
+
+                var contrast = TrayPalette.Contrast(ToRgb(ink), ToRgb(backdrop!.Value));
+
+                Assert.True(
+                    contrast >= TrayPalette.TextContrastFloor,
+                    $"заголовок «{title.Text}»: контраст {contrast:0.00} к подложке #{ToRgb(backdrop.Value):X6} — " +
+                    $"ниже порога {TrayPalette.TextContrastFloor:0.0}");
+            }
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// Ближайшая НЕПРОЗРАЧНАЯ подложка предка — на ней заголовок и нарисован. Прозрачные
+    /// пропускаются: контраст считается против того, что человек видит, а не против слоя с альфой.
+    /// </summary>
+    private static Color? NearestBackdrop(Visual visual, Visual stopAt)
+    {
+        var current = visual.GetVisualParent();
+        while (current is not null)
+        {
+            if (current is Border border && border.Background is ISolidColorBrush borderBrush && borderBrush.Color.A == 255)
+            {
+                return borderBrush.Color;
+            }
+
+            if (current is Panel panel && panel.Background is ISolidColorBrush panelBrush && panelBrush.Color.A == 255)
+            {
+                return panelBrush.Color;
+            }
+
+            if (ReferenceEquals(current, stopAt)) break;
+            current = current.GetVisualParent();
+        }
+
+        return null;
     }
 
     private static ContentPresenter Presenter(Button button)

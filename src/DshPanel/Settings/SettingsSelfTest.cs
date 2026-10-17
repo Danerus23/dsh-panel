@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using DshPanel.Files;
 using DshPanel.Isolation;
 using DshPanel.Server;
 using DshPanel.Shell;
@@ -175,11 +176,29 @@ public static class SettingsSelfTest
 
             Check("отчёт об окружении не пуст", text.Length > 0);
             Check("в отчёте нет имени пользователя", !text.Contains(profile, StringComparison.OrdinalIgnoreCase));
-            Check(
-                "отчёт про движок совпадает с фактом",
-                located is null
-                    ? text.Contains(PanelStrings.EnvNotFound, StringComparison.Ordinal)
-                    : text.Contains(DisplayMask.Path(located.BinPath), StringComparison.Ordinal));
+
+            // ⚠️ СВЕРКА С ФАКТОМ — ПО СЛОВУ О НАЙДЕННОМ, А НЕ ПО ПУТИ (дефект «проверка не может
+            // пройти», пачка D цикла C2). Здесь стояло `text.Contains(DisplayMask.Path(located.BinPath))`:
+            // от отчёта требовался МАСКИРОВАННЫЙ ПУТЬ движка, которого в отчёте об окружении НЕТ
+            // и не было — строка «DSH» несёт ВЕРСИЮ, а не путь. На машине с движком проверка не
+            // могла пройти никогда; на машине без движка проходила, потому что сверяла другое
+            // слово. Теперь меряется то, что в отчёте есть: СЛОВО строки «DSH» («найден» /
+            // «не найден») против того, что нашёл настоящий поиск.
+            var engineLine = realReport.EnvironmentInfo()
+                .Groups
+                .SelectMany(group => group.Lines)
+                .FirstOrDefault(line => string.Equals(line.What, PanelStrings.EnvEngine, StringComparison.Ordinal));
+
+            Check("в отчёте есть строка про DSH", engineLine is not null);
+
+            if (engineLine is not null)
+            {
+                var wanted = located is null ? PanelStrings.EnvNotFound : PanelStrings.EnvFound;
+
+                Check(
+                    "отчёт про движок совпадает с фактом",
+                    string.Equals(engineLine.Word, wanted, StringComparison.Ordinal));
+            }
 
             // Версии в отчёте НАЗВАНЫ (просьба владельца 28.09.2026): либо номер, либо честное
             // «версия не прочитана» — но не пустое место.
@@ -202,14 +221,12 @@ public static class SettingsSelfTest
         }
         finally
         {
-            var gone = true;
+            // Уборка идёт ОДНИМ местом и сама проверяет, что дерева не осталось (см.
+            // `Files\TreeDeletion.cs`): прежний `Directory.Delete(recursive: true)` оставлял дерево
+            // на junction и на файле «только для чтения», а пустой `catch` отвечал на это успехом.
+            var gone = TreeDeletion.Remove(root).Ok;
 
-            try
-            {
-                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
-                try { if (Directory.Exists(parent)) Directory.Delete(parent); } catch { }
-            }
-            catch { gone = false; }
+            try { if (Directory.Exists(parent)) Directory.Delete(parent); } catch { }
 
             report.Add($"уборка: временный каталог пробы убран = {gone}");
             if (!gone) failed = true;

@@ -1,3 +1,4 @@
+using DshPanel.Files;
 using DshPanel.Isolation;
 
 namespace DshPanel.Update;
@@ -86,8 +87,27 @@ public sealed record UpdateOutcome(
     string FailedFolder,
     string Detail)
 {
-    /// <summary>Об этом надо сказать человеку: всё, кроме «применилось».</summary>
-    public bool Failed => Verdict != UpdateVerdict.Applied;
+    /// <summary>
+    /// ИТОГ УБОРКИ ЗА ОБНОВИВШЕЙСЯ ПАНЕЛЬЮ. <c>Ok</c> — мусора не осталось; иначе папка
+    /// обновления осталась на диске, и это НАДО СКАЗАТЬ ЧЕЛОВЕКУ: убрать её придётся руками,
+    /// а панель о ней больше не напомнит (за чистотой каталога обновления панель не следит).
+    ///
+    /// ⚠️ Итог уборки не глотается намеренно. Прежний вызов уборки стоял без разбора ответа,
+    /// и папка, которую держал антивирус или чужой процесс, оставалась молча.
+    /// </summary>
+    public TreeRemoval Cleanup { get; init; } = TreeRemoval.Nothing;
+
+    /// <summary>Уборка не удалась: папка обновления осталась и её надо убрать руками.</summary>
+    public bool CleanupFailed => !Cleanup.Ok;
+
+    /// <summary>Ключ строки про неудавшуюся уборку ("" — уборка удалась).</summary>
+    public string CleanupKey => Cleanup.Ok ? string.Empty : UpdateRefusals.CleanupFailedKey;
+
+    /// <summary>Причина отказа уборки словами среды (для журнала; пусто — уборка удалась).</summary>
+    public string CleanupReason => Cleanup.Ok ? string.Empty : Cleanup.Reason;
+
+    /// <summary>Об этом надо сказать человеку: всё, кроме «применилось» (и неудавшейся уборки).</summary>
+    public bool Failed => Verdict != UpdateVerdict.Applied || CleanupFailed;
 }
 
 /// <summary>
@@ -230,8 +250,10 @@ public static class UpdateOutcomes
             {
                 var kept = KeepFailed(root, folder, version);
 
-                // Скачанный архив и файл сумм для разбора не нужны, а весят много (архив бывает
-                // в сотни мегабайт). Сама папка failed-* и журнал остаются на месте.
+                // Уборка идёт ПОСЛЕ переименования: папка сборки стала `failed-<версия>` и
+                // остаётся для разбора — убирать её нельзя. Отсюда уборка касается только
+                // скачанных архивов и файла сумм (см. `CleanupArchives`), а папка обновления
+                // остаётся на месте НАМЕРЕННО, и это не «отказ уборки».
                 CleanupArchives(root);
 
                 return new UpdateOutcome(
@@ -244,7 +266,10 @@ public static class UpdateOutcomes
                     "обновление не применилось, итог сценария: " + (marker.Length > 0 ? marker : "нет"));
             }
 
-            CleanupStaged(root, folder);
+            // ЗАМЕНА СОСТОЯЛАСЬ — и панель убирает за собой: папку сборки, скачанные архивы,
+            // файл сумм, сценарий и журнал. Итог этой уборки едет наружу: не убралось —
+            // человеку говорят словами, а не молчат (папку держит антивирус, чужой процесс).
+            var applied = CleanupStaged(root, folder);
 
             return new UpdateOutcome(
                 UpdateVerdict.Applied,
@@ -254,7 +279,10 @@ public static class UpdateOutcomes
                 string.Empty,
                 string.Empty,
                 "замена состоялась" + (marker.Length > 0 ? ", итог сценария: " + marker : string.Empty)
-                + "; если выпуск был пересобран под тем же номером, замены файлов могло и не быть");
+                + "; если выпуск был пересобран под тем же номером, замены файлов могло и не быть")
+            {
+                Cleanup = applied,
+            };
         }
         catch (Exception error)
         {
@@ -317,7 +345,7 @@ public static class UpdateOutcomes
             foreach (var other in Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly))
             {
                 var name = Path.GetFileName(other);
-                if (name.StartsWith("failed-", StringComparison.OrdinalIgnoreCase)) TryDeleteFolder(other);
+                if (name.StartsWith("failed-", StringComparison.OrdinalIgnoreCase)) TreeDeletion.Remove(other);
             }
 
             if (Directory.Exists(folder)) Directory.Move(folder, kept);
@@ -336,13 +364,19 @@ public static class UpdateOutcomes
     /// Убрать за обновившейся панелью: папку сборки, скачанные архивы, файл сумм, сценарий
     /// и журнал. Страховочную копию (<c>backup-&lt;версия&gt;</c>) НЕ трогаем: ею человек
     /// откатывается руками, и уборка не имеет права забрать единственный путь назад.
+    ///
+    /// Итог уборки САМОЙ ПАПКИ возвращается наружу: папка, которую держит чужой процесс,
+    /// остаётся на диске, и человеку об этом говорят словами (см. <see cref="UpdateOutcome.Cleanup"/>).
     /// </summary>
-    private static void CleanupStaged(string root, string folder)
+    private static TreeRemoval CleanupStaged(string root, string folder)
     {
-        TryDeleteFolder(folder);
+        var removal = TreeDeletion.Remove(folder);
+
         CleanupArchives(root);
         TryDeleteFile(Path.Combine(root, UpdateScript.FileName));
         TryDeleteFile(Path.Combine(root, UpdateScript.LogFileName));
+
+        return removal;
     }
 
     /// <summary>Скачанные архивы выпусков и файл сумм: после замены они не нужны.</summary>
@@ -364,18 +398,6 @@ public static class UpdateOutcomes
         catch
         {
             // Не убралось — не беда: место освободит следующее обновление.
-        }
-    }
-
-    private static void TryDeleteFolder(string path)
-    {
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path)) Directory.Delete(path, recursive: true);
-        }
-        catch
-        {
-            // См. выше: уборка не имеет права уронить чтение итога.
         }
     }
 

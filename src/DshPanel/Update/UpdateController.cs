@@ -40,6 +40,15 @@ public interface IUpdateControl
     string StatusText { get; }
 
     /// <summary>
+    /// СТРОКА О ПОСЛЕДНЕЙ ПОПЫТКЕ: когда панель стучалась и чем это кончилось. Пусто — попытки
+    /// не было или она удалась (про удачную говорит <see cref="SourceText"/>).
+    ///
+    /// Отдельно от <see cref="SourceText"/>, потому что это РАЗНЫЕ правды: источник состояния —
+    /// последний УДАЧНЫЙ ответ (он не затирается отказом), а попытка — само дело, которое было.
+    /// </summary>
+    string AttemptText { get; }
+
+    /// <summary>
     /// СТРОКА ОБНОВЛЕНИЯ ДЛЯ МЕНЮ ЗНАЧКА — четвёртая строка состояния, рядом с сервером, агентом
     /// и тарифом, и с таким же ТОНОМ (цвет там означает то же, что слова).
     ///
@@ -102,11 +111,23 @@ public sealed class UpdateController : IUpdateControl, IDisposable
     private readonly Action<string> _log;
     private readonly Action<UpdateTraces> _remember;
     private readonly Action<string> _rememberCheckedAt;
+    private readonly Action<UpdateAttempt> _rememberAttempt;
 
     private DispatcherTimer? _timer;
     private DateTimeOffset? _lastCheck;
     private string _checkedNotes = string.Empty;
 
+    /// <summary>О «молчании из-за отступа» говорим ОДИН раз на период ожидания, а не каждый такт.</summary>
+    private bool _waitLogged;
+
+    /// <summary>
+    /// ⚠️ **ДВЕРЬ ПОПЫТКИ — ОБЯЗАТЕЛЬНЫЙ ДОВОД, как право.** Сначала у неё была заглушка
+    /// по умолчанию, и настоящий запуск панели её не подключил (найдено своей сверкой 11.10.2026):
+    /// в памяти попытка жила, а в файл настроек не попадала — значит, отказ **не переживал
+    /// перезапуск**, и следующий запуск панели снова стучался в выеденный лимит GitHub, то есть
+    /// дефект владельца оставался в живом пути. Обязательный довод делает это не внимательностью,
+    /// а сборкой: забыть дверь больше нельзя.
+    /// </summary>
     public UpdateController(
         IUpdateClient client,
         Func<PanelSettings> settings,
@@ -118,7 +139,8 @@ public sealed class UpdateController : IUpdateControl, IDisposable
         Action<string> log,
         Action<UpdateTraces> remember,
         Action<string> rememberCheckedAt,
-        bool isolatedRun = false)
+        bool isolatedRun,
+        Action<UpdateAttempt> rememberAttempt)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -129,6 +151,7 @@ public sealed class UpdateController : IUpdateControl, IDisposable
         _log = log ?? throw new ArgumentNullException(nameof(log));
         _remember = remember ?? throw new ArgumentNullException(nameof(remember));
         _rememberCheckedAt = rememberCheckedAt ?? throw new ArgumentNullException(nameof(rememberCheckedAt));
+        _rememberAttempt = rememberAttempt ?? throw new ArgumentNullException(nameof(rememberAttempt));
 
         Allowed = allowed;
         IsolatedRun = isolatedRun;
@@ -139,6 +162,10 @@ public sealed class UpdateController : IUpdateControl, IDisposable
         // закрыт отметкой, проверки не будет, а вчерашний ответ так и остался бы невидимым —
         // ровно то, чего человек от панели не ждёт. Настройки — место, где след лежит.
         Result = Seeded();
+
+        // И ПОПЫТКА ЧИТАЕТСЯ СРАЗУ, по той же причине: без неё окно после отказа выглядело бы
+        // пустым («ещё не проверялось»), а часы не знали бы, что идёт отступ после лимита GitHub.
+        Attempt = SeededAttempt();
 
         // Заметки берутся у ТОГО ЖЕ состояния: окно показывает их сразу, не дожидаясь проверки,
         // и второй выемки того же текста в панели не заводится.
@@ -151,6 +178,15 @@ public sealed class UpdateController : IUpdateControl, IDisposable
     public bool Allowed { get; }
 
     public UpdateRelease Result { get; private set; }
+
+    /// <summary>
+    /// ПОСЛЕДНЯЯ ПОПЫТКА — когда была и чем кончилась (в этом прогоне или из настроек).
+    ///
+    /// ⚠️ Отдельно от <see cref="Result"/> нарочно: `Result` — **последний удачный ответ**,
+    /// и он НЕ затирается отказом. Иначе отказ сети уносил бы с собой и версию, и заметки,
+    /// и окно выглядело бы как «ещё не проверялось» после настоящей работы.
+    /// </summary>
+    public UpdateAttempt Attempt { get; private set; } = UpdateAttempt.None;
 
     public bool Busy { get; private set; }
 
@@ -172,15 +208,17 @@ public sealed class UpdateController : IUpdateControl, IDisposable
 
     /// <summary>
     /// ОТКУДА ВЗЯТО СОСТОЯНИЕ — словами. Три разных ответа, и каждый называет свою причину:
-    /// права нет, не проверяли вовсе, не вышло. Пустого места здесь быть не может.
+    /// права нет, не проверяли вовсе, проверено когда.
+    ///
+    /// ⚠️ **Про неудачную попытку здесь НЕ говорится** — и это не потеря: состояние берётся
+    /// из последнего УДАЧНОГО ответа, а попытка называется своей строкой
+    /// (<see cref="AttemptText"/>). Так отказ сети не стирает ни версию, ни дату проверки.
     /// </summary>
     public string SourceText
     {
         get
         {
             if (!Allowed) return PanelStrings.UpdateLocked;
-            if (Result.Error.Length > 0) return string.Format(
-                CultureInfo.CurrentCulture, PanelStrings.UpdateFailedFormat, Result.Error);
 
             if (!Result.Ok) return PanelStrings.UpdateNeverChecked;
 
@@ -190,6 +228,19 @@ public sealed class UpdateController : IUpdateControl, IDisposable
                 PricingDecisions.CheckedText(PricingDecisions.Stamp(Result.CheckedAt)));
         }
     }
+
+    /// <summary>
+    /// СТРОКА О ПОПЫТКЕ: когда панель стучалась и чем это кончилось. Пусто, когда попытки не было
+    /// или она удалась (у удачной про время и исход говорит <see cref="SourceText"/>).
+    ///
+    /// **Зачем нужна.** Раньше отказ сети не оставлял в окне НИ СЛЕДА: панель показывала
+    /// «обновление ещё не проверялось» после настоящей работы. Теперь прежний ответ стоит
+    /// с датой, а рядом сказано, что новая попытка не вышла и когда её повторят.
+    /// </summary>
+    public string AttemptText => UpdateLines.AttemptLine(
+        Attempt,
+        Attempt.Failed ? UpdateDecisions.NextAttempt(Attempt) : (DateTimeOffset?)null);
+
 
     /// <summary>
     /// Короткая строка состояния: «последняя версия», «доступна версия 2.1.0» или «эта версия
@@ -227,8 +278,10 @@ public sealed class UpdateController : IUpdateControl, IDisposable
         {
             if (!Allowed) return new TrayStatusLine(PanelStrings.UpdateLocked, TrayTone.Neutral);
 
-            if (Result.Error.Length > 0) return new TrayStatusLine(
-                string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateFailedFormat, Result.Error),
+            // В МЕНЮ ЗНАЧКА — САМАЯ СВЕЖАЯ ПРАВДА: строка одна, и «попытка не вышла» в ней важнее
+            // прежнего ответа (человек обязан знать, что панель стучалась и не достучалась).
+            if (Attempt.Failed) return new TrayStatusLine(
+                string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateFailedFormat, Attempt.Error),
                 TrayTone.Warning);
 
             if (!Result.Ok) return new TrayStatusLine(PanelStrings.UpdateNeverChecked, TrayTone.Neutral);
@@ -295,6 +348,22 @@ public sealed class UpdateController : IUpdateControl, IDisposable
     }
 
     /// <summary>
+    /// ПОПЫТКА ИЗ НАСТРОЕК — тем же правилом, что следы: прогон без права состояния выпусков
+    /// не знает о попытках вовсе, а неразобранная отметка значит «не помним».
+    /// </summary>
+    private UpdateAttempt SeededAttempt()
+    {
+        if (!Allowed) return UpdateAttempt.None;
+
+        var settings = _settings();
+
+        return UpdateAttempt.Parse(
+            settings.UpdateAttemptAt,
+            settings.UpdateAttemptKind,
+            settings.UpdateAttemptError);
+    }
+
+    /// <summary>
     /// Запустить часы. В прогоне без права часов не будет вовсе — и это в журнал: «панель молчала»
     /// должно быть видно словами, а не догадкой.
     /// </summary>
@@ -337,7 +406,27 @@ public sealed class UpdateController : IUpdateControl, IDisposable
 
         // Отметка из настроек И память этого прогона: настройки могут быть недоступны на запись
         // (тогда отметка не сохранится), и без памяти панель стучалась бы в сеть КАЖДЫЙ такт.
-        if (!UpdateDecisions.ShouldCheck(now, _settings().UpdateCheckedAt, IsolatedRun)) return;
+        // И ТРЕТЬЕ УСЛОВИЕ — ОТСТУП ПОСЛЕ НЕУДАЧИ: после отказа по числу запросов панель молчит
+        // несколько часов, чтобы не добавлять своих запросов в выеденный лимит GitHub.
+        var attempt = Attempt;
+
+        if (!UpdateDecisions.ShouldCheck(now, _settings().UpdateCheckedAt, attempt, IsolatedRun))
+        {
+            // «Панель молчала» обязано объясняться словами — но ОДИН раз на период ожидания:
+            // строка на каждый такт превратила бы журнал в шум.
+            if (!_waitLogged && UpdateDecisions.Waiting(now, attempt))
+            {
+                _waitLogged = true;
+                _log(string.Format(
+                    CultureInfo.CurrentCulture,
+                    PanelStrings.UpdateAttemptWaitingLogFormat,
+                    PricingDecisions.CheckedText(
+                        PricingDecisions.Stamp(UpdateDecisions.NextAttempt(attempt!)))));
+            }
+
+            return;
+        }
+
         if (_lastCheck is not null && now - _lastCheck.Value < UpdateDecisions.CheckInterval) return;
 
         Check(now, humanRequest: false);
@@ -371,22 +460,36 @@ public sealed class UpdateController : IUpdateControl, IDisposable
             {
                 try
                 {
-                    Result = task.IsCompletedSuccessfully
+                    var answer = task.IsCompletedSuccessfully
                         ? task.Result
                         : UpdateRelease.Failed($"{task.Exception?.GetType().Name}", now);
 
-                    _checkedNotes = Result.Notes;
+                    // ПОПЫТКА ЗАПОМИНАЕТСЯ ВСЕГДА — и удачная, и нет: человек обязан видеть,
+                    // что панель стучалась и чем это кончилось, а часы — знать про отступ.
+                    var attempt = new UpdateAttempt(now, answer.Ok, answer.RateLimited, answer.Ok ? string.Empty : answer.Error);
+
+                    Attempt = attempt;
                     _lastCheck = now;
+                    _waitLogged = false;
+                    _rememberAttempt(attempt);
 
                     _log(string.Format(
                         CultureInfo.CurrentCulture,
                         PanelStrings.UpdateLogFormat,
-                        Result.Ok ? Result.Latest : Result.Error));
+                        answer.Ok ? answer.Latest : answer.Error));
 
-                    if (!Result.Ok) return;
+                    // ОТКАЗ НЕ УНОСИТ ПРЕЖНИЙ ОТВЕТ: `Result` остаётся последним УДАЧНЫМ.
+                    // Иначе отказ сети стирал бы и версию, и заметки, и окно выглядело бы
+                    // как «ещё не проверялось» после настоящей работы.
+                    if (!answer.Ok) return;
+
+                    Result = answer;
+                    _checkedNotes = Result.Notes;
 
                     // Отметка времени — ВСЕГДА, и у автоматической проверки тоже: именно ею
-                    // закрыто правило «не чаще раза в сутки».
+                    // закрыто правило «не чаще раза в сутки». ⚠️ Пишется она ТОЛЬКО про удачную
+                    // проверку: отметка после отказа соврала бы («проверено», хотя нет)
+                    // и заперла бы проверку на сутки.
                     _rememberCheckedAt(PricingDecisions.Stamp(now));
 
                     // «Один раз на версию» считается ДО записи новой отметки: запись затрёт

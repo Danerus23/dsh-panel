@@ -247,6 +247,11 @@ public class PeakTableViewTests
     /// <summary>
     /// БЕЗ МОМЕНТА ВРЕМЕНИ ПОДСВЕТКИ НЕТ ВООБЩЕ: таблица, собранная проверкой или окном,
     /// которому «сегодня» неизвестно, обязана выглядеть как обычно, а не подсветить первый день.
+    ///
+    /// ⚠️ **НЕПУСТОТА И ЧИСЛО — ДО ПЕРЕБОРА (пачка D, CH-05).** Здесь стояли два `Assert.All` без
+    /// единой проверки набора: на **пустой** таблице перебор проходит молча, и «подсветки нет»
+    /// доказывалось бы отсутствием строк. Восемь строк — шапка и семь дней; столько же требует
+    /// соседняя <see cref="У_каждой_строки_тонкий_разделитель_снизу"/>.
     /// </summary>
     [AvaloniaFact]
     public void Без_сегодняшнего_дня_подсветки_нет()
@@ -254,10 +259,17 @@ public class PeakTableViewTests
         var table = Table(Rows());
         var lines = PeakTableProbe.Lines(table);
 
+        Assert.Equal(8, lines.Count);
+
+        var blocks = PeakTableProbe.Blocks(table);
+
+        Assert.Equal(8, blocks.Count);
+        Assert.All(blocks, cells => Assert.NotEmpty(cells));
+
         Assert.All(lines, line => Assert.DoesNotContain(PanelLook.PeakTodayRowClass, line.Classes));
 
         Assert.All(
-            PeakTableProbe.Blocks(table),
+            blocks,
             line => Assert.All(
                 line,
                 cell => Assert.DoesNotContain(PanelLook.PeakNowCellClass, cell.Classes)));

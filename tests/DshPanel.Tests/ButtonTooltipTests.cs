@@ -191,6 +191,40 @@ public class ButtonTooltipTests
             PanelTestStand.Settle();
             AssertTips(stop, "вопрос о гашении перед копией", atLeast: 3);
             stop.Close();
+
+            // Вопрос перед обновлением движка (этап E3.2): у обеих его кнопок подсказка обязана
+            // говорить, что произойдёт по нажатию — «да» здесь значит «останови наш движок
+            // и поставь версию», и это самое дорогое нажатие в панели.
+            var engine = new ConfirmEngineWindow();
+            engine.Attach(new PanelQuestion(
+                PanelStrings.EngineUpdateAskTitle,
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture, PanelStrings.EngineUpdateAskFormat, "0.1.5-rc.2"),
+                PanelStrings.EngineUpdateAskYes,
+                PanelStrings.EngineUpdateAskNo,
+                PanelStrings.TipEngineUpdateAskYes,
+                PanelStrings.TipEngineUpdateAskNo));
+            engine.Show();
+            PanelTestStand.Settle();
+            AssertTips(engine, "вопрос об обновлении движка", atLeast: 2);
+            engine.Close();
+
+            // Тот же окно, но вопрос ОТКАТА (этап E3.3): подсказки у него свои — «да» значит
+            // «верни прежнюю версию», и они тоже обязаны быть.
+            var rollback = new ConfirmEngineWindow();
+            rollback.Attach(new PanelQuestion(
+                PanelStrings.EngineRollbackAskTitle,
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.EngineRollbackAskFormat, "0.2.0-rc.2", "0.1.5-rc.2"),
+                PanelStrings.EngineRollbackAskYes,
+                PanelStrings.EngineRollbackAskNo,
+                PanelStrings.TipEngineRollbackYes,
+                PanelStrings.TipEngineRollbackNo));
+            rollback.Show();
+            PanelTestStand.Settle();
+            AssertTips(rollback, "вопрос об откате движка", atLeast: 2);
+            rollback.Close();
         }
         finally
         {
@@ -230,7 +264,7 @@ public class ButtonTooltipTests
 
         // «Открыть агента» недоступна без сервера — и говорит именно это, а не «открыть агента».
         Assert.False(open!.IsEnabled);
-        Assert.Equal(PanelStrings.OpenAgentNoServerHint, ToolTip.GetTip(open) as string);
+        Assert.Equal(PanelStrings.OpenAgentNoServerNote, ToolTip.GetTip(open) as string);
 
         stopped.Close();
 

@@ -53,7 +53,7 @@ public class AgentBrowserTests
 
         Assert.False(opened);
         Assert.Empty(opener.Calls);
-        Assert.Contains(log, line => line.Contains("прогон проверки", StringComparison.Ordinal));
+        Assert.Contains(log, line => line.Contains(PanelStrings.AgentBrowserSuppressedLog, StringComparison.Ordinal));
 
         // Ошибка не пустая: вызывающий обязан сказать человеку, почему ничего не открылось.
         Assert.False(string.IsNullOrWhiteSpace(error));

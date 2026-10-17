@@ -8,6 +8,7 @@ using DshPanel.Issue;
 using DshPanel.Localization;
 using DshPanel.Shell;
 using Xunit;
+using System.Globalization;
 
 namespace DshPanel.Tests;
 
@@ -142,7 +143,7 @@ public class IssueReportTests
 
         var text = IssueReport.Text(facts);
 
-        Assert.Contains("Движок DSH", text, StringComparison.Ordinal);
+        Assert.Contains(PanelStrings.IssueReportEngine, text, StringComparison.Ordinal);
         Assert.Contains("не удалось узнать", text, StringComparison.Ordinal);
     }
 
@@ -622,6 +623,7 @@ public class IssueReportTests
     {
         var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
 
+        // КОРЕНЬ: диагностическая строка провала (печатается только когда проверка уже упала), не показ пути.
         Assert.False(string.IsNullOrEmpty(root), $"не нашёл корень репозитория вверх от «{AppContext.BaseDirectory}»");
 
         var path = Path.Combine(root, "src", "DshPanel", "Issue", "IssueReport.cs");

@@ -280,10 +280,20 @@ public sealed class BackupController : IBackupControl, IDisposable
     /// </summary>
     private readonly bool _confineToRunRoot;
 
+    /// <summary>
+    /// ПРАВО ВЗЯТЬ ФАЙЛЫ МАШИННОЙ УСТАНОВКИ ДВИЖКА В КОПИЮ (<see cref="RunRights.MachineEngineData"/>,
+    /// находка C1 CH-08). Необязательного значения у довода НЕТ намеренно: у него нет безопасного
+    /// умолчания ни в одну сторону — забыть в прогоне без окна значит утечку, а забыть у человека
+    /// значит тихую потерю движка в его же копии. Пусть решает компилятор. Это то же правило,
+    /// что у <c>mayOccupyOwnerPort</c> у контроллера сервера (`docs\ISOLATION.md` §2).
+    /// </summary>
+    private readonly bool _mayTakeMachineEngineData;
+
     public BackupController(
         AppPaths paths,
         Func<PanelSettings> settings,
         bool allowed,
+        bool mayTakeMachineEngineData,
         Func<DshEngine?>? locateEngine = null,
         Func<DateTimeOffset>? clock = null,
         Action<string>? log = null,
@@ -301,6 +311,7 @@ public sealed class BackupController : IBackupControl, IDisposable
         _log = log ?? (_ => { });
         _settingsOwner = settingsOwner;
         _confineToRunRoot = confineToRunRoot;
+        _mayTakeMachineEngineData = mayTakeMachineEngineData;
         _serverRunning = serverRunning ?? (() => false);
         _notify = notify ?? ((_, _, _) => { });
         _dispatch = dispatch ?? (action => action());
@@ -592,7 +603,14 @@ public sealed class BackupController : IBackupControl, IDisposable
             keyDirectories: settings.BackupKeyDirs,
             shareable: shareable,
             scope: scope,
-            extraExclusions: settings.BackupExtraExclusions);
+            extraExclusions: settings.BackupExtraExclusions,
+
+            // ДВА РУБЕЖА, И ОНИ РАЗНЫЕ (A4 + CH-11): право отвечает «чей это прогон», правило пути —
+            // «чей это каталог». Машинная установка движка берётся только с правом, а в изолированном
+            // прогоне не берётся НИ ОДИН корень вне его корня — ни движок, ни рабочая папка,
+            // ни каталоги ключей.
+            mayTakeMachineEngineData: _mayTakeMachineEngineData,
+            confineToRunRoot: _confineToRunRoot);
 
     /// <summary>
     /// Снять копию. <paramref name="serverRunning"/> — ПРАВДА О СЕРВЕРЕ на момент работы: работает ли

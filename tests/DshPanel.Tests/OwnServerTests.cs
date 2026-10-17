@@ -5,6 +5,7 @@ using System.Linq;
 using DshPanel.Server;
 using DshPanel.Shell;
 using Xunit;
+using System.Globalization;
 
 namespace DshPanel.Tests;
 
@@ -48,8 +49,24 @@ public class OwnServerTests
         public int EntryClears { get; private set; }
         public int OwnClears { get; private set; }
 
+        /// <summary>
+        /// Уборка записи НЕ УДАЁТСЯ — ровно как у настоящего файла, занятого другим процессом:
+        /// исключения нет (настоящий <c>Delete</c> глушит отказ молча), а файл остаётся на месте.
+        /// Нужно, чтобы проверить: панель спрашивает ФАЙЛ, а не «команда не бросила исключение».
+        /// </summary>
+        public bool ClearFails { get; set; }
+
+        /// <summary>Как называется файл записи в сообщении человеку.</summary>
+        public string OwnLabel { get; set; } = @"C:\Temp\dsh-own-home\state\own-server.txt";
+
         /// <summary>Чужой источник — файл панели 1.x. Только чтение, как и в жизни.</summary>
         public string Version1 { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Своя папка движка панели (этап E3). Пусто — приметы владения по пути нет, и это
+        /// безопасная сторона: узнаём по-прежнему по записи (порт · процесс · время).
+        /// </summary>
+        public string EngineDir { get; set; } = string.Empty;
 
         public ServerStateFiles StateFiles => new(
             ReadEntryLink: () => Entry,
@@ -57,7 +74,10 @@ public class OwnServerTests
             ClearEntryLink: () => { Entry = string.Empty; EntryClears++; },
             ReadOwnServer: () => Own,
             WriteOwnServer: text => { Own = text; LastOwnWritten = text; OwnWrites++; },
-            ClearOwnServer: () => { Own = string.Empty; OwnClears++; });
+            ClearOwnServer: () => { if (!ClearFails) Own = string.Empty; OwnClears++; })
+        {
+            DescribeOwnServer = () => OwnLabel,
+        };
     }
 
     private sealed class Killer : IProcessKiller
@@ -98,6 +118,13 @@ public class OwnServerTests
         public int OtherPort { get; init; }
         public int OtherPid { get; init; }
 
+        /// <summary>
+        /// Командная строка слушающего процесса. По умолчанию — ГЛОБАЛЬНАЯ установка движка
+        /// (как у человека); проверки подставляют свой путь, чтобы отличить «наш движок»
+        /// от «чужого глобального» (этап E3).
+        /// </summary>
+        public string CommandLineTemplate { get; set; } = RealDshCommandLine;
+
         public ServerProbe Probe => new(
             ListenerPid: port => port == OtherPort ? OtherPid : Listener,
             Listeners: () =>
@@ -108,7 +135,7 @@ public class OwnServerTests
                 if (OtherPort > 0) table.Add(new PortTable.Listener(OtherPort, OtherPid));
                 return table;
             },
-            CommandLine: pid => RealDshCommandLine + (pid == OtherPid ? OtherPort : Port),
+            CommandLine: pid => CommandLineTemplate + (pid == OtherPid ? OtherPort : Port),
             ProcessName: _ => "node",
             StartTicks: _ => ListenerTicks,
             AnswersFingerprint: _ => Fingerprint);
@@ -123,7 +150,8 @@ public class OwnServerTests
         List<string>? log = null,
         Func<DshEngine?>? locateEngine = null,
         Func<int>? requestedPort = null,
-        Func<string, LinkProbe>? linkProbe = null) =>
+        Func<string, LinkProbe>? linkProbe = null,
+        Func<DateTimeOffset>? clock = null) =>
         new(
             @"C:\Temp\dsh-own-home",
             () => @"C:\Temp",
@@ -140,8 +168,10 @@ public class OwnServerTests
             adoptedPort: adoptedPort,
             rememberAdoptedPort: rememberAdoptedPort,
             files: files.StateFiles,
+            ownEngineDir: () => files.EngineDir,
             foundServerEntryLink: () => files.Version1,
-            linkProbe: linkProbe);
+            linkProbe: linkProbe,
+            clock: clock);
 
     /// <summary>
     /// Сколько проверка ЖДЁТ поднятый ею сервер.
@@ -210,6 +240,185 @@ public class OwnServerTests
         Assert.Equal(record.Format(), files.Own);
         Assert.Equal(0, files.OwnClears);
         Assert.Contains(log, line => line.Contains("узнан по записи", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// ⚠️ ТРЕТЬЯ ПРИМЕТА ВЛАДЕНИЯ (этап E3): СВОЙ СЕРВЕР УЗНАЁТСЯ ПО ПУТИ ДВИЖКА, когда запись
+    /// ему уже не пара.
+    ///
+    /// **Что здесь происходит.** Панель обновила **свой** движок и подняла сервер из новой папки:
+    /// процесс **новый** — другая пара «номер + время создания» (в проверке: 4242 → 5000).
+    /// Прежняя запись перестала совпадать. Без приметы по пути панель приняла бы **свой же** сервер
+    /// за найденный чужой: предложила бы «встроиться» и отказывалась бы его гасить.
+    /// </summary>
+    [Fact]
+    public void Свой_сервер_узнаётся_по_пути_движка_после_обновления()
+    {
+        const string engineDir = @"C:\Temp\dsh-own-home\engine";
+        var ownBin = OwnEngine.BinPath(engineDir, "0.2.0-rc.2");
+
+        var world = new World { Port = 3097, Listener = 5000, ListenerTicks = Ticks + 7 };
+        world.CommandLineTemplate = $"\"node.exe\" {ownBin} web --no-open --port ";
+
+        var saved = new OwnServerRecord(3097, 4242, Ticks, OwnEngine.BinPath(engineDir, "0.1.5-rc.2"), "0.1.5-rc.2");
+        var files = new Files { Own = saved.Format(), EngineDir = engineDir };
+        var log = new List<string>();
+
+        using var controller = Controller(world, files, log: log);
+        var state = controller.Refresh();
+
+        Assert.Equal(ServerOwner.Panel, controller.Owner);
+        Assert.Equal(3097, state.Port);
+        Assert.Equal(5000, state.Pid);
+
+        Assert.Contains(log, line => line.Contains("ПО ПУТИ ДВИЖКА", StringComparison.Ordinal));
+
+        // Запись приведена в порядок: следующий перезапуск панели снова узнает сервер, и в записи
+        // теперь НАЗВАН движок — тот, из которого сервер поднят сейчас.
+        var rewritten = OwnServerRecord.Parse(files.Own);
+
+        Assert.NotNull(rewritten);
+        Assert.Equal(5000, rewritten!.Value.Pid);
+        Assert.Equal(Ticks + 7, rewritten.Value.StartTicks);
+        Assert.Equal(ownBin, rewritten.Value.EnginePath);
+    }
+
+    /// <summary>
+    /// ЧУЖОЙ ГЛОБАЛЬНЫЙ ДВИЖОК СВОИМ НЕ СТАНОВИТСЯ — даже когда запись на него указывает, а порт
+    /// тот самый. Примета по пути отвечает «нет», и панель ведёт себя как прежде: запись снимает,
+    /// сервер не присваивает, ничего не гасит (решение владельца: чужую установку не трогаем).
+    /// </summary>
+    [Fact]
+    public void Чужой_глобальный_движок_своим_не_становится()
+    {
+        const string engineDir = @"C:\Temp\dsh-own-home\engine";
+
+        var world = new World { Port = 3097, Listener = 5000, ListenerTicks = Ticks + 7 };
+        world.CommandLineTemplate = RealDshCommandLine;
+
+        var saved = new OwnServerRecord(3097, 4242, Ticks, OwnEngine.BinPath(engineDir, "0.1.5-rc.2"), "0.1.5-rc.2");
+        var files = new Files { Own = saved.Format(), EngineDir = engineDir };
+        var log = new List<string>();
+
+        using var controller = Controller(world, files, log: log);
+        controller.Refresh();
+
+        Assert.Equal(ServerOwner.None, controller.Owner);
+        Assert.Equal(string.Empty, files.Own);
+        Assert.Equal(1, files.OwnClears);
+        Assert.DoesNotContain(log, line => line.Contains("ПО ПУТИ ДВИЖКА", StringComparison.Ordinal));
+
+        // Сервер на порту жив и НЕ ТРОНУТ: панель его просто не присвоила.
+        Assert.Equal(5000, world.Listener);
+    }
+
+    /// <summary>
+    /// ПОХОЖАЯ ПАПКА — НЕ НАША. Примета владения сверяется по границе имени папки, а не по
+    /// вхождению подстроки: движок из `…\engine-чужой\…` своим не объявляется (тот же урок,
+    /// что с `…\lib\bin.js.old`).
+    /// </summary>
+    [Fact]
+    public void Похожая_папка_движка_своей_не_считается()
+    {
+        const string engineDir = @"C:\Temp\dsh-own-home\engine";
+
+        var world = new World { Port = 3097, Listener = 5000, ListenerTicks = Ticks + 7 };
+        world.CommandLineTemplate =
+            "\"node.exe\" C:\\Temp\\dsh-own-home\\engine-чужой\\0.2.0-rc.2\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js web --no-open --port ";
+
+        var files = new Files
+        {
+            Own = new OwnServerRecord(3097, 4242, Ticks).Format(),
+            EngineDir = engineDir,
+        };
+
+        using var controller = Controller(world, files);
+        controller.Refresh();
+
+        Assert.Equal(ServerOwner.None, controller.Owner);
+        Assert.Equal(string.Empty, files.Own);
+    }
+
+    /// <summary>
+    /// ⚠️ НАЙДЕННЫЙ СЕРВЕР НА **НАШЕМ** ДВИЖКЕ — ЭТО НЕ «ПОДНЯТ НЕ ПАНЕЛЬЮ» (этап E3, правило
+    /// «две версии движка на одном профиле»).
+    ///
+    /// Случай из жизни: панель обновила свой движок, а сервер **старой** версии продолжает работать.
+    /// Найден он **нашим** (путь запуска — в нашей папке движка), и панель обязана:
+    ///
+    /// * назвать его человеку **нашим** движком и назвать **версию** — «поднят не панелью» про
+    ///   собственный движок было бы неправдой;
+    /// * **не поднимать второй** сервер на том же профиле (две версии пишут в одни файлы — это
+    ///   опаснее чужого сервера) и сказать словами «сначала остановите его», а **не** предлагать
+    ///   «взять под управление» то, что и так наше.
+    /// </summary>
+    [Fact]
+    public void Найденный_сервер_на_нашем_движке_называется_нашим_и_версией()
+    {
+        const string engineDir = @"C:\Temp\dsh-own-home\engine";
+        const string version = "0.1.5-rc.2";
+
+        var world = new World { Port = 3080, Listener = 5000, ListenerTicks = Ticks };
+        world.CommandLineTemplate = $"\"node.exe\" {OwnEngine.BinPath(engineDir, version)} web --no-open --port ";
+
+        var files = new Files { EngineDir = engineDir };
+        var log = new List<string>();
+
+        using var controller = Controller(world, files, log: log, requestedPort: () => 3097);
+
+        // 1. Разведка называет находку НАШЕЙ и называет версию.
+        var found = controller.Scan().First;
+
+        Assert.NotNull(found);
+        Assert.True(found!.Value.IsOurEngine);
+        Assert.Equal(version, found.Value.OwnVersion);
+
+        // 2. Человеку сказано про НАШ движок и версию — а не «поднят не панелью».
+        var model = new ServerPanelModel(controller, controller.Scan());
+
+        Assert.Contains(version, model.FoundText, StringComparison.Ordinal);
+        Assert.Contains("сервер панели версии", model.FoundText, StringComparison.Ordinal);
+        Assert.DoesNotContain("не панелью", model.FoundText, StringComparison.Ordinal);
+
+        // 3. Второй сервер на том же профиле не поднимается, и отказ называет причину и выход.
+        var state = controller.Start(StartWait);
+
+        Assert.NotEqual(ServerOwner.Panel, controller.Owner);
+        Assert.Contains(version, state.Detail, StringComparison.Ordinal);
+        Assert.Contains("остановите", state.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("возьмите найденный под управление", state.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// А ЧУЖОЙ ДВИЖОК ЧЕЛОВЕКА ГОВОРИТ ПРЕЖНИМИ СЛОВАМИ: «найден работающий DSH… возьмите его
+    /// под управление». Разные случаи — разные слова, и путать их нельзя: в одном панель предлагает
+    /// взять чужое под управление, в другом сама просит остановить своё старое.
+    /// </summary>
+    [Fact]
+    public void Найденный_чужой_движок_говорит_прежними_словами()
+    {
+        const string engineDir = @"C:\Temp\dsh-own-home\engine";
+
+        var world = new World { Port = 3080, Listener = 5000, ListenerTicks = Ticks };
+        world.CommandLineTemplate = RealDshCommandLine;
+
+        var files = new Files { EngineDir = engineDir };
+
+        using var controller = Controller(world, files, requestedPort: () => 3097);
+
+        var found = controller.Scan().First;
+
+        Assert.NotNull(found);
+        Assert.False(found!.Value.IsOurEngine);
+
+        var model = new ServerPanelModel(controller, controller.Scan());
+
+        Assert.Contains("не панелью", model.FoundText, StringComparison.Ordinal);
+        Assert.DoesNotContain("наш сервер DSH", model.FoundText, StringComparison.Ordinal);
+
+        var state = controller.Start(StartWait);
+
+        Assert.Contains("возьмите найденный под управление", state.Detail, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -816,7 +1025,7 @@ public class OwnServerTests
         // Сервер поднят панелью — значит порт наш, и согласие про него больше не верно.
         Assert.Equal(ServerOwner.Panel, controller.Owner);
         Assert.Equal(0, remembered);
-        Assert.Contains(log, line => line.Contains("теперь наш", StringComparison.Ordinal));
+        Assert.Contains(log, line => line.Contains("теперь принадлежит панели", StringComparison.Ordinal));
 
         // Запись о своём сервере сделана — по ней его узнают после перезапуска панели.
         Assert.Equal(1, files.OwnWrites);
@@ -895,5 +1104,166 @@ public class OwnServerTests
             string.Format(
                 System.Globalization.CultureInfo.CurrentCulture, PanelStrings.SrvAnswersAdoptedFormat, 3080),
             controller.Refresh().Detail);
+    }
+
+    // ------------------------------------------- устаревшая запись: предел, пауза и слова человеку
+    //
+    // ⚠️ Здесь закрыт найденный разведкой этапа B (10.10.2026) ПОВТОР БЕЗ ПРЕДЕЛА: осмотр идёт раз
+    // в секунду, а снятие записи может не удаться (файл занят другим процессом — настоящий
+    // `ServerStateFiles.Delete` глушит отказ МОЛЧА, исключения не будет). Прежде панель пробовала
+    // и писала строку в журнал каждую секунду — бесконечно и без единого слова человеку.
+
+    /// <summary>
+    /// ПРЕДЕЛ И ПАУЗА: пока пауза не прошла, новой попытки и новой строки НЕТ.
+    ///
+    /// Пары здесь две, и обе нужны: «в паузе попыток не больше одной» без второй половины
+    /// доказывало бы лишь то, что панель не пробует НИКОГДА; поэтому рядом проверяется, что после
+    /// паузы попытка есть.
+    /// </summary>
+    [Fact]
+    public void Неубитая_запись_повторяется_с_паузой_а_не_каждую_секунду()
+    {
+        var world = new World { Port = 3097, Listener = 0 };
+        var files = new Files
+        {
+            Own = new OwnServerRecord(3097, 4242, Ticks).Format(),
+            ClearFails = true,
+        };
+
+        var log = new List<string>();
+        var now = new DateTimeOffset(2026, 10, 10, 12, 0, 0, TimeSpan.Zero);
+
+        using var controller = Controller(world, files, log: log, clock: () => now);
+
+        // Первый осмотр: попытка есть, и строка «запись устарела» — одна.
+        controller.Refresh();
+
+        Assert.Equal(1, files.OwnClears);
+        Assert.Single(log, line => line.Contains("устарела", StringComparison.Ordinal));
+
+        // Пять секунд осмотра подряд (а он идёт раз в секунду) — НИ одной новой попытки.
+        for (var i = 0; i < 5; i++)
+        {
+            now = now.AddSeconds(1);
+            controller.Refresh();
+        }
+
+        Assert.Equal(1, files.OwnClears);
+        Assert.Single(log, line => line.Contains("устарела", StringComparison.Ordinal));
+
+        // Пауза прошла — попытка есть. Это и есть вторая половина пары.
+        now = now.Add(ServerController.ForgetPause);
+        controller.Refresh();
+
+        Assert.Equal(2, files.OwnClears);
+    }
+
+    /// <summary>
+    /// ПОСЛЕ ЛИМИТА — СЛОВА ЧЕЛОВЕКУ, и ровно одни: имя файла, число попыток и место
+    /// (строка состояния панели). Дальше — тишина с редким молчаливым повтором.
+    ///
+    /// ⚠️ Проверка бьёт по трём разным местам сразу: строка в журнале, строка состояния и то, что
+    /// повторов БОЛЬШЕ НЕТ. Убери любое — и «тихий цикл» вернётся либо слова не дойдут.
+    /// </summary>
+    [Fact]
+    public void После_лимита_панель_говорит_словами_и_замолкает()
+    {
+        var world = new World { Port = 3097, Listener = 0 };
+        var files = new Files
+        {
+            Own = new OwnServerRecord(3097, 4242, Ticks).Format(),
+            ClearFails = true,
+        };
+
+        var log = new List<string>();
+        var now = new DateTimeOffset(2026, 10, 10, 12, 0, 0, TimeSpan.Zero);
+
+        using var controller = Controller(world, files, log: log, clock: () => now);
+
+        // До лимита причина в состоянии не называется: панель ещё пробует.
+        var first = controller.Refresh();
+        Assert.Equal(PanelStrings.SrvNotStartedYet, first.Detail);
+
+        // Вторая и третья попытки — с паузой.
+        now = now.Add(ServerController.ForgetPause);
+        controller.Refresh();
+        now = now.Add(ServerController.ForgetPause);
+        var third = controller.Refresh();
+
+        Assert.Equal(ServerController.ForgetAttempts, files.OwnClears);
+
+        var refusal = log.Where(line => line.Contains("не убирается", StringComparison.Ordinal)).ToList();
+
+        Assert.Single(refusal);
+        Assert.Contains("own-server.txt", refusal[0], StringComparison.Ordinal);
+        Assert.Contains(
+            ServerController.ForgetAttempts.ToString(System.Globalization.CultureInfo.CurrentCulture),
+            refusal[0],
+            StringComparison.Ordinal);
+
+        // И те же слова — в состоянии панели, а не только в журнале.
+        Assert.Equal(refusal[0], third.Detail);
+
+        // А дальше — тишина: редкий повтор не раньше, чем через ForgetSlowRetry, и без новых строк.
+        for (var i = 0; i < 20; i++)
+        {
+            now = now.AddSeconds(1);
+            controller.Refresh();
+        }
+
+        Assert.Equal(ServerController.ForgetAttempts, files.OwnClears);
+        Assert.Single(log, line => line.Contains("не убирается", StringComparison.Ordinal));
+
+        now = now.Add(ServerController.ForgetSlowRetry);
+        controller.Refresh();
+
+        Assert.Equal(ServerController.ForgetAttempts + 1, files.OwnClears);
+        Assert.Single(log, line => line.Contains("не убирается", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// ПАРНАЯ ПРОВЕРКА: запись УБРАЛАСЬ — ни отказа, ни слов о нём.
+    ///
+    /// Без неё первая проверка доказывала бы лишь то, что панель ругается ВСЕГДА, а «панель
+    /// спрашивает файл, а не результат вызова» — ничем бы не подтверждалось.
+    /// </summary>
+    [Fact]
+    public void Убранная_запись_отказа_не_оставляет()
+    {
+        var world = new World { Port = 3097, Listener = 0 };
+        var files = new Files
+        {
+            Own = new OwnServerRecord(3097, 4242, Ticks).Format(),
+            ClearFails = true,
+        };
+
+        var log = new List<string>();
+        var now = new DateTimeOffset(2026, 10, 10, 12, 0, 0, TimeSpan.Zero);
+
+        using var controller = Controller(world, files, log: log, clock: () => now);
+
+        // Две неудачные попытки — отказа ещё нет (лимит не выбран), запись на месте.
+        controller.Refresh();
+
+        Assert.Equal(1, files.OwnClears);
+        Assert.NotEqual(string.Empty, files.Own);
+
+        now = now.Add(ServerController.ForgetPause);
+        controller.Refresh();
+
+        Assert.Equal(2, files.OwnClears);
+        Assert.NotEqual(string.Empty, files.Own);
+        Assert.DoesNotContain(log, line => line.Contains("не убирается", StringComparison.Ordinal));
+        Assert.Single(log, line => line.Contains("устарела", StringComparison.Ordinal));
+
+        // Запись убралась (файл освободился): третья попытка проходит, отказа НЕ было и нет.
+        files.ClearFails = false;
+
+        now = now.Add(ServerController.ForgetPause);
+        var state = controller.Refresh();
+
+        Assert.Equal(string.Empty, files.Own);
+        Assert.Equal(PanelStrings.SrvNotStartedYet, state.Detail);
+        Assert.DoesNotContain(log, line => line.Contains("не убирается", StringComparison.Ordinal));
     }
 }

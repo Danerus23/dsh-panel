@@ -86,6 +86,7 @@ public class BackupScopeWindowTests
             paths,
             () => settings.Settings,
             allowed: true,
+            mayTakeMachineEngineData: false,
             locateEngine: () => null,
             clock: () => new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.FromHours(3)),
             log: _ => { },
@@ -131,7 +132,7 @@ public class BackupScopeWindowTests
 
             // Пояснение автоматического режима — первое, что видит человек; ниже к нему
             // дописывается размер (он считается в фоне, поэтому проверка идёт по началу строки).
-            Assert.StartsWith(PanelStrings.BackupScopeAutoHint, Text(window, "ScopeHintText"), StringComparison.Ordinal);
+            Assert.StartsWith(PanelStrings.BackupScopeAutoNote, Text(window, "ScopeHintText"), StringComparison.Ordinal);
 
             scope.SelectedIndex = 1;
 

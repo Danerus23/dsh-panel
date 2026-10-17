@@ -48,17 +48,114 @@ $mayMatch = @{
     'PricingHistoryArrowNone'    = 'прочерк «сравнивать не с чем», слов нет'
     'BackupRotationFailedItemFormat' = 'шаблон из одних подстановок: {0} — {1}'
     'BackupRotationItemFormat'   = 'шаблон из одних подстановок: {0} ({1})'
+    'EnvSkillValueFormat'        = 'шаблон из одних подстановок: {0} — {1} (вердикт и подробность умения)'
+    'EnvValueDetailFormat'       = 'шаблон из одних подстановок: {0} — {1} (значение строки и его подробность: путь и откуда он, порт и чем занят)'
 }
 
 $problems = @()
 $scanned = 0
 $dictionaries = @{}
+$records = @{}
 
+<#
+.SYNOPSIS
+СЧИТАЕТ ЗАПИСИ В ФАЙЛЕ СЛОВАРЯ ОТДЕЛЬНО ОТ РАЗБОРА JSON — и называет ключи, записанные дважды.
+
+.DESCRIPTION
+Зачем отдельная функция, а не `ConvertFrom-Json`: разбор СВОДИТ одинаковые ключи в один
+и о повторе молчит. Замер 13.10.2026: в каждом словаре записей 1228, а разных ключей 1227 —
+`PhonePageWaiting` лежал дважды, панель молча брала последнюю запись, и ни одна проверка
+этого не видела. Строки верхнего уровня узнаются по началу строки (`"ключ":`) — в словаре
+панели они ровно так и записаны, по одной на строку.
+
+.OUTPUTS
+Хэш-таблица: `Records` — сколько записей в файле, `Keys` — сколько из них разных,
+`Names` — имена повторившихся ключей.
+#>
+function TwinsInDictionary {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Raw,
+        [Parameter(Mandatory)][string]$Code
+    )
+
+    # ⚠️ СЧЁТ ИДЁТ ПО ТЕКСТУ, А НЕ РАЗБОРОМ JSON И НЕ ПО СТРОКАМ.
+    #
+    # Разбор (`ConvertFrom-Json`) сводит одинаковые ключи в один и о повторе молчит — ради этого
+    # сторож и заведён. Но и «ключ стоит в начале строки» не годится: замер 13.10.2026 — в
+    # `ru.json` одна запись стоит БЕЗ ОТСТУПА, в нулевой колонке, и разбор по строкам терял бы
+    # такую запись. Ещё одна проба — «имя в кавычках с двоеточием» — тоже неверна: она считает
+    # подстановки вида `{0}` внутри значений (`"… : {0}"`), и сторож краснел на целом словаре.
+    #
+    # Поэтому: идём по тексту и считаем имена ключей ВЕРХНЕГО объекта — так же, как это делает
+    # разбор JSON. Вложенных объектов в словарях панели нет, но шаг глубины нужен: словарь
+    # однажды может получить вложенную запись, и тогда счёт обязан остаться верным.
+    $names = [System.Collections.Generic.List[string]]::new()
+    $depth = 0
+    $expectKey = $false
+    $index = 0
+
+    while ($index -lt $Raw.Length) {
+        $char = $Raw[$index]
+
+        if ($char -eq '"') {
+            $start = $index + 1
+            $index++
+
+            while ($index -lt $Raw.Length) {
+                if ($Raw[$index] -eq '\') { $index += 2; continue }
+                if ($Raw[$index] -eq '"') { break }
+                $index++
+            }
+
+            if ($depth -eq 1 -and $expectKey) {
+                $names.Add($Raw.Substring($start, $index - $start))
+                $expectKey = $false
+            }
+
+            $index++
+            continue
+        }
+
+        if ($char -eq '{' -or $char -eq '[') {
+            $depth++
+            # ⚠️ Первый ключ идёт сразу за `{` верхнего объекта: без этого он терялся.
+            $expectKey = ($depth -eq 1)
+            $index++
+            continue
+        }
+
+        if ($char -eq '}' -or $char -eq ']') {
+            $depth--
+            if ($depth -eq 1) { $expectKey = $true }
+            $index++
+            continue
+        }
+
+        if ($char -eq ',' -and $depth -eq 1) { $expectKey = $true }
+        elseif ($char -eq ':' -and $depth -eq 1) { $expectKey = $false }
+
+        $index++
+    }
+
+    if ($names.Count -eq 0) {
+        # Пустой словарь — не «повторов нет», а беда: её называет --lang-selftest и сами проверки.
+        return @{ Records = 0; Keys = 0; Names = @() }
+    }
+
+    $twins = @($names | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+
+    return @{ Records = $names.Count; Keys = @($names | Select-Object -Unique).Count; Names = $twins }
+}
+
+# ⚠️ ПРОПАВШИЙ ВХОД ЗДЕСЬ БЫЛ АВАРИЕЙ, А НЕ ОТКАЗОМ (t15, 17.10.2026). До правки убранный
+# `ru.json` давал код 1 и текст .NET-исключения (`ContainsKey … Value cannot be null`): имя файла
+# лежало в списке замечаний, который печатается в конце, — а до конца дело не доходило.
+$missingDictionaries = @()
 foreach ($code in $languages.Keys | Sort-Object) {
     $path = Join-Path $langDir ($code + '.json')
 
     if (-not (Test-Path -LiteralPath $path)) {
-        $problems += ('нет файла словаря: ' + $path)
+        $missingDictionaries += $path
         continue
     }
 
@@ -69,7 +166,32 @@ foreach ($code in $languages.Keys | Sort-Object) {
         $problems += (($code + '.json — BOM там, где его быть не должно'))
     }
 
-    $dictionaries[$code] = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
+    $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $dictionaries[$code] = $raw | ConvertFrom-Json -AsHashtable
+
+    # ЗАПИСЕЙ БОЛЬШЕ, ЧЕМ КЛЮЧЕЙ — ЗНАЧИТ КЛЮЧ ЗАПИСАН ДВАЖДЫ, И ЭТО НАДО НАЗВАТЬ.
+    #
+    # ⚠️ От какого случая (найдено проверяющим 13.10.2026). `PhonePageWaiting` лежал в каждом
+    # словаре ДВАЖДЫ — «Вопросов нет — ждём.» и «Панель на связи и ждёт вопроса от агента…».
+    # Разбор JSON сводит одинаковые ключи в один и МОЛЧИТ: панель брала последнюю запись, обе
+    # проверки (`--lang-selftest` и этот сторож) были зелёными, а 1228-я запись просто исчезала.
+    # Мутации проверяющего: подложенные две одинаковые записи — `--lang-selftest` код 0 (слеп);
+    # убранный ключ `AboutTitle` в en.json — код 1 (жив). Поэтому счёт ЗАПИСЕЙ идёт отдельно
+    # от разбора: `ConvertFrom-Json` для этого не годится по устройству.
+    $twin = TwinsInDictionary -Raw $raw -Code $code
+    $records[$code] = $twin.Records
+
+    if ($twin.Names.Count -gt 0) {
+        $problems += ($code + '.json — записей ' + $twin.Records + ', а разных ключей ' + $twin.Keys +
+                      ': ключ записан дважды (' + ($twin.Names -join ', ') + ')')
+    }
+}
+
+if ($missingDictionaries.Count -gt 0) {
+    Write-Host ('неприменимо: нет файла словаря — ' + $missingDictionaries.Count + ' из ' + $languages.Count)
+    foreach ($item in $missingDictionaries) { Write-Host ('  ' + $item) }
+    Write-Host 'сверять три языка нечем: пропавший словарь — пропавший вход, а не «повторов нет»'
+    exit 2
 }
 
 if ($dictionaries.Count -lt 2) {
@@ -158,6 +280,7 @@ if ($problems.Count -gt 0) {
 }
 
 Write-Host ('словари в порядке: {0} ключей × {1} языка ({2})' -f $scanned, $dictionaries.Count, (($languages.Keys | Sort-Object) -join ', '))
+Write-Host ('записей в файлах: {0} — в каждом словаре столько же, сколько разных ключей (счёт отдельно от разбора JSON)' -f (($records.Keys | Sort-Object | ForEach-Object { $_ + ' ' + $records[$_] }) -join ', '))
 Write-Host ('совпадать во всех трёх разрешено {0} строкам — имена, символы и шаблоны без слов' -f $mayMatch.Count)
 Write-Host 'ЧЕСТНО О ГРАНИЦЕ: проверка механическая. Смысл переводов читает человек — это сказано в docs\ROADMAP.md.'
 exit 0

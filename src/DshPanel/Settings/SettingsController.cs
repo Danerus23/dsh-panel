@@ -92,6 +92,33 @@ public interface ISettingsControl
     string EnvironmentText();
 
     /// <summary>
+    /// ОТКУДА ОТЧЁТ БЕРЁТ ФАКТЫ УМЕНИЙ «ЗДЕСЬ И СЕЙЧАС» (задание владельца 14.10.2026, §2).
+    ///
+    /// ⚠️ **РЕАЛИЗАЦИЯ ПО УМОЛЧАНИЮ — «пробы не было», и это БЕЗОПАСНАЯ сторона:** прогон проверки
+    /// ничего не спрашивает и получает честное «панель сейчас не спрашивала этот сервер DSH».
+    /// Живую пробу подключает обычный запуск человеком (<see cref="Server.LiveSkillProbe"/>).
+    ///
+    /// ⚠️ **Умолчание живёт В САМОМ ИНТЕРФЕЙСЕ намеренно:** мест, где строится контроллер, больше
+    /// пятнадцати, и подмен настроек в проверках ещё несколько; без умолчания пришлось бы тронуть
+    /// ВСЕ. Умолчание НИЧЕГО не делает — и это видно прямо здесь, а не выясняется по подменам.
+    /// </summary>
+    Server.SkillProbeDoor SkillProbe => Server.SkillProbeDoor.None;
+
+    /// <summary>
+    /// РАЗДЕЛ «СЕРВЕР» МОГ ИЗМЕНИТЬСЯ — СООБЩЕНИЕ О ДАННЫХ, НА КОТОРОЕ ПОДПИСЫВАЕТСЯ ОКНО
+    /// (задание владельца 14.10.2026, §3).
+    ///
+    /// **От какого случая.** Владелец открыл раздел, увидел «кучу красных» и решил, что панель
+    /// сломана; правду показывала только кнопка «Проверить окружение». Его слова: *«Я думал панель
+    /// автоматически это делает»*.
+    ///
+    /// ⚠️ **Реализация по умолчанию МОЛЧИТ** — тем же доводом, что и у двери сервера: подстановок
+    /// настроек в проверках много, и каждой заводить событие незачем. Молчащая дверь честно
+    /// говорит, что сообщать ей нечего; окно при этом остаётся с кнопкой, как и было.
+    /// </summary>
+    event Action? EnvironmentChanged { add { } remove { } }
+
+    /// <summary>
     /// Показать человеку КАТАЛОГ ФАЙЛА НАСТРОЕК — в проводнике, по его щелчку.
     ///
     /// Нужно окну настроек: второе, что человек делает с настройками, — правит файл руками
@@ -108,6 +135,26 @@ public interface ISettingsControl
     /// <param name="error">Причина отказа словами (пусто, если открылось).</param>
     /// <returns>Открылся ли каталог.</returns>
     bool OpenSettingsFolder(out string error)
+    {
+        error = PanelStrings.SettingsFolderMissing;
+        return false;
+    }
+
+    /// <summary>
+    /// ОТКРЫТЬ ПАПКУ СТРОКИ ОТЧЁТА ОБ ОКРУЖЕНИИ («Открыть папку» в разделе «Сервер») — тем же
+    /// правом и той же дверью, что каталог настроек.
+    ///
+    /// **Зачем отдельная дверь, когда есть <see cref="OpenSettingsFolder"/>.** Та открывает ОДИН
+    /// известный каталог; строка отчёта приносит свой (данные сервера DSH, рабочая папка), и
+    /// подменять её своим путём окно не имеет права: путь — свойство раскладки, а не вид.
+    ///
+    /// ⚠️ **Решение о праве остаётся у ВЛАДЕЛЬЦА настроек** (<see cref="SettingsController.Writable"/>),
+    /// как и у каталога настроек: прогон проверки чужие каталоги не открывает вовсе. Реализация
+    /// по умолчанию отказывает теми же словами — подмена владельца настроек путей не знает.
+    /// </summary>
+    /// <param name="folder">Каталог, который надо показать человеку.</param>
+    /// <param name="error">Причина отказа словами (пусто, если открылось).</param>
+    bool OpenFolder(string folder, out string error)
     {
         error = PanelStrings.SettingsFolderMissing;
         return false;
@@ -172,6 +219,24 @@ public interface ISettingsControl
     /// Реализация по умолчанию возвращает <c>false</c> — как у соседей.
     /// </summary>
     bool SetUpdateChecked(Update.UpdateTraces traces) => false;
+
+    /// <summary>
+    /// Запомнить ПОСЛЕДНЮЮ ПОПЫТКУ проверки выпусков (<see cref="Update.UpdateAttempt"/>) —
+    /// когда стучались и чем кончилось.
+    ///
+    /// ⚠️ **Нужна не для красоты, а чтобы отказ переживал перезапуск.** Отметка удачной проверки
+    /// (<see cref="SetUpdateCheckedAt"/>) при отказе НЕ пишется — иначе панель соврала бы
+    /// («проверено», хотя нет) и заперла бы проверку на сутки. Значит, после отказа суточный гейт
+    /// открыт, и без памяти о попытке следующий запуск панели **снова** пошёл бы в сеть — в том
+    /// числе в выеденный лимит GitHub. Память о попытке — то единственное, на чём держится отступ.
+    ///
+    /// Принимает ОДНУ запись: отметка, вид и причина описывают одно событие и записаться обязаны
+    /// вместе (иначе получилось бы «попытка была, а когда — не помним», и отступ не посчитать).
+    ///
+    /// Реализация по умолчанию возвращает <c>false</c> — как у соседей: подмена владельца настроек
+    /// писать не умеет, и притвориться, что запомнила, значило бы врать о соблюдении отступа.
+    /// </summary>
+    bool SetUpdateAttempt(Update.UpdateAttempt attempt) => false;
 
     /// <summary>
     /// Запомнить версию, которую человек ПРОПУСТИЛ (кнопка «Пропустить эту версию» в разделе
@@ -255,12 +320,33 @@ public sealed class SettingsController : ISettingsControl
 
         if (LoadProblem.Length > 0) _log(PanelStrings.SettingsLoadLog + " " + LoadProblem);
 
+        // ПЕРЕЧЕНЬ НЕПРИНЯТЫХ ИМЁН — В ЖУРНАЛ, А НЕ НА ЭКРАН (дефект живого прогона 11.10.2026):
+        // человеку в настройках показывается одна строка о том, что в файле есть значения от более
+        // новой версии панели, а имена уходят тому, кто разбирается в записях. Сами значения при
+        // этом НЕ теряются: их кладёт обратно запись настроек (`SettingsStore.Save`).
+        var newer = allowed ? _store.NewerKeys : Array.Empty<string>();
+
+        if (newer.Count > 0)
+        {
+            _log(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.SettingsNewerVersionLogFormat,
+                string.Join(", ", newer)));
+        }
+
         // Тема применяется сразу при чтении: иначе человек видел бы не свою тему до первого
         // открытия настроек, а панель в трее живёт без окна месяцами.
         ApplyThemeSafely(Settings.Theme);
     }
 
     public PanelSettings Settings { get; private set; }
+
+    /// <summary>
+    /// ПОДСКАЗКИ О ВЕРСИЯХ ДВИЖКА из публичного репозитория (этап E2). Их кладёт сюда тот, кто
+    /// прочитал файл в фоне; отчёт только показывает. Пусто — «не проверялась», и панель работает:
+    /// подсказка не имеет права ничего ронять.
+    /// </summary>
+    public Server.EngineHints Hints { get; set; } = Server.EngineHints.Empty;
 
     public bool Writable { get; }
 
@@ -401,6 +487,20 @@ public sealed class SettingsController : ISettingsControl
             out error);
 
     /// <summary>
+    /// Показать ПАПКУ СТРОКИ отчёта в проводнике — той же дверью и по тому же праву, что каталог
+    /// настроек: открывает только тот прогон, которому эти настройки принадлежат. Путь приходит
+    /// от строки отчёта (он — свойство раскладки, а не вид), и подменяется он здесь только
+    /// проверкой права — подставлять свой путь вместо показанного окно не имеет права.
+    /// </summary>
+    public bool OpenFolder(string folder, out string error) =>
+        AgentBrowser.TryOpenFolder(
+            Writable,
+            folder,
+            AgentBrowser.OpenWithShell,
+            _log,
+            out error);
+
+    /// <summary>
     /// Сменить АКТИВНОГО агента — и сохранить это тем же путём, что кнопка «Сохранить».
     ///
     /// Нужно ГЛАВНОМУ окну (решение владельца 27.09.2026: активный агент меняется там, где
@@ -523,6 +623,27 @@ public sealed class SettingsController : ISettingsControl
     }
 
     /// <summary>
+    /// ЗАПОМНИТЬ ПОПЫТКУ ПРОВЕРКИ — тем же путём, что отметку и следы: копия действующих
+    /// настроек, правка трёх полей, сохранение.
+    ///
+    /// ⚠️ **Пишется при КАЖДОЙ попытке, и удачной тоже** (вид `ok`): иначе после удачной проверки
+    /// в файле осталась бы старая неудача, и панель держала бы отступ, уже ни на чём не основанный.
+    /// И трёх полей здесь ровно три, а не два: причина без вида не отличила бы лимит от прочей
+    /// неудачи, а вид без причины не объяснил бы человеку, что случилось.
+    /// </summary>
+    public bool SetUpdateAttempt(Update.UpdateAttempt attempt)
+    {
+        var next = SettingsStore.Clean(Settings);
+        next.UpdateAttemptAt = attempt.Any
+            ? Pricing.PricingDecisions.Stamp(attempt.At)
+            : string.Empty;
+        next.UpdateAttemptKind = attempt.Any ? attempt.Kind : string.Empty;
+        next.UpdateAttemptError = attempt.Any ? attempt.Error ?? string.Empty : string.Empty;
+
+        return Save(next);
+    }
+
+    /// <summary>
     /// ЗАПОМНИТЬ ПРОПУЩЕННУЮ ВЕРСИЮ — ответ человека на «пропустить эту версию», и он живёт
     /// в файле настроек, а не в памяти окна: иначе шарик о той же версии вернулся бы завтра,
     /// то есть панель не исполнила бы его решение.
@@ -584,11 +705,34 @@ public sealed class SettingsController : ISettingsControl
     /// 28.09.2026: *«нормальная группировка с указанием пути; версия сейчас DSH, версия node
     /// и так далее»*). Собирается ОДНИМ разбором (<see cref="EnvironmentReport.Build"/>),
     /// из которого получается и текстовая версия для журнала и отчёта самотеста.
+    ///
+    /// ⚠️ **УМЕНИЯ ПРИХОДЯТ ОТСЮДА ЖЕ (этап E2).** Это ЕДИНСТВЕННАЯ дверь, которой окно берёт
+    /// отчёт: не передать здесь умения — значит не показать их человеку вовсе (дефект, найденный
+    /// 10.10.2026 живым кадром раздела «Сервер»: таблицы умений в окне не было, хотя разбор
+    /// её умел). Умения берутся ФАЙЛОВЫЕ — отчёт не спрашивает движок намеренно: живой вопрос
+    /// при каждом открытии раздела дёргал бы движок зря, а «не проверялась» честно говорит, что
+    /// живой пробы не было.
     /// </summary>
     public EnvironmentReport EnvironmentInfo()
     {
+        // РАЗДЕЛ «СЕРВЕР» СЛЕДИТ ЗА СЕРВЕРОМ САМ (задание владельца 14.10.2026): подписка
+        // на смену его состояния заводится здесь, при первом отчёте, — раньше двери сервера
+        // в обычном запуске ещё нет.
+        WatchServer();
+
         var engine = _locateEngine();
         var npmRoot = engine is null ? null : Backup.BackupPlanner.NpmDirectory(engine);
+
+        // ФАКТЫ УМЕНИЙ — ИЗ ДВЕРИ ПРОБЫ, вместе с их моментом (задание владельца 14.10.2026, §2).
+        // Дверь по умолчанию пуста: тогда сводка честно говорит «панель сейчас не спрашивала этот
+        // сервер DSH», и вердикты файла подсказок за свои не выдаются.
+        var skillProbe = SkillProbe;
+        var skillFacts = skillProbe.Facts();
+
+        // СВОЙ РАБОТАЮЩИЙ СЕРВЕР — повод пересчитать пробу (её заказывает дверь, в фоне: сеть
+        // в перерисовке окна недопустима). Сервер ещё не свой — заказывать нечего, и отчёт так
+        // и скажет словами. Отказ двери не роняет отчёт: он говорит строкой в журнал.
+        if (OwnServerRunning()) skillProbe.Refresh();
 
         return EnvironmentReport.Build(
             engine,
@@ -602,7 +746,10 @@ public sealed class SettingsController : ISettingsControl
             workDir: WorkDirInUse,
             workDirConfigured: PanelSettings.NormalizeWorkDir(Settings.ServerWorkingDir).Length > 0,
             serverPort: PanelSettings.NormalizeServerPort(Settings.ServerPort),
-            serverText: ServerLine());
+            portState: ServerLine(),
+            skills: Server.EngineSkills.Measure(skillFacts),
+            hints: Hints,
+            skillFacts: skillFacts);
     }
 
     /// <summary>
@@ -617,24 +764,148 @@ public sealed class SettingsController : ISettingsControl
     /// <summary>Отчёт окружения ТЕКСТОМ — им пользуются журнал и отчёт самотеста.</summary>
     public string EnvironmentText() => EnvironmentInfo().Text();
 
+    /// <summary>
+    /// ОТКУДА ОТЧЁТ БЕРЁТ ФАКТЫ УМЕНИЙ «ЗДЕСЬ И СЕЙЧАС» (задание владельца 14.10.2026, §2).
+    ///
+    /// ⚠️ **Умолчание — <see cref="Server.SkillProbeDoor.None"/>, и это БЕЗОПАСНАЯ сторона:**
+    /// прогон проверки ничего не спрашивает и получает честное «панель сейчас не спрашивала этот
+    /// сервер DSH». Живую пробу подключает обычный запуск человеком (<see cref="Server.LiveSkillProbe"/>),
+    /// и подключает ОТДЕЛЬНЫМ присваиванием — семнадцать мест, где строится контроллер, трогать
+    /// не пришлось, и ни одно из них не получило сетевого поведения по умолчанию.
+    /// </summary>
+    public Server.SkillProbeDoor SkillProbe
+    {
+        get => _skillProbe;
+
+        set
+        {
+            var next = value ?? Server.SkillProbeDoor.None;
+
+            // Та же дверь дважды — не повод переподписываться: перерисовка раздела сама зовёт
+            // эту дверь каждый раз, а `App` ставит её ОДНИМ присваиванием.
+            if (ReferenceEquals(_skillProbe, next)) return;
+
+            // У УМОЛЧАНИЯ СОБЫТИЯ НЕТ, и подписываться на него незачем: оно статическое на весь
+            // процесс, и подписка держала бы ссылку на каждый построенный контроллер навсегда.
+            if (!ReferenceEquals(_skillProbe, Server.SkillProbeDoor.None))
+                _skillProbe.Changed -= OnEnvironmentChanged;
+
+            _skillProbe = next;
+
+            if (!ReferenceEquals(next, Server.SkillProbeDoor.None))
+                next.Changed += OnEnvironmentChanged;
+        }
+    }
+
+    /// <summary>
+    /// «ЧТО ПОКАЗЫВАЕТ РАЗДЕЛ „СЕРВЕР“ МОГЛО ИЗМЕНИТЬСЯ» — ПОДПИСКА ОКНА НА ДАННЫЕ, А НЕ ЧАСЫ
+    /// (задание владельца 14.10.2026, §3).
+    ///
+    /// **От какого случая.** Владелец открыл раздел «Сервер», увидел «кучу красных» меток и решил,
+    /// что панель сломана; правду показывала только кнопка «Проверить окружение». Его слова:
+    /// *«Я думал панель автоматически это делает»*. Решение его же: **вид не менять, чинить
+    /// механику** — раздел обязан обновляться сам.
+    ///
+    /// **Два источника, и оба — сообщения:**
+    /// * **факты живой пробы умений** (<see cref="Server.LiveSkillProbe"/>: проба идёт в фоне,
+    ///   её сообщение приходит уже на нитке интерфейса и доезжает сюда через дверь
+    ///   <see cref="SkillProbe"/>);
+    /// * **смена состояния сервера** (<see cref="Server.IServerControl.Changed"/>): пока сервер
+    ///   поднимается или гаснет, строки порта и состояния устаревают так же.
+    ///
+    /// ⚠️ **Часов здесь нет намеренно:** в панели шесть раз уже сделано сообщением, а опрос
+    /// раз в секунду — дело главного окна, у которого для этого свои причины.
+    /// </summary>
+    public event Action? EnvironmentChanged;
+
+    private Server.SkillProbeDoor _skillProbe = Server.SkillProbeDoor.None;
+
+    private IServerControl? _watchedServer;
+
+    /// <summary>Сообщить окну, что раздел «Сервер» мог измениться.</summary>
+    private void OnEnvironmentChanged() => EnvironmentChanged?.Invoke();
+
+    /// <summary>
+    /// СЛЕДИТЬ ЗА СОСТОЯНИЕМ СЕРВЕРА — ВТОРОЙ ИСТОЧНИК ТОГО ЖЕ РАЗДЕЛА.
+    ///
+    /// ⚠️ **Подписка заводится ПРИ ПЕРВОМ ОТЧЁТЕ, а не в построении контроллера:** дверь сервера
+    /// дана делегатом, и в обычном запуске на момент постройки она ещё пуста (`App` собирает
+    /// контроллер настроек раньше, чем контроллер сервера). Подписка на то, чего ещё нет,
+    /// не завелась бы вовсе — и раздел снова ждал бы кнопки.
+    ///
+    /// ⚠️ Зовётся на каждый отчёт, но подписывается ОДИН раз: дверь сравнивается по ссылке,
+    /// и смена двери (перезапуск сервера панелью) отписывает прежнюю.
+    /// </summary>
+    private void WatchServer()
+    {
+        var control = _server?.Invoke();
+
+        if (ReferenceEquals(control, _watchedServer)) return;
+
+        if (_watchedServer is not null) _watchedServer.Changed -= OnEnvironmentChanged;
+
+        _watchedServer = control;
+
+        if (control is not null) control.Changed += OnEnvironmentChanged;
+    }
+
+    /// <summary>
+    /// ЧТО ПРОБОВАТЬ ПРЯМО СЕЙЧАС: свой работающий сервер, его порт и ссылка входа.
+    /// <c>null</c> — пробовать нечего (сервер не наш, не работает или ссылки ещё нет).
+    ///
+    /// ⚠️ Cookie сюда НЕ кладётся: её добывает сама проба входом по ссылке (та же дверь, что у
+    /// калитки телефона, — <see cref="Server.EngineRpcLogin"/>). Ссылка входа при этом НИКУДА
+    /// не печатается: и журнал, и отчёт видят её обезвреженной (`EngineLog.Redact`).
+    /// </summary>
+    public Server.SkillTarget? SkillTargetNow()
+    {
+        var server = _server?.Invoke();
+        if (server is null) return null;
+
+        if (server.Owner != ServerOwner.Panel || server.State.Presence != ServerPresence.Running) return null;
+
+        var port = server.State.Port;
+        var link = server.EntryLink;
+        if (port <= 0 || string.IsNullOrWhiteSpace(link)) return null;
+
+        return new Server.SkillTarget(Server.EngineRpcLogin.BaseUrlOf(link) ?? string.Empty, string.Empty, port, link);
+    }
+
+    /// <summary>
+    /// ПРОСИТЬ ЛИ ПЕРЕСЧЁТ ПРОБЫ. Да — только когда панель управляет своим РАБОТАЮЩИМ сервером:
+    /// тогда «проверено здесь и сейчас» имеет смысл, а ссылка входа у панели есть. В остальных
+    /// положениях спрашивать нечего, и пересчёт не заказывается (дверь ответит «не спрашивала»).
+    /// </summary>
+    private bool OwnServerRunning()
+    {
+        var server = _server?.Invoke();
+        if (server is null) return false;
+
+        return server.Owner == ServerOwner.Panel && server.State.Presence == ServerPresence.Running;
+    }
+
+    /// <summary>
+    /// СОСТОЯНИЕ СВОЕГО ПОРТА СЛОВАМИ — подробность строки «Порт своего сервера» в разделе «Сервер».
+    ///
+    /// ⚠️ **Прежде это была целая фраза с номером порта** («сервер: работает на порту 3080, поднят
+    /// панелью»), и номер в ней повторялся: строка отчёта теперь показывает номер САМА, а состояние
+    /// стоит рядом с ним («3080 — занят своим сервером»). Поэтому здесь короткий ответ на один
+    /// вопрос: **чем занят этот порт.**
+    /// </summary>
     private string ServerLine()
     {
         var server = _server?.Invoke();
-        if (server is null) return PanelStrings.ServerUnbound;
+        if (server is null) return PanelStrings.EnvPortUnbound;
 
         var state = server.State;
-        var format = System.Globalization.CultureInfo.CurrentCulture;
 
         return state.Presence switch
         {
-            ServerPresence.Running => server.Owner switch
-            {
-                ServerOwner.Panel => string.Format(format, PanelStrings.ServerRunningOwnFormat, state.Port),
-                ServerOwner.Adopted => string.Format(format, PanelStrings.ServerAdoptedFormat, state.Port),
-                _ => string.Format(format, PanelStrings.ServerRunningForeignFormat, state.Port),
-            },
-            ServerPresence.BusyByOther => string.Format(format, PanelStrings.ServerPortBusyFormat, state.Port),
-            _ => PanelStrings.ServerNotStartedWithPort,
+            ServerPresence.Running => server.Owner == ServerOwner.Panel
+                ? PanelStrings.EnvPortOwn
+                : PanelStrings.EnvPortTaken,
+            ServerPresence.BusyByOther => PanelStrings.EnvPortOther,
+            _ => PanelStrings.EnvPortFree,
         };
     }
 

@@ -68,7 +68,9 @@ public class UpdateTrayLineTests
             action => action(),
             _ => { },
             _ => { },
-            _ => { });
+            _ => { },
+            isolatedRun: false,
+            rememberAttempt: _ => { });
 
     private static void Wait(UpdateController controller)
     {
@@ -249,7 +251,9 @@ public class UpdateTrayLineTests
             dispatch: action => action(),
             log: _ => { },
             remember: _ => { },
-            rememberCheckedAt: _ => { });
+            rememberCheckedAt: _ => { },
+            isolatedRun: false,
+            rememberAttempt: _ => { });
 
         // Проверки не было вовсе: суточный гейт закрыт отметкой час назад.
         restored.Tick(Now);

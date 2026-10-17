@@ -5,6 +5,8 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using DshPanel.Agents;
 using DshPanel.Autostart;
 using DshPanel.Backup;
@@ -55,8 +57,59 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     private IPricingControl? _pricing;
     private AutostartPanelModel _autostartModel = new();
 
+    /// <summary>
+    /// РАЗДЕЛ «ТЕЛЕФОН» (этап F1.d) — дверь к решениям о телефоне: рубильник, порт, код
+    /// сопряжения, список подключённых и адрес своей сети.
+    ///
+    /// ⚠️ **Ни одного своего решения здесь нет, и это тот же приём, что у раздела «Обновление».**
+    /// Решение о том, годится ли адрес телефону, живёт в <see cref="PhoneDecisions.Suitable"/>,
+    /// раскладка данных системы в адрес — в <see cref="NetworkAddresses"/>, слова о состоянии —
+    /// в <see cref="PhoneDecisions"/> и <see cref="PhoneDecisions.PairingCodeText"/>. Окно только
+    /// показывает готовое и просит у двери сделать то, что человек нажал.
+    ///
+    /// <see cref="IPhoneSection"/> нет (окно построено без связки — так его видят некоторые
+    /// проверки) — раздел честно говорит, что телефоном в этом прогоне не управляют, а не
+    /// показывает пустые поля без объяснения.
+    /// </summary>
+    private IPhoneSection? _phone;
+
+    /// <summary>
+    /// ДВЕРЬ БРАНДМАУЭРА (этап F4, кусок 1) — ОТДЕЛЬНЫМ ЧЛЕНОМ, а не внутри двери телефона.
+    ///
+    /// ⚠️ Почему отдельно. Правило брандмауэра — ИЗМЕНЕНИЕ НА МАШИНЕ, и права у него свои
+    /// (<see cref="RunRights.MayChangeFirewall"/>): окно, которое умеет ставить правило, и окно,
+    /// которое показывает состояние телефона, — разные двери, и слей их в одну, «нет права»
+    /// у прогона проверки стало бы «нет телефона».
+    ///
+    /// ⚠️ Двери нет — раздел честно говорит, что брандмауэром в этом прогоне не управляют
+    /// (<see cref="PanelStrings.FirewallNoDoor"/>), и НИ ОДНОГО чтения правил не делает:
+    /// у съёмки (`--shot settings-phone`) двери нет вовсе, поэтому кадр не ходит в `netsh`.
+    /// </summary>
+    private IFirewallDoor? _firewall;
+
+    /// <summary>Последнее прочитанное состояние правила — по нему решается, что сделает кнопка.</summary>
+    private FirewallState? _firewallState;
+
+    /// <summary>Идёт изменение: кнопка выключена, второй раз не жмётся, сказано «ждём подтверждения».</summary>
+    private bool _firewallBusy;
+
     /// <summary>Проверка выпусков для РАЗДЕЛА «Обновление» — единственное место, где он показан.</summary>
     private IUpdateControl? _update;
+
+    /// <summary>Дверь блока движка (даёт `App`; может молчать).</summary>
+    private IEngineUpdateSection? _engineUpdate;
+
+    /// <summary>Человек нажал «Да, поставить непроверенную» — согласие РАЗОВОЕ и снимается.</summary>
+    private bool _engineFreshConfirmed;
+
+    /// <summary>Идёт обновление движка: кнопки блока на это время недоступны, окно остаётся живым.</summary>
+    private bool _engineBusy;
+
+    /// <summary>Подставная дверь вопроса (проверки); у человека её нет — вопрос задаёт своё окно.</summary>
+    private Func<PanelQuestion, Task<bool>>? _engineAsk;
+
+    /// <summary>Подставная дверь браузера для ссылки на выпуски движка (проверки); у человека — своя.</summary>
+    private Func<string, string>? _engineBrowse;
 
     /// <summary>Движок установки для того же раздела: готовит замену файлов и запускает сценарий.</summary>
     private IUpdateInstall? _install;
@@ -75,6 +128,48 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     private UpdatePreparation? _updatePrepared;
     private string _updateStatus = string.Empty;
     private IReadOnlyList<WorkDirSuggestion> _suggestions = Array.Empty<WorkDirSuggestion>();
+
+    /// <summary>
+    /// ОТКУДА БЕРУТСЯ АДРЕСА МАШИНЫ. По умолчанию — НАСТОЯЩАЯ дверь
+    /// (<see cref="RealNetworkAddresses.Read"/>): раздел показывает то, что есть у человека.
+    /// Проверка подставляет своё ЗНАЧЕНИЕ той же двери (<c>RealNetworkAddresses.Test</c>), а не
+    /// свой путь: тогда проверенное правило держится на продукте, а не на стенде.
+    /// </summary>
+    private Func<IReadOnlyList<RawAddress>> _phoneAddresses = RealNetworkAddresses.Read;
+
+    /// <summary>
+    /// Что делать с адресом ПЕРЕД ПОКАЗОМ. **У человека маски НЕТ** (<c>null</c>) — он видит свой
+    /// адрес как есть, иначе не смог бы набрать его на телефоне руками. У кадра маска есть
+    /// (`Program.MaskAddress`): кадр уезжает в README, и номер адреса машины в нём лишний
+    /// (решение владельца 11.10.2026).
+    ///
+    /// ⚠️ Маска стоит ЗДЕСЬ, а не в двери адресов, и это не перестановка: замаскированный адрес
+    /// перестал бы быть адресом (в нём буква), и правило выбора (<c>PhoneDecisions.Suitable</c>)
+    /// отбросило бы его как негодный. **Маскируется ПОКАЗ, а не решение.**
+    ///
+    /// ⚠️ <c>null</c> — не «то же самое, что тождество», а отдельный ответ: по нему видно, что
+    /// это НЕ прогон съёмки, и QR рисуется для настоящего адреса (`RenderPhoneQr`).
+    /// </summary>
+    private Func<string, string>? _phoneAddressMask;
+
+    /// <summary>Идёт раскладка списка кандидатов: отличить выбор ЧЕЛОВЕКА от нашей же подстановки.</summary>
+    private bool _phoneAddressRendering;
+
+    /// <summary>Последний выпущенный код — для проверок без экрана (человеку он виден крупно).</summary>
+    public string PhoneCode { get; private set; } = string.Empty;
+
+    /// <summary>Человек тронул поле порта телефона — только тогда порт считается выбранным им.</summary>
+    private bool _phonePortTouched;
+
+    /// <summary>
+    /// Идёт подстановка значений раздела «Телефон» при отрисовке. Один флаг на рубильник и порт:
+    /// оба поднимают событие изменения, и без предохранителя окно записало бы в настройки то,
+    /// что только что прочитало.
+    /// </summary>
+    private bool _phoneUpdating;
+
+    /// <summary>Строка под кнопкой кода: «взяли новый» или «этот уже показан».</summary>
+    private string _phoneCodeNote = string.Empty;
 
     private bool _updatingAutostart;
     private bool _updatingTheme;
@@ -113,9 +208,18 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         WorkDirBox.PlaceholderText = PanelStrings.SettingsWorkDirPlaceholder;
         SuggestWorkDirButton.Content = PanelStrings.SettingsSuggestButton;
         PortLabel.Text = PanelStrings.SettingsPortLabel;
+
+        // ⚠️ ПОЯСНЕНИЕ — НАД ПОЛЕМ, ПОДСКАЗКА — ПОД НИМ (норма GOV.UK: подсказка под полем это одна
+        // короткая фраза без точки; всё длинное выносится над полем обычным текстом —
+        // `40-forms.md` §3 и §11(б) п. 3). До 12.10.2026 всё лежало в подсказке, и читалка читала
+        // её целиком при каждом входе в поле.
+        PortExplainText.Text = PanelStrings.SettingsPortExplain;
         ThemeLabel.Text = PanelStrings.SettingsThemeLabel;
         LanguageLabel.Text = PanelStrings.SettingsLanguageLabel;
         LanguageHintText.Text = PanelStrings.SettingsLanguageAppliesNextStart;
+
+        // Длинное — НАД полем, короткое — под ним (`40-forms.md` §3, §11(б) п. 3).
+        LanguageExplainText.Text = PanelStrings.SettingsLanguageExplain;
         AutostartCheck.Content = PanelStrings.AutostartCheck;
 
         BalanceSectionTitle.Text = PanelStrings.SettingsBalanceSection;
@@ -130,10 +234,9 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         // Почему расписания пиков и таблицы цен здесь больше нет — сказано человеку словами,
         // а не пропажей: раздел, у которого что-то исчезло молча, читается как сломанный.
         // Дверь в окно «Пики и тарифы» стоит в ГЛАВНОЙ панели (решение владельца 28.09.2026).
-        PeakWhereHintText.Text = PanelStrings.SettingsPeakWhereHint;
+        PeakWhereNoteText.Text = PanelStrings.SettingsPeakWhereNote;
 
         ServerSectionTitle.Text = PanelStrings.SettingsServerSection;
-        ServerSectionSubtitleText.Text = PanelStrings.ServerSectionSubtitle;
         CheckEnvironmentButton.Content = PanelStrings.SettingsCheckEnvironment;
         SaveButton.Content = PanelStrings.SettingsSave;
 
@@ -158,8 +261,73 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         PanelToolTip.Set(UpdatePrepareButton, PanelStrings.TipUpdatePrepareButton);
         UpdatePrepareButton.Click += (_, _) => PrepareUpdate();
 
+        // БЛОК ДВИЖКА (этапы E3.2 и E3.3): две строки, РЯД ИЗ ДВУХ кнопок и откат отдельной тихой
+        // строкой под ним (решение владельца 11.10.2026), плюс выжимка про версии и ссылка на выпуск.
+        // Слова и решения живут в `Server\EngineUpdateFlow`, `Server\EngineUpdateDecisions`,
+        // `Server\EngineRollbackDecisions` и `Server\EngineLines`, а окно только показывает и просит —
+        // работа целиком за дверью `IEngineUpdateSection` (её даёт `App`).
+        EngineBlockTitle.Text = PanelStrings.EngineBlockTitle;
+
+        // ПОДСКАЗКА — ПО СОСТОЯНИЮ, а не «обе половины сразу» (находка F-1): до первой сверки
+        // вторая половина (про непроверенную версию) не показывается, потому что её кнопки ещё нет.
+        EngineHintText.Text = EngineHintParts(EngineVersionStanding.Unknown, freshButtonVisible: false);
+        EngineUpdateButton.Content = PanelStrings.EngineUpdateButton;
+        EngineInstallFreshButton.Content = PanelStrings.EngineUpdateFreshButton;
+        EngineRollbackButton.Content = PanelStrings.EngineRollbackButtonFormat;
+        PanelToolTip.Set(EngineUpdateButton, PanelStrings.TipEngineUpdateButton);
+        PanelToolTip.Set(EngineInstallFreshButton, PanelStrings.TipEngineInstallFreshButton);
+        PanelToolTip.Set(EngineRollbackButton, PanelStrings.TipEngineRollbackYes);
+
+        EngineUpdateButton.Click += (_, _) => RunEngineUpdate(freshWanted: false);
+        EngineInstallFreshButton.Click += (_, _) => RunEngineUpdate(freshWanted: true);
+        EngineRollbackButton.Click += (_, _) => RunEngineRollback();
+
+        // ССЫЛКА «ПОКАЗАТЬ ВСЕ ВЕРСИИ» (решение владельца 13.10.2026 №6): выжимка про версии
+        // скрыта по умолчанию, чтобы карточка показывала РЕШЕНИЕ и две кнопки, а не хвост текста.
+        EngineNotesShowAllButton.Content = PanelStrings.EngineNotesShowAll;
+        PanelToolTip.Set(EngineNotesShowAllButton, PanelStrings.EngineNotesShowAll);
+        EngineNotesShowAllButton.Click += (_, _) => ToggleEngineNotes();
+
+        EngineNotesTitleText.Text = PanelStrings.EngineNotesTitle;
+        EngineNotesEmptyText.Text = PanelStrings.EngineNotesEmpty;
+        EngineReleasesButton.Content = PanelStrings.EngineReleasesLink;
+        PanelToolTip.Set(EngineReleasesButton, PanelStrings.TipEngineReleasesLink);
+        EngineReleasesButton.Click += (_, _) => OpenEngineReleases();
+
+        RefreshEngineBlock();
+
         UpdateNotesTitleText.Text = PanelStrings.UpdateNotesTitle;
         UpdateNotesEmptyText.Text = PanelStrings.UpdateNotesEmpty;
+
+        // РАЗДЕЛ «ТЕЛЕФОН»: слова ставятся здесь, как у всех разделов. Код сопряжения и адрес
+        // сюда не пишутся — их показывает разметка крупно, а значения приходят при отрисовке.
+        PhoneSectionTitle.Text = PanelStrings.PhoneSectionTitle;
+        PhoneSectionSubtitleText.Text = PanelStrings.PhoneSectionSubtitle;
+        PhoneLimitsText.Text = PanelStrings.PhoneLimits;
+        PhoneAllowedCheck.Content = PanelStrings.PhoneAllowedCheck;
+        PhonePortLabel.Text = PanelStrings.PhonePortLabel;
+        PhoneForbiddenPortsText.Text = string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            PanelStrings.PhonePortForbiddenFormat,
+            ServerDecisions.OwnerPort,
+            ServerDecisions.RunFallbackPort);
+        PhoneCodeButton.Content = PanelStrings.PhoneShowCodeButton;
+        PanelToolTip.Set(PhoneCodeButton, PanelStrings.TipPhoneShowCodeButton);
+        PhoneCodeButton.Click += (_, _) => ShowPhoneCode();
+        PhoneDevicesTitle.Text = PanelStrings.PhoneDevicesTitle;
+        PhoneDevicesCountText.Text = string.Empty;
+        PhoneDevicesEmptyText.Text = PanelStrings.PhoneDevicesEmpty;
+        PhoneAddressTitle.Text = PanelStrings.PhoneAddressTitle;
+        PhoneAddressNoteText.Text = PanelStrings.PhoneAddressNote;
+        PhoneSeenText.Text = string.Empty;
+
+        // QR: подпись и слова ставятся здесь, а САМА КАРТИНКА — при отрисовке (`RenderPhoneQr`):
+        // её рисует библиотека по строке адреса, и до отрисовки этой строки ещё нет.
+        PhoneQrTitle.Text = PanelStrings.PhoneQrTitle;
+        PhoneQrNoteText.Text = PanelStrings.PhoneQrNote;
+
+        PhonePortBox.ValueChanged += (_, _) => OnPhonePortTyped();
+        PhoneAddressCombo.SelectionChanged += (_, _) => OnPhoneAddressChosen();
 
         UpdateReplaceButton.Content = PanelStrings.UpdateReplaceButton;
         PanelToolTip.Set(UpdateReplaceButton, PanelStrings.TipUpdateReplaceButton);
@@ -208,8 +376,8 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         BackupScheduleCheck.Content = PanelStrings.SettingsBackupScheduleCheck;
         BackupEveryLabel.Text = PanelStrings.SettingsBackupEveryLabel;
         BackupKeepLabel.Text = PanelStrings.SettingsBackupKeepLabel;
-        BackupScheduleHintText.Text = PanelStrings.SettingsBackupScheduleHint;
-        BackupKeepHintText.Text = PanelStrings.SettingsBackupKeepHint;
+        BackupScheduleNoteText.Text = PanelStrings.SettingsBackupScheduleNote;
+        BackupKeepNoteText.Text = PanelStrings.SettingsBackupKeepNote;
         BackupLiveNoteText.Text = PanelStrings.SettingsBackupLiveNote;
 
         // Состав копии: ключи. Раздел появился 26.09.2026 вместе с решением владельца «ключи снова
@@ -219,7 +387,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         BackupKeysCheck.Content = PanelStrings.BackupKeysCheck;
         BackupKeysWarningText.Text = PanelStrings.BackupKeysWarning;
         BackupKeysDirsLabel.Text = PanelStrings.SettingsKeysDirsLabel;
-        BackupKeysDirsHint.Text = PanelStrings.SettingsKeysDirsHint;
+        BackupKeysDirsHint.Text = PanelStrings.SettingsKeysDirsNote;
 
         // ⚠️ Строк «копии для передачи» здесь больше НЕТ: решением владельца 27.09.2026 (п. 11)
         // передача — разовое действие в окне копий, а не настройка. Своего текста у этого окна
@@ -377,7 +545,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     /// фотографирует именно его — только на нём видно и полосу прокрутки, и то, что она
     /// не наезжает на поля (жалоба владельца 27.09.2026).
     /// </summary>
-    private const int GeneralSection = 0;
+    public const int GeneralSection = 0;
 
     public const int BackupSection = 1;
 
@@ -393,7 +561,13 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     /// </summary>
     public const int UpdateSection = 4;
 
-    /// <summary>Подписи пяти разделов — в порядке списка слева.</summary>
+    /// <summary>
+    /// Раздел «Телефон» — открыт наружу: в нём рубильник, код сопряжения, список подключённых
+    /// и адрес своей сети. Кадр раздела (`--shot settings-phone`) снимается именно с него.
+    /// </summary>
+    public const int PhoneSection = 5;
+
+    /// <summary>Подписи ШЕСТИ разделов — в порядке списка слева.</summary>
     private static string[] SectionTitles() => new[]
     {
         PanelStrings.SettingsGeneral,
@@ -401,6 +575,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         PanelStrings.SettingsBalanceSection,
         PanelStrings.SettingsServerSection,
         PanelStrings.UpdateSectionTitle,
+        PanelStrings.PhoneSectionTitle,
     };
 
     /// <summary>Панели разделов — в том же порядке, что и подписи.</summary>
@@ -411,6 +586,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         BalanceSectionPanel,
         ServerSectionPanel,
         UpdateSectionPanel,
+        PhoneSectionPanel,
     };
 
     /// <summary>
@@ -432,8 +608,50 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         // по которому человек понимает, чей это содержимое справа.
         if (SectionsList.SelectedIndex != chosen) SectionsList.SelectedIndex = chosen;
 
+        // ⚠️ РАЗДЕЛ «ТЕЛЕФОН» ОБНОВЛЯЕТСЯ ПРИ ВХОДЕ И ПОКА ОН ВИДЕН (решение владельца 12.10.2026).
+        //
+        // **От какого случая.** `ShowSection` только переключал видимость, часов в окне не было
+        // вовсе, а `RenderPhoneSection` звался при загрузке и по действиям ВНУТРИ панели. Телефон
+        // сопрягается СНАРУЖИ — и человек, открыв раздел, видел «устройств нет», пока не тронет
+        // что-нибудь руками. Это и есть дефект шва: правда о работе меняется не от наших нажатий.
+        ShowPhoneSection(chosen == PhoneSection);
+
         return chosen;
     }
+
+    /// <summary>
+    /// ЧАСЫ РАЗДЕЛА «ТЕЛЕФОН»: тихо перечитывают раздел, ПОКА ОН ВИДЕН, и молчат, когда ушли.
+    ///
+    /// ⚠️ **Часы заводит дверь <see cref="UiThread.NewTimer"/>, а не `new DispatcherTimer`:**
+    /// второй спрашивает `Dispatcher.UIThread` и тем самым захватывает нитку интерфейса у прогона
+    /// проверок (замер 09.10.2026, стерегут ворота `UiThreadTests`). Нет нитки — часов нет,
+    /// и раздел просто не обновляется сам (это и есть поведение без окна).
+    ///
+    /// ⚠️ **Обновляется ТОЛЬКО раздел «Телефон»** (`RenderPhoneSection`), а не всё окно: полное
+    /// `Render` переписало бы поля, которые человек в это время правит.
+    /// </summary>
+    private void ShowPhoneSection(bool visible)
+    {
+        if (!visible)
+        {
+            _phoneTimer?.Stop();
+            return;
+        }
+
+        RenderPhoneSection();
+
+        if (_phoneTimer is null)
+        {
+            _phoneTimer = UiThread.NewTimer(TimeSpan.FromSeconds(2));
+
+            if (_phoneTimer is not null) _phoneTimer.Tick += (_, _) => RenderPhoneSection();
+        }
+
+        _phoneTimer?.Start();
+    }
+
+    /// <summary>Часы раздела «Телефон» — заводятся один раз и живут вместе с окном.</summary>
+    private DispatcherTimer? _phoneTimer;
 
     /// <summary>
     /// ПОКАЗАТЬ РАЗДЕЛ «ОБНОВЛЕНИЕ» — уговор <see cref="IUpdateSectionWindow"/>, которым
@@ -658,6 +876,32 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         WindowY = _settings?.Settings.WindowY ?? 0,
         WindowWidth = _settings?.Settings.WindowWidth ?? 0,
         WindowHeight = _settings?.Settings.WindowHeight ?? 0,
+
+        // ТЕЛЕФОН (этап F) в этом окне ещё НЕ ПОКАЗЫВАЕТСЯ — раздел «Телефон» отдельный шаг, —
+        // но поля обязаны пройти через сохранение НЕТРОНУТЫМИ: окно пишет настройки ЦЕЛИКОМ,
+        // и поле, которого оно не знает, обнулялось бы каждым нажатием «Сохранить». Тогда человек,
+        // тронувший любую настройку, молча терял бы и разрешение на телефон, и запомненный адрес,
+        // и время согласия — то есть калитка закрывалась бы случайным щелчком в другом разделе.
+        // ТЕЛЕФОН (этап F1.d). Здесь поля показываются, и через «Сохранить» проходят НЕТРОНУТЫМИ —
+        // те, которых окно не меняет вовсе: след адреса, «когда видели» и «когда разрешили».
+        // ⚠️ Рубильник и порт — поля ЭТОГО окна, и они читаются из формы: рубильник пишется сразу
+        // по щелчку (он исполняет согласие человека), а порт — по кнопке «Сохранить», как у сервера.
+        // Обнулять же здесь следы значило бы, что человек, тронувший любую настройку, молча теряет
+        // и запомненный адрес, и время согласия — то есть калитка закрывалась бы щелчком в другом
+        // разделе. Проверка — «Сохранение_из_окна_не_теряет_телефонные_поля».
+        PhoneEnabled = PhoneAllowedCheck.IsChecked == true,
+        PhonePort = PanelSettings.NormalizePhonePort((int)(PhonePortBox.Value ?? Server.PhonePass.DefaultPort)),
+
+        // ⚠️ ПРИЗНАК «порт выбирал человек» ставится ТОЛЬКО когда человек его действительно
+        // тронул, — как у порта сервера, где признак ставит кнопка «Сохранить». Разница в том,
+        // что порт сервера человек видит всегда, а порт телефона — тоже всегда; но окно пишет
+        // файл ЦЕЛИКОМ, и безусловное «выбрал» стирало бы разницу между «в файле умолчание»
+        // и «человек выбрал это число», ради которой признак и заведён.
+        PhonePortChosen = _phonePortTouched || (_settings?.Settings.PhonePortChosen ?? false),
+        PhoneLastAddress = _settings?.Settings.PhoneLastAddress ?? string.Empty,
+        PhoneChosenAddress = _settings?.Settings.PhoneChosenAddress ?? string.Empty,
+        PhoneLastSeen = _settings?.Settings.PhoneLastSeen ?? string.Empty,
+        PhoneConsentAt = _settings?.Settings.PhoneConsentAt ?? string.Empty,
     };
 
     /// <summary>Строки поля — по одному пути в строке. Пустые и повторы отсеивает NormalizeKeyDirs.</summary>
@@ -672,7 +916,11 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         IUpdateControl? update = null,
         IUpdateInstall? install = null,
         Func<string, bool>? skipUpdate = null,
-        Action? exitForUpdate = null)
+        Action? exitForUpdate = null,
+        IPhoneSection? phone = null,
+        Func<IReadOnlyList<RawAddress>>? phoneAddresses = null,
+        Func<string, string>? phoneAddressMask = null,
+        IFirewallDoor? firewall = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -680,6 +928,32 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         _autostart = autostart;
         _balance = balance;
         _pricing = pricing;
+
+        // РАЗДЕЛ «СЕРВЕР» ПОКАЗЫВАЕТ ПРАВДУ САМ (задание владельца 14.10.2026, §3).
+        //
+        // **От какого случая.** Владелец открыл раздел, увидел «кучу красных» меток и решил, что
+        // панель сломана; на самом деле правду показывала только кнопка «Проверить окружение».
+        // Его слова: *«Я думал панель автоматически это делает»*. Проба умений идёт в фоне и о своём
+        // результате никому не сообщала, а состояние сервера раздел читал только в миг отрисовки.
+        //
+        // ⚠️ **ЗОВЁТСЯ ИМЕННО `RenderEnvironment()`, А НЕ `Render()`** — и это не мелочь: `Render()`
+        // перечитывает поля из настроек и СТЁР БЫ несохранённую правку ровно в тот миг, когда
+        // пришли факты пробы (то же объяснение, что у раздела «Обновление» строкой ниже).
+        // Стережёт это `ServerSectionLiveTests.Перерисовка_раздела_не_стирает_несохранённую_правку`.
+        _settings.EnvironmentChanged -= RenderEnvironment;
+        _settings.EnvironmentChanged += RenderEnvironment;
+
+        // РАЗДЕЛ «ТЕЛЕФОН» (F1.d): дверь к решениям о телефоне и дверь к адресам машины.
+        // Порядок и раздельность дверей не случайны: адреса приходят от СИСТЕМЫ, а решения
+        // о телефоне — от калитки и настроек; слей их в одну, и подставить в проверке адреса
+        // можно было бы только вместе с подменой самого телефона.
+        _phone = phone;
+        if (phoneAddresses is not null) _phoneAddresses = phoneAddresses;
+        if (phoneAddressMask is not null) _phoneAddressMask = phoneAddressMask;
+
+        // ПРАВИЛО БРАНДМАУЭРА (F4) — своя дверь и своё право: её может не быть вовсе (прогон
+        // проверки), и тогда раздел об этом говорит, а не показывает пустую кнопку.
+        _firewall = firewall;
 
         // РАЗДЕЛ «ОБНОВЛЕНИЕ» — решение владельца 28.09.2026. Ему нужны ДВА домена: состояние
         // выпусков и движок установки. Ни сервера, ни копий ему не нужно, и второго места с этим
@@ -707,6 +981,8 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         PortBox.ValueChanged += (_, _) => RenderPortHint();
         BackupFolderBox.TextChanged += (_, _) => RenderBackupFolderHint();
         BackupKeysCheck.IsCheckedChanged += (_, _) => RenderKeysWarning();
+        PhoneAllowedCheck.IsCheckedChanged += (_, _) => OnPhoneAllowedToggled();
+        FirewallButton.Click += (_, _) => OnFirewallClick();
 
         // ⚠️ ДВУХ ПОДПИСОК ЗДЕСЬ БОЛЬШЕ НЕТ, и это след решения владельца 28.09.2026: таблицы
         // пиков и цен из раздела убраны в своё окно, поэтому окну настроек нечего перерисовывать
@@ -740,6 +1016,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         RenderBackupSchedule();
         RenderBackupKeys();
         RenderEnvironment();
+        RenderPhoneSection();
 
         StatusText.Text = _settings.LoadProblem;
     }
@@ -826,7 +1103,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
                 System.Globalization.CultureInfo.CurrentCulture,
                 PanelStrings.BackupFolderHintFormat,
                 DisplayMask.Path(BackupNaming.Folder(configured)))
-            : PanelStrings.BackupFolderCustomHint;
+            : PanelStrings.BackupFolderCustomNote;
     }
 
     /// <summary>
@@ -893,7 +1170,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         // ЧЕСТНО О ВЫБОРЕ: пока агент один, список недоступен — живой список из одного пункта
         // обещал бы выбор, которого нет. Готовая строка под ним говорит об этом словами.
         AgentBox.IsEnabled = _settings.Writable && AgentCatalog.HasChoice;
-        AgentHintText.Text = PanelStrings.SettingsActiveAgentHint;
+        AgentNoteText.Text = PanelStrings.SettingsActiveAgentNote;
 
         BalanceAutoCheck.IsChecked = settings.BalanceAutoRefresh;
         RefreshMinutesBox.Value = PanelSettings.ClampRefreshMinutes(settings.BalanceRefreshMinutes);
@@ -902,7 +1179,737 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         ThresholdBox.Value = settings.BalanceWarnThreshold;
 
         PeakNotifyBox.Value = PanelSettings.ClampPeakNotify(settings.PeakNotifyMinutes);
-        PeakNotifyHintText.Text = PanelStrings.SettingsPeakNotifyHint;
+        PeakNotifyNoteText.Text = PanelStrings.SettingsPeakNotifyNote;
+    }
+
+    /// <summary>
+    /// РАЗДЕЛ «ТЕЛЕФОН» (F1.d) — состояние, действия и подробности ЧЕТЫРЬМЯ карточками, как
+    /// у раздела «Обновление». Что здесь можно узнать и что сделать: разрешён ли телефон и когда
+    /// человек разрешил · на каком порту стоит калитка · код сопряжения на пять минут · кто уже
+    /// подключён и когда его видели · по какому адресу телефон эту панель найдёт · пропустит ли
+    /// входящее подключение брандмауэр Windows (F4 — и правило ставится ТОЛЬКО щелчком человека).
+    ///
+    /// ⚠️ **Ни одного решения о телефоне в окне нет.** Что годится телефону — решает
+    /// <see cref="PhoneDecisions.Suitable"/>; раскладку данных системы в адрес делает
+    /// <see cref="NetworkAddresses"/>; слова о коде собирает <see cref="PhoneDecisions.PairingCodeText"/>;
+    /// а сам рубильник исполняет дверь (<see cref="IPhoneSection"/>). Окно показывает и просит —
+    /// иначе решение о двери наружу жило бы в разметке.
+    /// </summary>
+
+    /// <summary>
+    /// РАСКРЫТЬ ИЛИ СВЕРНУТЬ ВЫЖИМКУ ПРО ВЕРСИИ. Видимость ставится ВСЕМ трём частям сразу:
+    /// заголовку, пустому состоянию и полю с прокруткой — иначе свёрнутая карточка оставила бы
+    /// за собой пустое поле высотой 140 точек.
+    /// </summary>
+    /// <summary>
+    /// РАСКРЫТЬ ИЛИ СВЕРНУТЬ ВЫЖИМКУ ПРО ВЕРСИИ.
+    ///
+    /// ⚠️ **Норма — СВЁРНУТО, и это состояние САМОЙ КАРТОЧКИ, а не поле окна.** Visibilité
+    /// читается у заголовка выжимки: так «свёрнуто» — это отсутствие состояния, а не второе
+    /// место, которое может разойтись с первым (проверено: отдельное поле однажды оказалось
+    /// выставленным до первого щелчка, и разобраться, кто его тронул, было нельзя).
+    /// </summary>
+    private void ToggleEngineNotes()
+    {
+        ShowEngineNotes(!EngineNotesTitleText.IsVisible);
+    }
+
+    /// <summary>Показать или спрятать выжимку. Видимость ставится ВСЕМ трём частям сразу — иначе
+    /// свёрнутая карточка оставила бы за собой пустое поле высотой 140 точек.</summary>
+    private void ShowEngineNotes(bool show)
+    {
+        EngineNotesTitleText.IsVisible = show;
+        EngineNotesEmptyText.IsVisible = show && EngineNotesPanel.Children.Count == 0;
+        EngineNotesScroll.IsVisible = show && EngineNotesPanel.Children.Count > 0;
+    }
+
+    private void RenderPhoneSection()
+    {
+        if (_settings is null) return;
+
+        PhoneStatusText.Classes.Add("sectionTitle");
+        PhoneStatusText.FontSize = 16;
+        PhoneStatusText.FontWeight = FontWeight.SemiBold;
+
+        var allowed = _settings.Settings.PhoneEnabled;
+
+        // ПРАВИЛО БРАНДМАУЭРА — ДО всех веток: оно не часть двери телефона, и карточка обязана
+        // быть на месте и тогда, когда телефоном в этом прогоне не управляют вовсе.
+        RenderPhoneFirewall();
+
+        // РУБИЛЬНИК. Подстановка состояния сама поднимает событие — без этого окно записало бы
+        // в настройки то, что только что прочитало (та же грабля, что у автозапуска).
+        _phoneUpdating = true;
+        PhoneAllowedCheck.IsChecked = allowed;
+        PhoneAllowedCheck.IsEnabled = _settings.Writable;
+        _phoneUpdating = false;
+
+        // ПОРТ: показывается УЖЕ приведённым к границам — файл правят руками, и «порт 70000»
+        // в поле выглядел бы принятым, хотя панель займёт умолчание (как у порта сервера).
+        _phoneUpdating = true;
+        PhonePortBox.Value = PanelSettings.NormalizePhonePort(_settings.Settings.PhonePort);
+        PhonePortBox.IsEnabled = _settings.Writable;
+        _phoneUpdating = false;
+
+        RenderPhonePortHint();
+
+        // ЧЕСТНО О БЕЗДВЕРЬЕ: окно без связки (так его видят проверки) телефоном
+        // не управляет, и молчать об этом нельзя — пустая галочка читалась бы как «телефон выключен».
+        var door = _phone;
+
+        if (door is null)
+        {
+            PhoneStatusText.Text = PanelStrings.PhoneNoDoor;
+            PhoneCodeButton.IsEnabled = false;
+            PhoneConsentText.IsVisible = false;
+            PhoneRightNoteText.IsVisible = false;
+            PhoneDevicesEmptyText.Text = PanelStrings.PhoneNoDoor;
+            PhoneAddressNoText.Text = PanelStrings.PhoneNoDoor;
+
+            // ⚠️ АДРЕС ПОКАЗЫВАЕТСЯ И БЕЗ ДВЕРИ, и это не мелочь: «по какому адресу телефон найдёт
+            // панель» — свойство САМОЙ машины, а не калитки. Первая редакция возвращалась здесь
+            // целиком, и карточка адреса оставалась ПУСТОЙ — на кадре раздела не было ни адреса,
+            // ни слов о том, что его нет. Беду нашёл сам кадр, а не проверка: она смотрела на текст,
+            // которого не было вовсе.
+            RenderPhoneAddress(new PhoneSectionInfo(
+                Allowed: allowed,
+                Listening: false,
+                DeviceCount: 0,
+                Devices: Array.Empty<Server.PhoneDeviceView>(),
+                LiveCode: false,
+                ConsentText: string.Empty,
+                LastAddress: _settings.Settings.PhoneLastAddress,
+                ChosenAddress: _settings.Settings.PhoneChosenAddress,
+                LastSeenText: string.Empty));
+
+            return;
+        }
+
+        var info = door.PhoneInfo();
+
+        // СОСТОЯНИЕ — первой строкой, как решение в разделе «Обновление»: человеку нужен ответ,
+        // а не перечень полей. Тон — тот же язык, что у строк состояния в меню значка.
+        //
+        // ⚠️ **АДРЕС, А НЕ ВНУТРЕННЕЕ СЛОВО О ПОДКЛЮЧЕНИИ** (решение владельца 13.10.2026, живой
+        // прогон на телефоне): прежде сюда уходило «слушает порт» или «закрыта» — слова про НАШУ
+        // дверь, которых человек не ищет. Теперь строка отвечает на его вопрос: подключён ли
+        // телефон и по какому адресу панель его ждёт. Адреса нет — так и сказано словами.
+        var address = info.LastAddress.Length > 0 ? info.LastAddress : PanelStrings.PhoneAddressNone;
+
+        if (allowed && !info.EngineLinked)
+        {
+            // ТЕЛЕФОН СОПРЯЖЁН, А ВОПРОС ДОСТАТЬ НЕЧЕМ — и об этом говорят СЛОВАМИ (находка
+            // владельца 13.10.2026). Строка «телефон подключён · адрес: …» в этом положении
+            // обещала работающий телефон: дверь-то открыта, а связи с сервером DSH нет —
+            // сервер поднят не панелью, и ссылки входа у неё нет. Вопрос агента не придёт никогда.
+            PhoneStatusText.Text = PanelStrings.PhoneSectionNoEngine;
+            PanelLook.Tone(PhoneStatusText, TrayTone.Neutral);
+        }
+        else
+        {
+            PhoneStatusText.Text = string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                allowed ? PanelStrings.PhoneStateAllowedFormat : PanelStrings.PhoneStateOffFormat,
+                address,
+                info.DeviceCount);
+            PanelLook.Tone(PhoneStatusText, allowed ? TrayTone.Good : TrayTone.Neutral);
+        }
+
+        // КОГДА РАЗРЕШИЛ: сам факт «включено» на этот вопрос не отвечает. Пусто — человек
+        // не давал согласия, и строка молчит, а не показывает выдуманное «только что».
+        PhoneConsentText.Text = info.ConsentText.Length > 0
+            ? string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.PhoneConsentFormat,
+                info.ConsentText)
+            : string.Empty;
+        PhoneConsentText.IsVisible = PhoneConsentText.Text?.Length > 0;
+
+        // ПОДСКАЗКА О ПРАВЕ: у прогона проверки калитка не поднимается вовсе, и «телефон разрешён,
+        // а порт закрыт» без объяснения выглядело бы как поломка.
+        PhoneRightNoteText.Text = PanelStrings.PhoneRightNote;
+        PhoneRightNoteText.IsVisible = allowed && !info.Listening;
+
+        // КНОПКА КОДА: живой код уже есть — кнопка называет другое действие, а не «покажи то же».
+        // Пустоты она не показывает НИКОГДА: нет живого кода — она берёт новый.
+        PhoneCodeButton.IsEnabled = _settings.Writable;
+        PhoneCodeButton.Content = info.LiveCode
+            ? PanelStrings.PhoneShowCodeAgainButton
+            : PanelStrings.PhoneShowCodeButton;
+
+        // ЗАМЕТКА О КОДЕ: «взяли новый» / «уже показан» — чтобы человек не искал, куда делся прежний.
+        PhoneCodeNoteText.Text = _phoneCodeNote;
+        PhoneCodeNoteText.IsVisible = _phoneCodeNote.Length > 0;
+
+        RenderPhoneDevices(info);
+        RenderPhoneAddress(info);
+    }
+
+    /// <summary>
+    /// ПОДСКАЗКА ПОД ПОЛЕМ ПОРТА. Неподходящее значение называется вслух СРАЗУ, как его набрали,
+    /// а не после сохранения. ⚠️ Здесь ЕСТЬ запрет на <c>3080</c> и <c>3081</c>, и это не забывчивость:
+    /// у порта СЕРВЕРА их запрета нет (он владельца), а калитка телефона не занимает их никогда
+    /// (<see cref="PhoneGate.PortForbidden"/>), и порт, на котором дверь не встанет, обязан быть
+    /// назван запрещённым до нажатия, а не отказом после.
+    /// </summary>
+    private void RenderPhonePortHint()
+    {
+        if (_settings is null) return;
+
+        var typed = (int)(PhonePortBox.Value ?? Server.PhonePass.DefaultPort);
+
+        if (_phoneUpdating || PhoneGate.PortAllowed(typed))
+        {
+            PhonePortNoteText.Text = PanelStrings.PhonePortNote;
+            return;
+        }
+
+        PhonePortNoteText.Text = string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            PhoneGate.PortForbidden(typed) ? PanelStrings.PhonePortForbiddenFormat : PanelStrings.PhonePortWrongFormat,
+            typed,
+            PanelSettings.NormalizePhonePort(typed));
+    }
+
+    /// <summary>
+    /// ЧЕЛОВЕК ЩЁЛКНУЛ РУБИЛЬНИК. Это ЕДИНСТВЕННОЕ действие раздела, которое пишет настройки
+    /// сразу, не дожидаясь «Сохранить», — и потому, что оно не настройка, а согласие: включение
+    /// запоминает ВРЕМЯ согласия, выключение стирает его и отвязывает ВСЕ устройства (иначе
+    /// выключение ничего бы не значило: старые cookie продолжали бы пускать), а открытая калитка
+    /// гасится. Показывать это галочкой, которую человек ещё не подтвердил, значило бы держать
+    /// дверь наружу открытой до нажатия другой кнопки.
+    ///
+    /// ⚠️ Отказ записи (прогон без права) назван словами: сделать вид, что телефон разрешён,
+    /// значило бы обещать дверь, которой нет.
+    /// </summary>
+    private void OnPhoneAllowedToggled()
+    {
+        if (_phoneUpdating || _phone is null || _settings is null) return;
+
+        var allowed = PhoneAllowedCheck.IsChecked == true;
+
+        if (!_phone.SetPhoneAllowed(allowed))
+        {
+            StatusText.Text = PanelStrings.PhoneToggleFailed;
+            RenderPhoneSection();
+            return;
+        }
+
+        StatusText.Text = string.Empty;
+
+        // ⚠️ ПОРЯДОК: СНАЧАЛА УЗКОЕ ПРАВИЛО, ПОТОМ ДВЕРЬ (уточнение владельца 11.10.2026 —
+        // на живом прогоне вышло наоборот, и Windows задала свой вопрос и открыла ШИРОКИЕ правила).
+        // Калитка при этом уже существует (владеет ею обычный запуск человеком), поэтому «включить»
+        // и «поднять» — два разных действия, и поднимаем мы ТУ ЖЕ калитку.
+        if (allowed) StartPhoneGateAfterFirewall();
+
+        RenderPhoneSection();
+    }
+
+    /// <summary>
+    /// ПОДНЯТЬ КАЛИТКУ, ЕСЛИ ПРАВИЛО БРАНДМАУЭРА ГОТОВО, — иначе сказать словами, чего не хватает.
+    ///
+    /// Три ответа, и все три названы:
+    ///
+    /// * **двери брандмауэра нет** (прогон проверки, съёмка) — требовать правило не с кого, и калитка
+    ///   встаёт: прогон проверки правил машины не меняет вовсе;
+    /// * **правило прочитано как наше** (<see cref="FirewallPresence.Ready"/>) — калитка встаёт;
+    /// * **во всех прочих случаях** — НЕ встаёт, и человеку сказано, что сначала нужно правило:
+    ///   «не прочиталось» никогда не значит «правила нет», а открыть дверь в надежде значило бы
+    ///   получить тот самый вопрос Windows и широкие правила.
+    /// </summary>
+    private void StartPhoneGateAfterFirewall()
+    {
+        if (_phone is null || _settings is null) return;
+
+        if (_firewall is null)
+        {
+            _phone.StartPhoneGate();
+            return;
+        }
+
+        var port = PanelSettings.NormalizePhonePort(_settings.Settings.PhonePort);
+
+        if (_firewall.Read(port).Presence == FirewallPresence.Ready)
+        {
+            _phone.StartPhoneGate();
+            return;
+        }
+
+        FirewallResultText.Text = PanelStrings.PhoneGateBlockedByFirewall;
+        FirewallResultText.IsVisible = true;
+    }
+
+    /// <summary>
+    /// ЧЕЛОВЕК ТРОНУЛ ПОЛЕ ПОРТА: с этого мгновения порт считается выбранным им, и панель вправе
+    /// больше не переводить его на новое умолчание. Подстановка при отрисовке событие не поднимает
+    /// (<c>_phoneUpdating</c>), иначе «человек выбрал» стало бы правдой при простом открытии окна.
+    /// </summary>
+    private void OnPhonePortTyped()
+    {
+        if (_phoneUpdating) return;
+
+        _phonePortTouched = true;
+        RenderPhonePortHint();
+    }
+
+    /// <summary>
+    /// ПОКАЗАТЬ КОД СОПРЯЖЕНИЯ — крупно и словами, со сроком жизни. Живой код уже есть — он
+    /// и показывается: выдавать второй значило бы обесценить тот, который человек, может быть,
+    /// уже диктует на телефон. Кода нет — берётся новый.
+    ///
+    /// ⚠️ **Пустоты кнопка не показывает никогда:** нет живого кода — значит будет новый, и это
+    /// единственное, что она может сделать. Проверка «без живого кода пустоты нет» сторожит
+    /// именно это: в первой редакции она показала бы пустую строку и человек решил бы, что панель
+    /// сломалась.
+    /// </summary>
+    public void ShowPhoneCode()
+    {
+        if (_phone is null) return;
+
+        var live = _phone.PhoneInfo().LiveCode;
+
+        // Живой код берём у двери, а не у себя: он живёт в калитке, и второго его места быть
+        // не должно. Пустой ответ (калитка закрыта, права нет) честно превращается в слова.
+        PhoneCode = live ? _phone.PhoneCode() ?? string.Empty : _phone.NewPhoneCode() ?? string.Empty;
+
+        if (PhoneCode.Length == 0)
+        {
+            _phoneCodeNote = PanelStrings.PhoneCodeFailed;
+            RenderPhoneSection();
+            return;
+        }
+
+        PhoneCodeText.Text = PhoneDecisions.PairingCodeText(PhoneCode);
+        PhoneCodeText.IsVisible = true;
+        _phoneCodeNote = live ? PanelStrings.PhoneCodeShownAgain : PanelStrings.PhoneCodeFresh;
+
+        RenderPhoneSection();
+
+        // Текст кода ставится ПОСЛЕ перерисовки: перерисовка чистит поле кода — она про состояние,
+        // а не про то, что человек только что попросил показать.
+        PhoneCodeText.Text = PhoneDecisions.PairingCodeText(PhoneCode);
+        PhoneCodeText.IsVisible = true;
+    }
+
+    /// <summary>
+    /// СПИСОК ПОДКЛЮЧЁННЫХ: у каждого — «когда подключился» и «когда видели», и своя кнопка
+    /// «Отвязать». Пустой список говорит словами, что телефон ещё не подключался: пустое место
+    /// человек прочитал бы как «список не догрузился».
+    ///
+    /// ⚠️ Строка устройства — ТОЛЬКО имя и две отметки времени. Ни адреса телефона, ни чего-либо
+    /// ещё: список приходит из <c>PhonePass.SafeDevices</c>, где поля адреса нет вовсе, — вернуть
+    /// его в окно нечем (и это проверяется отдельно).
+    /// </summary>
+    private void RenderPhoneDevices(PhoneSectionInfo info)
+    {
+        PhoneDevicesPanel.Children.Clear();
+
+        PhoneDevicesCountText.Text = string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            PanelStrings.PhoneDevicesCountFormat,
+            info.DeviceCount);
+
+        PhoneDevicesEmptyText.IsVisible = info.Devices.Count == 0;
+
+        foreach (var device in info.Devices)
+        {
+            var row = new DockPanel { LastChildFill = true };
+
+            var forget = new Button { Content = PanelStrings.PhoneForgetDeviceButton };
+            PanelToolTip.Set(forget, PanelStrings.TipPhoneForgetDeviceButton);
+
+            var id = device.Id;
+            forget.Click += (_, _) => ForgetPhoneDevice(id);
+            DockPanel.SetDock(forget, Dock.Right);
+
+            row.Children.Add(forget);
+            row.Children.Add(new TextBlock
+            {
+                // ⚠️ ЧЕЛОВЕКУ — КОРОТКОЕ ИМЯ ТЕЛЕФОНА, а не внутренний `phone-N`
+                // (решение владельца 12.10.2026). Имени нет — честное «телефон», а не номер,
+                // которого человек не выбирал: номер остался в cookie и в записи панели.
+                //
+                // ⚠️ И ОТМЕТКИ — ОДНОЙ ФОРМОЙ ПАНЕЛИ И В МЕСТНОМ ВРЕМЕНИ (находка владельца
+                // 14.10.2026, ночь). В записи пропуска они лежат машинной строкой
+                // (`2026-10-13T21:18:17.6132318+00:00`), и прежде она уходила на экран КАК ЕСТЬ:
+                // человек читал UTC вместо своих часов — дата врала на три часа, — а в той же
+                // карточке двумя строками выше стояло правильное «Разрешение выдано: 14.10.2026,
+                // 00:12». Две формы одной даты на одном экране читаются как ДВЕ РАЗНЫЕ величины
+                // (`_design-library\50-lists-navigation.md`, строка 46: «Дата и время — одной
+                // формой на всё приложение»). Приводит их ТА ЖЕ дверь, что у «Разрешение выдано»
+                // и у истории цен (`PricingDecisions.CheckedText`), — второго формата не заводим.
+                Text = DeviceLine(device),
+                TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+
+            PhoneDevicesPanel.Children.Add(row);
+        }
+    }
+
+    /// <summary>
+    /// СТРОКА ОДНОГО ПОДКЛЮЧЁННОГО УСТРОЙСТВА: имя, «подключился» и «видели».
+    ///
+    /// **От какого случая (находка владельца 14.10.2026, ночь).** Строка уходила на экран сырыми
+    /// отметками записи пропуска — `2026-10-13T21:18:17.6132318+00:00` вместо «14.10.2026, 00:18»:
+    /// машинная форма вместо формы панели, время в UTC вместо местного, и один и тот же миг
+    /// напечатанный ДВАЖДЫ («подключился» и «видели») — то есть две формы одной даты на одном
+    /// экране, ровно то, что запрещает банк (`_design-library\50-lists-navigation.md`, строка 46).
+    ///
+    /// ⚠️ Приводит отметки ТА ЖЕ дверь, что у «Разрешение выдано» и у истории цен
+    /// (<see cref="Pricing.PricingDecisions.CheckedText"/>): своего формата у списка устройств быть
+    /// не должно, иначе он однажды разойдётся с соседней строкой той же карточки.
+    ///
+    /// ⚠️ **Один миг печатается ОДИН раз.** У только что сопряжённого телефона «подключился»
+    /// и «видели» — одно событие; две одинаковые отметки рядом читались бы как две разные величины.
+    /// Совпали — так и сказано: «подключился и уже виден».
+    /// </summary>
+    internal static string DeviceLine(Server.PhoneDeviceView device)
+    {
+        var name = PhoneDecisions.DeviceDisplay(device.Name, PanelStrings.PhonePageDeviceFallback);
+        var added = Pricing.PricingDecisions.CheckedText(device.AddedAt);
+        var seen = Pricing.PricingDecisions.CheckedText(device.LastSeen);
+
+        // Отметки совпали (в том числе обе пусты) — говорится одна строка, и в ней сказано, что
+        // это один и тот же миг. Не совпали — прежний вид: два разных события и две отметки.
+        return string.Equals(added, seen, StringComparison.Ordinal)
+            ? string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.PhoneDeviceOneMomentFormat,
+                name,
+                added)
+            : string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.PhoneDeviceFormat,
+                name,
+                added,
+                seen);
+    }
+
+    /// <summary>
+    /// «ОТВЯЗАТЬ» ОДНО УСТРОЙСТВО. Убирается РОВНО одно: остальные продолжают ходить, и это
+    /// не мелочь — отвязать все можно рубильником, а здесь человек называет одно.
+    /// Отказ записи говорится словами: устройство, оставшееся в списке, выглядело бы как «кнопка
+    /// не работает».
+    /// </summary>
+    public void ForgetPhoneDevice(string deviceId)
+    {
+        if (_phone is null || string.IsNullOrWhiteSpace(deviceId)) return;
+
+        StatusText.Text = _phone.ForgetPhoneDevice(deviceId)
+            ? string.Empty
+            : PanelStrings.PhoneForgetFailed;
+
+        RenderPhoneSection();
+    }
+
+    /// <summary>
+    /// ПРАВИЛО БРАНДМАУЭРА: СОСТОЯНИЕ, СЛОВА ДО И КНОПКА (этап F4, кусок 1).
+    ///
+    /// **Порядок ответов.** Человек видит: что с правилом сейчас (чтением, без прав) · что именно
+    /// изменится, если нажать, и что Windows спросит подтверждение · кнопку. Ровно это и просил
+    /// владелец 11.10.2026 — «слова ДО и одна строка ПОСЛЕ»; строка после приходит из
+    /// <see cref="OnFirewallClick"/>.
+    ///
+    /// ⚠️ **Двери нет — ни одного чтения и ни одной кнопки**: прогон проверки брандмауэром не
+    /// управляет, и это сказано словами. Пустая кнопка читалась бы как «сейчас нажму и что-то
+    /// будет», а на деле не будет ничего.
+    ///
+    /// ⚠️ Состояние <see cref="FirewallPresence.Unknown"/> — НЕ «правила нет»: кнопка выключается,
+    /// и человеку сказано, что прочитать не удалось. Ставить правило поверх неизвестного значило бы
+    /// однажды получить два правила с одним именем.
+    /// </summary>
+    private void RenderPhoneFirewall()
+    {
+        if (_settings is null) return;
+
+        var port = PanelSettings.NormalizePhonePort(_settings.Settings.PhonePort);
+
+        FirewallTitleText.Text = PanelStrings.FirewallTitle;
+        FirewallNoteText.Text = PanelStrings.FirewallNote;
+        PanelToolTip.Set(FirewallButton, PanelStrings.FirewallTipButton);
+
+        if (_firewall is null)
+        {
+            _firewallState = null;
+            FirewallStateText.Text = PanelStrings.FirewallNoDoor;
+            FirewallBeforeText.IsVisible = false;
+            FirewallButton.IsVisible = false;
+
+            return;
+        }
+
+        var state = _firewall.Read(port);
+
+        _firewallState = state;
+        FirewallStateText.Text = state.Words;
+
+        FirewallBeforeText.Text = state.CanAdd
+            ? FirewallDecisions.BeforeAdd(port)
+            : state.CanRemove
+                ? FirewallDecisions.BeforeRemove()
+                : string.Empty;
+        FirewallBeforeText.IsVisible = state.CanAdd || state.CanRemove;
+
+        FirewallButton.IsVisible = true;
+        FirewallButton.Content = state.CanRemove
+            ? PanelStrings.FirewallRemoveButton
+            : PanelStrings.FirewallAllowButton;
+        FirewallButton.IsEnabled = !_firewallBusy && (state.CanAdd || state.CanRemove);
+    }
+
+    /// <summary>
+    /// НАЖАТИЕ: СНАЧАЛА СЛОВА, ПОТОМ ДЕЛО, ПОТОМ ОДНА СТРОКА.
+    ///
+    /// ⚠️ **Изменение идёт В ФОНЕ, и это не украшение.** С повышением панель ждёт запрос Windows
+    /// (человек может думать над ним сколько угодно), и на нитке интерфейса окно замёрзло бы —
+    /// то есть строка «ждём подтверждения» не успела бы появиться ДО запроса, а обещание владельца
+    /// говорит именно «сначала слова». Ответ возвращается на нитку интерфейса общей дверью
+    /// (<see cref="OnUi"/>): вторых ворот к диспетчеру в панели нет.
+    ///
+    /// ⚠️ **Отказ человека ничего не меняет и говорит об этом словами** — это решает
+    /// <see cref="FirewallWork"/> вместе с дверью, а окно только показывает её ответ.
+    /// </summary>
+    private void OnFirewallClick()
+    {
+        if (_firewall is null || _settings is null || _firewallBusy) return;
+
+        var state = _firewallState;
+
+        if (state is null || (!state.CanAdd && !state.CanRemove)) return;
+
+        var action = state.CanRemove ? FirewallAction.Remove : FirewallAction.Add;
+        var port = PanelSettings.NormalizePhonePort(_settings.Settings.PhonePort);
+        var door = _firewall;
+
+        _firewallBusy = true;
+        FirewallButton.IsEnabled = false;
+        FirewallResultText.Text = FirewallDecisions.Working();
+        FirewallResultText.IsVisible = true;
+
+        Task.Run(() => FirewallWork.Run(door, action, port))
+            .ContinueWith(task => OnUi(() => FinishFirewall(task, action)));
+    }
+
+    /// <summary>
+    /// НАЖАТИЕ — ДВЕРЬЮ, И ЭТА ДВЕРЬ ОТКРЫТА ПРОВЕРКАМ.
+    ///
+    /// ⚠️ Зачем отдельным членом. Кнопка на время изменения **выключается**, и второе нажатие
+    /// до обработчика просто не доходит — выключенная кнопка события не даёт. Это защита, но она
+    /// сделала бы НЕПРОВЕРЯЕМЫМ второй предохранитель («одно нажатие — одно изменение»,
+    /// <see cref="_firewallBusy"/>), а он нужен на случай, когда два запроса приходят не от кнопки.
+    /// Через эту дверь предохранитель можно уронить мутацией, а без неё он был бы строкой,
+    /// в которую все верят.
+    /// </summary>
+    internal void PressFirewall() => OnFirewallClick();
+
+    /// <summary>
+    /// ОДНА СТРОКА ПОСЛЕ. Падение в фоне не показывается человеку текстом исключения (в нём бывают
+    /// пути машины) — говорится, что изменение не сделано, и это правда: <see cref="FirewallWork"/>
+    /// не доехал до конца.
+    ///
+    /// ⚠️ **ПРАВИЛО ВСТАЛО — ДВЕРЬ ПОДНИМАЕТСЯ ЗДЕСЬ ЖЕ** (уточнение владельца 11.10.2026:
+    /// узкое правило ДО калитки, и человек не должен нажимать рубильник второй раз). Только после
+    /// УДАЧНОГО добавления и только если телефон разрешён: «телефон разрешён» и «дверь открыта» —
+    /// по-прежнему разные вещи, и вторая без первой была бы дверью без согласия.
+    /// </summary>
+    private void FinishFirewall(Task<FirewallChange> task, FirewallAction action)
+    {
+        _firewallBusy = false;
+
+        var done = task.Status == TaskStatus.RanToCompletion && task.Result.Done;
+
+        FirewallResultText.Text = task.Status == TaskStatus.RanToCompletion
+            ? task.Result.Text
+            : FirewallDecisions.Failed(PanelStrings.FirewallNotRemoved);
+        FirewallResultText.IsVisible = true;
+
+        if (done && action == FirewallAction.Add && _settings?.Settings.PhoneEnabled == true)
+            _phone?.StartPhoneGate();
+
+        RenderPhoneFirewall();
+    }
+
+    /// <summary>
+    /// АДРЕС ДЛЯ ТЕЛЕФОНА. Один подходящий — показывается крупно словами «этот адрес видит
+    /// телефон»; несколько — показываются ВСЕ и человек выбирает (решение владельца: гадать
+    /// нельзя); ни одного — сказано словами, что показывать нечего.
+    ///
+    /// Рядом — «когда телефон выходил на связь» и замечание о смене адреса: он выдан по DHCP
+    /// с арендой два часа (<c>docs\PHONE-F0.md</c> §7.4), и «адрес изменился» — не поломка,
+    /// а одно сканирование.
+    /// </summary>
+    private void RenderPhoneAddress(PhoneSectionInfo info)
+    {
+        // АДРЕСА ПРИХОДЯТ ОТ СИСТЕМЫ, А РЕШЕНИЕ — ОТ ПРАВИЛА: раскладка сырых данных в адрес
+        // делается чистой функцией (`NetworkAddresses.Collect`), отбор годных и выбор человека —
+        // `PhoneDecisions.PickAddressChosen`. Окно не решает ни того, ни другого.
+        var candidates = NetworkAddresses.Collect(_phoneAddresses());
+        var picked = PhoneDecisions.PickAddressChosen(candidates, info.ChosenAddress, _phoneAddressMask);
+
+        // РАСКЛАДКА СПИСКА ИДЁТ ПОД ФЛАГОМ: подстановка выделения поднимает событие выбора,
+        // и без флага окно записало бы решение, которого человек не принимал (та же грабля,
+        // что у автозапуска и темы).
+        _phoneAddressRendering = true;
+
+        try
+        {
+            // СЛОВА — ПРО МАСКУ, А СПИСОК ВЫБОРА — ПРО НАСТОЯЩИЙ АДРЕС: по маске выбрать нечего,
+            // она не адрес. На кадре список и не виден вовсе — маска там ради README.
+            PhoneAddressText.Text = picked.Text();
+            PhoneAddressText.IsVisible = picked.Choice != AddressChoice.Several;
+
+            PhoneAddressCombo.ItemsSource = candidates.Select(address => address.Ip).ToList();
+            PhoneAddressCombo.IsVisible = picked.Choice == AddressChoice.Several;
+
+            if (PhoneAddressCombo.IsVisible)
+            {
+                var chosen = info.ChosenAddress.Length > 0 ? info.ChosenAddress : info.LastAddress;
+
+                // Выбор человека — ПЕРВЫМ: он уже назвал адрес, и список не должен выглядеть так,
+                // будто человек ничего не решал. Не выбран никто — список начинается с первого.
+                var index = candidates
+                    .Select((address, at) => (address, at))
+                    .Where(item => string.Equals(item.address.Ip, chosen, StringComparison.OrdinalIgnoreCase))
+                    .Select(item => item.at)
+                    .DefaultIfEmpty(0)
+                    .First();
+
+                PhoneAddressCombo.SelectedIndex = index;
+            }
+            else
+            {
+                PhoneAddressCombo.SelectedIndex = -1;
+            }
+        }
+        finally
+        {
+            _phoneAddressRendering = false;
+        }
+
+        // «КОГДА ВЫХОДИЛ НА СВЯЗЬ»: у телефонной строки в меню значка этого нет, а здесь человек
+        // вправе знать, когда телефон видели в последний раз. Пусто — строка молчит словами.
+        PhoneSeenText.Text = info.LastSeenText.Length > 0
+            ? string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.PhoneSeenFormat,
+                info.LastSeenText)
+            : PanelStrings.PhoneSeenNever;
+
+        PhoneAddressNoText.Text = PanelStrings.PhoneAddressNoAddresses;
+        PhoneAddressNoText.IsVisible = picked.Choice == AddressChoice.None;
+
+        // QR — ТОЙ ЖЕ СТРОКОЙ, ЧТО ПОКАЗАНА ВЫШЕ. Строка берётся из `picked.Address`, а не
+        // собирается заново: два независимых выбора адреса однажды разошлись бы, и человек
+        // навёл бы камеру на ОДИН адрес, а панель ждала бы телефон на другом.
+        RenderPhoneQr(picked.Address, picked.Masked);
+    }
+
+    /// <summary>
+    /// НАРИСОВАТЬ QR ИЛИ ЧЕСТНО СКАЗАТЬ, ЧТО ЕГО НЕТ (этап F1, хвост 1).
+    ///
+    /// **Правило одно и оно проверяемо:** QR кодирует ровно ту строку, которую раздел показывает
+    /// как адрес (<see cref="Server.PhoneQr.PanelsQrRule"/>). Отсюда:
+    ///
+    /// * в обычном запуске это настоящий адрес машины — человек наводит камеру, а не набирает
+    ///   цифры глазами;
+    /// * в прогоне съёмки (`--shot settings-phone`) — **та же строка, но замаскированная**
+    ///   (<c>Program.MaskAddress</c>): кадр уезжает в README, и настоящего номера машины в нём
+    ///   быть не должно (решение владельца 11.10.2026). ⚠️ **Код в кадре РИСУЕТСЯ и из этой
+    ///   строки** — требование владельца «кадр обязан показать код»: замаскированная строка
+    ///   (`192.168.0.х`) — обычный текст без номера машины, и утечь из неё нечему. Это **образец**,
+    ///   а не рабочий код, и так и сказано словами (<see cref="PanelStrings.PhoneQrMasked"/>);
+    /// * адреса нет (или он ещё не выбран из нескольких) — **QR НЕ РИСУЕТСЯ**, и раздел говорит
+    ///   словами, почему. Выдуманный адрес в коде хуже его отсутствия: человек пошёл бы
+    ///   с телефоном туда, где панели нет.
+    ///
+    /// ⚠️ **Строка и признак маски приходят ОДНИМ решением** (<c>picked.Address</c>,
+    /// <c>picked.Masked</c> из <c>PhoneDecisions.PickAddressChosen</c>): собери окно их само —
+    /// и строка у QR однажды разошлась бы со строкой на экране, а признак маски стал бы догадкой
+    /// по буквам в тексте. Маска при этом ложится на ПОКАЗ, а не на отбор: вне прогона съёмки
+    /// её нет вовсе.
+    ///
+    /// ⚠️ **И ЧТО ИМЕННО УЕЗЖАЕТ В КОД, РЕШАЕТСЯ ЗДЕСЬ ЖЕ ОДНИМ МЕСТОМ** (решение владельца
+    /// 11.10.2026): <see cref="PhoneDecisions.QrText"/> добавляет к ПОКАЗАННОМУ адресу схему и порт,
+    /// который раздел показывает рядом. Прежде в коде был голый адрес, и камера показывала текст
+    /// вместо страницы.
+    /// </summary>
+    private void RenderPhoneQr(string shownAddress, bool masked)
+    {
+        var shown = (shownAddress ?? string.Empty).Trim();
+        var port = PanelSettings.NormalizePhonePort(_settings?.Settings.PhonePort ?? Server.PhonePass.DefaultPort);
+        var text = PhoneDecisions.QrText(shown, port);
+
+        // QR РИСУЕТ ДВЕРЬ, а не окно: она объявлена в `IPhoneSection` ровно затем, чтобы «нарисован
+        // ли QR и что в нём закодировано» проверялось без библиотеки и без картинок.
+        // ⚠️ Маска НЕ мешает рисованию: она меняет СТРОКУ (её и кодируем), а не право её показать.
+        var png = text.Length > 0 && _phone is not null
+            ? _phone.QrPng(text)
+            : Array.Empty<byte>();
+
+        PhoneQrImage.Source = png.Length > 0 ? Decode(png) : null;
+
+        // Слова — по причине, а не одни и те же: «телефону нечего показать» и «кода не вышло» —
+        // разные беды, и человеку нужно знать, какая именно. Под маской слова стоят И рядом
+        // с нарисованным кодом: код там образец, и об этом надо сказать, а не молчать.
+        PhoneQrNoText.Text = masked
+            ? PanelStrings.PhoneQrMasked
+            : shown.Length == 0
+                ? PanelStrings.PhoneQrNoAddress
+                : PanelStrings.PhoneQrFailed;
+
+        PhoneQrNoText.IsVisible = png.Length == 0 || masked;
+    }
+
+    /// <summary>
+    /// БАЙТЫ PNG → КАРТИНКА. Не разобрались — пусто, и раздел скажет словами, что кода нет:
+    /// картинка, из-за которой падает окно, недопустима.
+    /// </summary>
+    private static Bitmap? Decode(byte[] png)
+    {
+        try
+        {
+            using var stream = new MemoryStream(png);
+
+            return new Bitmap(stream);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// ПОКАЗАТЬ АДРЕСА ПОД МАСКОЙ — шов ТОЛЬКО для проверок: в жизни маску ставит `Program`
+    /// (кадр уезжает в README), а человеку адрес показывается как есть. Отдельной дверью, потому
+    /// что «адрес в кадре замаскирован» — утверждение о ПУТИ съёмки, и его надо уметь проверить,
+    /// не запуская саму съёмку. Заодно по ней видно, что это прогон съёмки, — и QR рисуется
+    /// ИЗ замаскированной строки, а словами сказано, что он образец (<see cref="PanelStrings.PhoneQrMasked"/>).
+    /// </summary>
+    internal void AttachAddressMaskForTests(Func<string, string>? mask)
+    {
+        _phoneAddressMask = mask;
+
+        RenderPhoneSection();
+    }
+
+    /// <summary>
+    /// ЧЕЛОВЕК ВЫБРАЛ АДРЕС ИЗ СПИСКА. Выбор запоминается настройками — он обязан пережить
+    /// перезапуск панели, иначе человек выбирал бы его каждый раз заново. Отказ записи говорится
+    /// словами: сделать вид, что выбор запомнен, значило бы обещать адрес, которого панель не знает.
+    /// </summary>
+    private void OnPhoneAddressChosen()
+    {
+        if (_phoneAddressRendering || _phone is null) return;
+        if (PhoneAddressCombo.SelectedItem is not string address) return;
+        if (address.Length == 0) return;
+
+        StatusText.Text = _phone.ChoosePhoneAddress(address)
+            ? string.Empty
+            : PanelStrings.PhoneAddressFailed;
+
+        RenderPhoneSection();
     }
 
     private void OnSave(object? sender, RoutedEventArgs e) => SavePending();
@@ -947,6 +1954,12 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         // они говорили одно и то же ДВАЖДЫ подряд — владелец увидел это на кадре раздела.
         UpdateSourceText.Text = UpdateLines.SourceLine(update?.SourceText, UpdateVerdictText.Text);
         UpdateSourceText.IsVisible = UpdateSourceText.Text.Length > 0;
+
+        // СТРОКА О ПОПЫТКЕ: отдельная правда, а не замена источника состояния. Прежний ответ
+        // остаётся выше с датой, а здесь человек видит, что новая попытка не вышла и (после
+        // отказа по числу запросов) когда панель попробует снова.
+        UpdateAttemptText.Text = update?.AttemptText ?? string.Empty;
+        UpdateAttemptText.IsVisible = UpdateAttemptText.Text.Length > 0;
 
         // ЗАМЕТКИ: своё поле с прокруткой и постоянной высотой. Пустые заметки говорят о себе
         // словами: пустое место читалось бы как «не догрузилось».
@@ -1232,15 +2245,27 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     }
 
     /// <summary>
-    /// РАЗДЕЛ «СЕРВЕР»: отчёт окружения ГРУППАМИ (просьба владельца 28.09.2026). Строки собирает
-    /// одна дверь отчёта (<see cref="SettingsController.EnvironmentInfo"/>), раскладывает их
+    /// РАЗДЕЛ «СЕРВЕР»: отчёт окружения КАРТОЧКАМИ. Строки собирает одна дверь отчёта
+    /// (<see cref="SettingsController.EnvironmentInfo"/>), раскладывает их
     /// <see cref="EnvironmentPanelView"/> — окно не решает ни что показать, ни как это называется.
+    ///
+    /// ⚠️ **Дверь открытия папки отдаётся СПИСКУ, а не ставится кнопкой в разметке:** строк
+    /// в отчёте девять, у трёх из них есть папка, а решение о ПРАВЕ живёт у владельца настроек
+    /// (<c>SettingsController.OpenFolder</c>) — окно только показывает отказ словами.
     /// </summary>
     private void RenderEnvironment()
     {
         if (_settings is null) return;
 
-        EnvironmentPanelView.Fill(EnvironmentPanel, _settings.EnvironmentInfo());
+        EnvironmentPanelView.Fill(EnvironmentPanel, _settings.EnvironmentInfo(), OpenReportFolder);
+    }
+
+    /// <summary>Щелчок «Открыть папку» в строке отчёта: удача — пустая строка состояния, отказ — словами.</summary>
+    private void OpenReportFolder(string folder)
+    {
+        if (_settings is null) return;
+
+        StatusText.Text = _settings.OpenFolder(folder, out var error) ? string.Empty : error;
     }
 
     private void RenderAutostart()
@@ -1266,5 +2291,405 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         // а человек у галочки не увидел бы ничего.
         _autostartModel.Set(AutostartCheck.IsChecked == true);
         RenderAutostart();
+    }
+
+    /// <summary>
+    /// ДАТЬ ОКНУ ДВЕРЬ БЛОКА ДВИЖКА (её даёт `App`); без неё окно честно говорит, что обновлять нечем.
+    /// </summary>
+    public void AttachEngineUpdate(IEngineUpdateSection engineUpdate)
+    {
+        _engineUpdate = engineUpdate;
+        RefreshEngineBlock();
+    }
+
+    /// <summary>
+    /// ДАТЬ ОКНУ ДВЕРЬ ВОПРОСА (проверки подставляют свой ответ; у человека вопрос задаёт
+    /// <see cref="ConfirmEngineWindow"/>). Отдельной дверью — потому что «спрашивать ВСЕГДА» это
+    /// утверждение о ПУТИ, и его надо уметь проверить, не открывая окно.
+    /// </summary>
+    public void AttachEngineAsk(Func<PanelQuestion, Task<bool>> ask) => _engineAsk = ask;
+
+    /// <summary>СПРОСИТЬ ЧЕЛОВЕКА: своё окно подтверждения или подставной ответ проверки.</summary>
+    private async Task<bool> AskEngine(PanelQuestion question)
+    {
+        if (_engineAsk is not null) return await _engineAsk(question);
+
+        var window = new ConfirmEngineWindow();
+        window.Attach(question);
+
+        return await window.ShowDialog<bool>(this);
+    }
+
+    /// <summary>
+    /// ПОКАЗАТЬ ДВЕ СТРОКИ: рекомендуемую (проверенную) и свежую — и только если новее.
+    ///
+    /// ⚠️ Когда обновлять НЕЛЬЗЯ, окно говорит это СЛОВАМИ двери (`RefusalKey`), а не пустыми
+    /// строками: у прогона проверки движок не ставится вовсе, и «обновлять некуда: проверенной
+    /// версии в подсказках нет» было бы неправдой.
+    /// </summary>
+    private void RefreshEngineBlock()
+    {
+        var door = _engineUpdate;
+
+        // ⚠️ СЕРВЕР DSH ПОДНЯТ НЕ ПАНЕЛЬЮ — И ЭТО СКАЗАНО ЗДЕСЬ СЛОВАМИ (решение владельца
+        // 13.10.2026, ответ 3). Признак берётся у КАЛИТКИ ТЕЛЕФОНА (`EngineLinked`): дверь событий
+        // собирается по ссылке входа, и её отсутствие значит ровно «своей ссылки входа у панели
+        // нет» — то есть панель в этот сервер не входит и обновить его не может. Прежде блок
+        // в этом положении молчал: человек видел «обновление недоступно» и не знал почему.
+        var noOwnServer = _phone is not null && !_phone.PhoneInfo().EngineLinked;
+
+        UpdateEngineNotOwnText.Text = PanelStrings.EngineUpdateNoOwnServer;
+        UpdateEngineNotOwnText.IsVisible = noOwnServer;
+
+        // ОТКАТ ЖИВЁТ ОТДЕЛЬНО ОТ ОБНОВЛЕНИЯ: вернуться к прежней версии можно и тогда, когда
+        // обновлять нечем (подсказок нет), — это разные вопросы, и путать их нельзя.
+        EngineRollbackButton.IsVisible = door is not null && door.RollbackAvailable;
+        EngineRollbackButton.IsEnabled = !_engineBusy;
+        EngineRollbackButton.Content = door is not null && door.RollbackTarget.Length > 0
+            ? string.Format(
+                System.Globalization.CultureInfo.CurrentCulture, PanelStrings.EngineRollbackButtonFormat, door.RollbackTarget)
+            : PanelStrings.EngineRollbackButtonFormat;
+
+        // ВЫЖИМКА И ССЫЛКА — от той же двери и независимо от того, есть ли чем обновлять: заметки
+        // про версию и место, где человек посмотрит подробности, нужны и когда кнопка молчит.
+        RenderEngineNotes(door?.Notes);
+        RenderEngineReleases(door?.ReleasesAddress);
+
+        // СВОЯ ВЕРСИЯ — ПЕРВОЙ СТРОКОЙ, всегда, когда дверь отвечает (решение владельца 14.10.2026).
+        // Прежде её на карточке не было вовсе: человек видел «рекомендуемая 0.1.5-rc.2» и кнопку
+        // «Обновить» — в том числе тогда, когда у него стояла ровно эта же версия.
+        //
+        // ⚠️ СОСТОЯНИЕ СЧИТАЕТСЯ ОДИН РАЗ И ЗДЕСЬ, а не в трёх местах по отдельности: сравнение
+        // с рекомендуемой, факт присутствия и подпись кнопки обязаны говорить ОДНО (A5 §7).
+        // Факт присутствия приходит от двери отдельно (`EnginePresent`); «сервера нет» и «версию
+        // не прочитали» — РАЗНЫЕ состояния, и слитые в строку версии они врут в обе стороны.
+        var installed = door?.Installed ?? string.Empty;
+        var standing = door is null
+            ? EngineVersionStanding.Unknown
+            : EngineUpdateDecisions.Standing(installed, door.Recommended, door.EnginePresent);
+
+        EngineRecommendedText.Text = noOwnServer
+            ? string.Empty
+
+            // СЕРВЕРА DSH НЕТ ВОВСЕ — свой слот: «не найден», а не «версию прочитать не удалось».
+            // Слова не говорят «не установлен»: панель не ставит машине диагноз.
+            : standing == EngineVersionStanding.Absent
+                ? PanelStrings.EngineOwnVersionAbsent
+                : installed.Length > 0
+                    ? string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture, PanelStrings.EngineOwnVersionFormat, installed)
+                    : PanelStrings.EngineOwnVersionUnknown;
+
+        // Свежая версия и кнопка главного действия решаются НИЖЕ, по состоянию: у отказа и у
+        // «обновлять нечего» их быть не должно, а забытая видимость кнопки — это и есть дефект
+        // «предлагает обновить на то же самое». Поэтому гасим ЗДЕСЬ, до всех веток.
+        EngineFreshLineText.Text = string.Empty;
+        EngineUpdateButton.IsVisible = false;
+
+        if (noOwnServer)
+        {
+            // ОБНОВЛЯТЬ НЕЧЕМ: панель в этот сервер не входит. Кнопки гасим, а причину и путь
+            // («в разделе „Сервер“») называет строка выше — она и есть ответ человеку.
+            EngineFreshText.Text = string.Empty;
+            EngineHintText.Text = string.Empty;
+            EngineInstallFreshButton.IsVisible = false;
+            EngineUpdateButton.IsEnabled = false;
+            EngineStatusText.Text = string.Empty;
+            EngineNotesShowAllButton.IsVisible = false;
+            ShowEngineNotes(false);
+            return;
+        }
+
+        EngineNotesShowAllButton.IsVisible = true;
+
+        if (door is null || !door.Available)
+        {
+            EngineFreshText.Text = door is null || door.RefusalKey.Length == 0
+                ? PanelStrings.EngineUpdateNoRecommended
+                : EngineInstallPhrases.UpdateRefusal(door.RefusalKey);
+            EngineInstallFreshButton.IsVisible = false;
+            EngineUpdateButton.IsEnabled = false;
+
+            // ОБНОВЛЯТЬ НЕЧЕМ — и подсказки про кнопки нет: она звала бы кнопку, которой на экране
+            // нет (тот же класс, что находка F-1). Слова о причине уже сказаны строкой выше.
+            EngineHintText.Text = string.Empty;
+            EngineStatusText.Text = string.Empty;
+            return;
+        }
+
+        // ЧТО СКАЗАТЬ ПРО ОБНОВЛЕНИЕ — из сравнения СВОЕЙ версии с рекомендуемой. Три состояния,
+        // и «обновлять нечего» — одно из них, а не молчание карточки. Состояние посчитано ВЫШЕ
+        // и один раз (вместе с фактом присутствия): второй расчёт рядом разошёлся бы с первым.
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+
+        EngineFreshText.Text = standing switch
+        {
+            EngineVersionStanding.Same => PanelStrings.EngineUpdateSameLine,
+
+            // СВОЯ НОВЕЕ — панель свою версию не понижает (решение владельца 14.10.2026):
+            // понижение это его решение, а не щелчок панели, и кнопки здесь нет.
+            EngineVersionStanding.Newer => string.Format(
+                culture, PanelStrings.EngineUpdateNewerFormat, installed, door.Recommended),
+
+            // Версию не прочитали — говорим рекомендацию и оставляем кнопку: поставить или
+            // починить сервер DSH этим и надо. Сравнивать не с чем, и это названо первой строкой.
+            _ => string.Format(culture, PanelStrings.EngineUpdateRecommendedFormat, door.Recommended),
+        };
+
+        // КНОПКА ГЛАВНОГО ДЕЙСТВИЯ — РОВНО ДВА СОСТОЯНИЯ, и оба ведут к УСТАНОВКЕ ПРОВЕРЕННОЙ
+        // версии (действие одно — `RunEngineUpdate(freshWanted: false)`):
+        //   * «стоит старше»    — «Обновить»;
+        //   * «сервера нет»     — «Установить» (A5 §7): обновлять нечего, и подпись обязана
+        //                          называть то, что произойдёт. Это и есть выход из тупика:
+        //                          прежде в этом состоянии не было НИ ОДНОЙ кнопки.
+        // Ни «то же самое», ни «своя новее» кнопки не получают: первое — обновлять нечего,
+        // второе — понижение, а его панель не делает.
+        var installAction = standing is EngineVersionStanding.Older or EngineVersionStanding.Absent;
+
+        EngineUpdateButton.IsVisible = installAction;
+        EngineUpdateButton.IsEnabled = !_engineBusy;
+        EngineUpdateButton.Content = standing == EngineVersionStanding.Absent
+            ? PanelStrings.EngineInstallButton
+            : PanelStrings.EngineUpdateButton;
+
+        // ПОДСКАЗКА КАРТОЧКИ — ПО СОСТОЯНИЮ (находка F-1). Прежде она собиралась БЕЗУСЛОВНО и звала
+        // кнопку «Обновить», а в состоянии «сервера нет» кнопка подписана «Установить» — подсказка
+        // начинала врать ровно в том состоянии, ради которого делалась установка. И вторая половина
+        // подсказки (про непроверенную версию) видна только вместе со СВОЕЙ кнопкой.
+        PanelToolTip.Set(
+            EngineUpdateButton,
+            standing == EngineVersionStanding.Absent
+                ? PanelStrings.TipEngineInstallButton
+                : PanelStrings.TipEngineUpdateButton);
+
+        // ⚠️ СВЕЖАЯ БЕЗ ЗАМКА: строку показываем, а КНОПКИ НЕТ. Панель ставит движок только по замку,
+        // и кнопка, которая всегда отказывает, — ловушка; причина сказана словами в самой строке.
+        //
+        // ⚠️ И В СОСТОЯНИИ «СЕРВЕРА DSH НЕТ» ЕЁ НЕТ ВОВСЕ (A5 §7): у незнакомца на чистой машине
+        // выбор «поставить непроверенную» — вредный совет, а не забота; проверенная версия у него
+        // единственная дверь. Заодно это держит подсказку честной: она рассказывает только о том,
+        // что человек видит.
+        var freshVisible = standing != EngineVersionStanding.Absent
+                           && door.FreshIsNewer
+                           && door.FreshInstallable;
+
+        EngineFreshLineText.Text = door.FreshIsNewer
+            ? string.Format(
+                culture,
+                door.FreshInstallable ? PanelStrings.EngineUpdateFreshLineFormat : PanelStrings.EngineUpdateFreshNoLockFormat,
+                door.Fresh)
+            : string.Empty;
+
+        EngineInstallFreshButton.IsVisible = freshVisible;
+        EngineInstallFreshButton.IsEnabled = !_engineBusy;
+        EngineInstallFreshButton.Content = PanelStrings.EngineUpdateFreshButton;
+
+        // ПОДСКАЗКА КАРТОЧКИ — ПО СОСТОЯНИЮ (находка F-1). Прежде она собиралась БЕЗУСЛОВНО и звала
+        // кнопку «Обновить», а в состоянии «сервера нет» кнопка подписана «Установить» — подсказка
+        // начинала врать ровно в том состоянии, ради которого делалась установка. И вторая половина
+        // подсказки (про непроверенную версию) видна только вместе со СВОЕЙ кнопкой.
+        EngineHintText.Text = EngineHintParts(standing, freshVisible);
+
+        EngineStatusText.Text = string.Empty;
+    }
+
+    /// <summary>
+    /// ПОДСКАЗКА КАРТОЧКИ ДВИЖКА — ПО СОСТОЯНИЮ, ОДНИМ МЕСТОМ (находка F-1).
+    ///
+    /// Правило простое и названное: подсказка говорит про ТЕ кнопки, которые человек видит.
+    /// В состоянии «сервера DSH нет» это «Установить» (и только она), в остальных — «Обновить»,
+    /// а вторая половина (про непроверенную версию) — только когда её кнопка действительно видима.
+    ///
+    /// ⚠️ Отдельным членом, а не строкой в отрисовке: иначе проверке до правила не дотянуться —
+    /// окно на проверках собирается без двери движка, и «подсказка совпадает с подписью» нечем измерить.
+    /// </summary>
+    internal static string EngineHintParts(EngineVersionStanding standing, bool freshButtonVisible)
+    {
+        var main = standing == EngineVersionStanding.Absent
+            ? PanelStrings.EngineInstallHint
+            : PanelStrings.EngineUpdateMainHint;
+
+        return freshButtonVisible
+            ? main + " " + PanelStrings.EngineUpdateFreshHint
+            : main;
+    }
+
+    /// <summary>
+    /// ПОКАЗАТЬ ВЫЖИМКУ ПРО ВЕРСИИ: заметки и беды из файла подсказок — строками в СВОЁМ поле.
+    /// Пусто — говорим словами, что заметок нет: пустое поле человек прочитал бы как «всё хорошо».
+    /// </summary>
+    private void RenderEngineNotes(IReadOnlyList<string>? notes)
+    {
+        EngineNotesPanel.Children.Clear();
+
+        var lines = notes ?? Array.Empty<string>();
+
+        // ⚠️ Свёрнутая карточка ОСТАЁТСЯ свёрнутой: отрисовка сама видимость НЕ включает (иначе
+        // первая же перерисовка раскрыла бы выжимку обратно и выдавила кнопки вниз).
+        ShowEngineNotes(EngineNotesTitleText.IsVisible);
+
+        foreach (var line in lines)
+            EngineNotesPanel.Children.Add(new TextBlock { Text = line, TextWrapping = TextWrapping.Wrap });
+    }
+
+    /// <summary>
+    /// ПОКАЗАТЬ ССЫЛКУ НА ВЫПУСКИ ДВИЖКА. Пустой адрес — ссылки нет вовсе: «ссылка в никуда» хуже
+    /// её отсутствия. Открывает её <see cref="OpenEngineReleases"/> — и только по щелчку человека.
+    /// </summary>
+    private void RenderEngineReleases(string? address)
+    {
+        EngineReleasesButton.IsVisible = ProductLinks.ShouldShow(address);
+    }
+
+    /// <summary>
+    /// ОТКРЫТЬ СТРАНИЦУ ВЫПУСКОВ ДВИЖКА В БРАУЗЕРЕ — **только по щелчку человека**, тем же путём,
+    /// что страница выпусков панели: панель сама по этому адресу не ходит и ничего туда не шлёт.
+    /// Неудача открытия говорится словами в строке состояния блока, а не молчанием.
+    /// </summary>
+    public void OpenEngineReleases()
+    {
+        var address = _engineUpdate?.ReleasesAddress;
+
+        if (!ProductLinks.ShouldShow(address)) return;
+
+        var error = (_engineBrowse ?? ProductLinks.Open)(address!);
+
+        if (error.Length > 0) EngineStatusText.Text = error;
+    }
+
+    /// <summary>
+    /// ДАТЬ ОКНУ ДВЕРЬ БРАУЗЕРА (проверки подставляют свой ответ: настоящий щелчок открыл бы браузер
+    /// у человека). Отдельной дверью — потому что «открывается ТОЛЬКО по щелчку» это утверждение
+    /// о пути, и его надо уметь проверить, не открывая ничего.
+    /// </summary>
+    public void AttachEngineBrowse(Func<string, string> browse) => _engineBrowse = browse;
+
+    /// <summary>
+    /// НАЖАТИЕ. Порядок один и тот же у обеих кнопок, и он — исполнение решений владельца:
+    /// 1. **спросить ВСЕГДА** (<see cref="ConfirmEngineWindow"/>) — признака «идёт работа» у панели
+    ///    нет, поэтому спрашиваем перед каждой подменой версии;
+    /// 2. **работать в стороне от нитки окна**: установка и проба занимают минуты, и замершее окно
+    ///    «не отвечает» — это худший вид поломки (правило шва: правда о работе видна на живом пути);
+    /// 3. у отдельной кнопки непроверенной версии **сначала подтверждение словами** (разово,
+    ///    без галочек и «запомнить»).
+    /// </summary>
+    private async void RunEngineUpdate(bool freshWanted)
+    {
+        var door = _engineUpdate;
+
+        if (door is null || !door.Available)
+        {
+            EngineStatusText.Text = door is null || door.RefusalKey.Length == 0
+                ? PanelStrings.EngineUpdateNoRecommended
+                : EngineInstallPhrases.UpdateRefusal(door.RefusalKey);
+            return;
+        }
+
+        if (_engineBusy) return;
+
+        if (freshWanted && !_engineFreshConfirmed)
+        {
+            EngineStatusText.Text = string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.EngineUpdateFreshWarningFormat, door.Fresh);
+            EngineInstallFreshButton.Content = PanelStrings.EngineUpdateFreshConfirmButton;
+            _engineFreshConfirmed = true;
+            return;
+        }
+
+        // (1) СПРОСИТЬ ВСЕГДА: без ответа «да» не начинается ничего. Вопрос называет ТУ версию,
+        // которую панель поставит (у отдельной кнопки — свежую, у главной — проверенную).
+        var question = freshWanted && door.Fresh.Length > 0
+            ? door.UpdateQuestion with
+            {
+                Text = string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.EngineUpdateAskFormat,
+                    door.Fresh),
+            }
+            : door.UpdateQuestion;
+
+        if (!await AskEngine(question))
+        {
+            _engineFreshConfirmed = false;
+            EngineInstallFreshButton.Content = PanelStrings.EngineUpdateFreshButton;
+            EngineStatusText.Text = PanelStrings.EngineUpdateAskCancelled;
+            return;
+        }
+
+        // (2) Работа — в стороне: окно остаётся живым и говорит, что идёт и почему это не мгновение.
+        _engineBusy = true;
+        EngineUpdateButton.IsEnabled = false;
+        EngineInstallFreshButton.IsEnabled = false;
+        EngineStatusText.Text = PanelStrings.EngineUpdateWorking;
+
+        string answer;
+
+        try
+        {
+            answer = await System.Threading.Tasks.Task.Run(() => door.Run(freshWanted));
+        }
+        catch (Exception error)
+        {
+            // Путь обновления исключений не бросает (беда — это ответ), но окно не имеет права
+            // замолчать: человек должен увидеть, что работа не сделана.
+            answer = error.GetType().Name + ": " + error.Message;
+        }
+
+        _engineBusy = false;
+        _engineFreshConfirmed = false;
+        EngineInstallFreshButton.Content = PanelStrings.EngineUpdateFreshButton;
+
+        RefreshEngineBlock();
+
+        // ⚠️ Строку ответа ставим ПОСЛЕ перерисовки блока: перерисовка чистит строку состояния.
+        EngineStatusText.Text = answer;
+    }
+
+    /// <summary>
+    /// ОТКАТ ПО КНОПКЕ (этап E3.3): тот же порядок, что у обновления — **спросить ВСЕГДА** и работать
+    /// в стороне от нитки окна. Вопрос здесь другой и он — суть отката: **сессии, созданные новой
+    /// версией, старый движок не откроет** (их журнал новее), и это сказано словами, а не числами.
+    /// </summary>
+    private async void RunEngineRollback()
+    {
+        var door = _engineUpdate;
+
+        if (door is null || _engineBusy) return;
+
+        if (!door.RollbackAvailable)
+        {
+            EngineStatusText.Text = door.RollbackQuestion.Text;
+            return;
+        }
+
+        if (!await AskEngine(door.RollbackQuestion))
+        {
+            EngineStatusText.Text = PanelStrings.EngineUpdateAskCancelled;
+            return;
+        }
+
+        _engineBusy = true;
+        EngineUpdateButton.IsEnabled = false;
+        EngineInstallFreshButton.IsEnabled = false;
+        EngineRollbackButton.IsEnabled = false;
+        EngineStatusText.Text = PanelStrings.EngineUpdateWorking;
+
+        string answer;
+
+        try
+        {
+            answer = await System.Threading.Tasks.Task.Run(() => door.Rollback());
+        }
+        catch (Exception error)
+        {
+            answer = error.GetType().Name + ": " + error.Message;
+        }
+
+        _engineBusy = false;
+
+        RefreshEngineBlock();
+
+        EngineStatusText.Text = answer;
     }
 }

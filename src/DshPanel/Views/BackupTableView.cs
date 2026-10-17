@@ -185,6 +185,9 @@ public static class BackupTableView
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(choose);
 
+        // Фокус спрашивается ДО пересборки: она сносит строки вместе с ним (см. ниже).
+        var focusedBefore = Rows(target).Any(row => row.IsFocused);
+
         TableGrid.Prepare(target, Columns);
 
         var line = 0;
@@ -197,8 +200,13 @@ public static class BackupTableView
             {
                 (TableGrid.Header(PanelStrings.BackupTableTime, minWidth: MomentWidth), 0),
                 (TableGrid.Header(PanelStrings.BackupTableKind, minWidth: KindWidth), 2),
-                (TableGrid.Header(PanelStrings.BackupTableSize, minWidth: SizeWidth), 4),
-                (TableGrid.Header(PanelStrings.BackupTableFiles, minWidth: FilesWidth), 6),
+
+                // ЧИСЛА — ВПРАВО (норма GOV.UK Table: «When comparing columns of numbers, align
+                // the numbers to the right»). Прежде «Размер» и «Файлов» стояли влево, и колонки
+                // чисел не читались столбиком; у плана наката то же сделано правильно
+                // (`RestoreTableView`) — теперь одинаково в обеих таблицах.
+                (TableGrid.Header(PanelStrings.BackupTableSize, right: true, minWidth: SizeWidth), 4),
+                (TableGrid.Header(PanelStrings.BackupTableFiles, right: true, minWidth: FilesWidth), 6),
                 (TableGrid.Header(PanelStrings.BackupTableFeatures), 8),
             });
 
@@ -214,8 +222,8 @@ public static class BackupTableView
                 {
                     (TableGrid.Cell(Moment(entry), minWidth: MomentWidth), 0),
                     (TableGrid.Cell(Kind(entry), minWidth: KindWidth), 2),
-                    (TableGrid.Cell(Size(entry), minWidth: SizeWidth), 4),
-                    (TableGrid.Cell(Files(entry), minWidth: FilesWidth), 6),
+                    (TableGrid.Cell(Size(entry), right: true, minWidth: SizeWidth), 4),
+                    (TableGrid.Cell(Files(entry), right: true, minWidth: FilesWidth), 6),
                     (TableGrid.Cell(Features(entry), wrap: true), 8),
                 },
                 RowClass);
@@ -223,11 +231,74 @@ public static class BackupTableView
             // Курсор-рука — первое, что говорит «по мне можно щёлкнуть», ещё до наведения.
             row.Cursor = new Cursor(PointerCursor);
 
+            // СТРОКА — НАСТОЯЩИЙ ОРГАН: её можно взять С КЛАВИАТУРЫ и видеть, где фокус
+            // (пачка долгов 14.10.2026, §2). Прежде выбор был только мышью (`PointerPressed`),
+            // а фокуса не было вовсе — норма банка `50-lists-navigation.md` §2/§8 требует
+            // WCAG 2.2 SC 2.1.1 (Keyboard) и SC 2.4.7 (Focus Visible).
+            row.Focusable = true;
+
             var number = index;
-            row.PointerPressed += (_, _) => choose(number);
+
+            row.PointerPressed += (_, _) =>
+            {
+                // Фокус ставим и мышью: после щелчка стрелки обязаны работать сразу, а не только
+                // после того, как человек догадается нажать Tab. Кольца при этом не будет —
+                // `:focus-visible` мышь не зажигает, и это правильно: выбор и так подсвечен.
+                row.Focus();
+                choose(number);
+            };
+
+            // СТРЕЛКИ ДВИГАЮТ ВЫБОР — тем же путём, что щелчок: дверь выбора ОДНА (`choose`),
+            // и второго «где хранится выбор» не заводится. Home/End — к началу и к концу.
+            row.KeyDown += (_, e) =>
+            {
+                var next = e.Key switch
+                {
+                    Key.Down => number + 1,
+                    Key.Up => number - 1,
+                    Key.Home => 0,
+                    Key.End => entries.Count - 1,
+                    _ => -1,
+                };
+
+                if (next < 0 || entries.Count == 0) return;
+
+                next = Math.Clamp(next, 0, entries.Count - 1);
+
+                choose(next);
+
+                // И ФОКУС ЕДЕТ ЗА ВЫБОРОМ: без этого «стрелка вниз» сработала бы один раз —
+                // фокус остался бы на прежней строке.
+                FocusRow(target, next);
+
+                e.Handled = true;
+            };
         }
 
+        // БЫЛ ЛИ ФОКУС В ТАБЛИЦЕ — спрашивается ДО пересборки: она сносит строки вместе с фокусом,
+        // и после неё «стрелка вниз» не нашла бы, чью строку двигать.
         Select(target, selected);
+
+        if (focusedBefore && selected >= 0) FocusRow(target, selected);
+    }
+
+    /// <summary>
+    /// ПОСТАВИТЬ ФОКУС НА СТРОКУ — тем же способом, каким его получают С КЛАВИАТУРЫ
+    /// (<see cref="NavigationMethod.Directional"/>): каркас помечает такой фокус видимым
+    /// (`:focus-visible`), и кольцо не пропадает после пересборки таблицы.
+    ///
+    /// Номер вне списка — фокус на первую строку: таблица, у которой фокус пропал в никуда,
+    /// с клавиатуры больше не работает, а молчащая поломка тут дороже неточности.
+    /// </summary>
+    public static void FocusRow(Grid target, int index)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        var rows = Rows(target);
+
+        if (rows.Count == 0) return;
+
+        rows[index >= 0 && index < rows.Count ? index : 0].Focus(NavigationMethod.Directional);
     }
 
     /// <summary>

@@ -1,0 +1,70 @@
+using DshPanel.Isolation;
+
+namespace DshPanel.Server;
+
+/// <summary>
+/// ШАРИК О НОВОЙ ВЕРСИИ ДВИЖКА — «авто-проверка как у панели» (пункт 7 плана E3.2).
+///
+/// **Зачем это отдельно от блока в настройках.** Блок говорит с человеком, когда он сам открыл
+/// настройки. Но версия движка появляется и без него: панель читает подсказки при старте. Молчать
+/// об этом значило бы «человек узнает, если догадается зайти»; а говорить КАЖДЫЙ запуск — значит
+/// приставать. Поэтому правило взято у самой панели (там оно живёт в `UpdateDecisions.ShouldAnnounce`
+/// и проверено её выпусками): **один раз на версию**, и никогда — про версию, о которой уже сказали.
+///
+/// **Три отличия от панели, и все три — из предмета:**
+///
+/// 1. шарик **не предлагает нажать** — он показывает, что есть версия поновее и где её ставить
+///    (раздел «Обновление»): обновление движка начинается только кнопкой и только с вопросом;
+/// 2. **машина без движка не получает шарика вовсе**: сравнивать не с чем, а «поставьте движок»
+///    это не «есть новее»;
+/// 3. **сравнивается с ТЕМ, ЧТО СТОИТ**, а не с записью панели: если движок поднят из общей
+///    установки человека, запись панели молчит, а версия у него есть — и врать про «обновить»
+///    уже обновлённое панель не имеет права.
+///
+/// ⚠️ Здесь только РЕШЕНИЕ: ни одного сообщения, ни одного касания значка. Показывает общая дверь
+/// панели (<c>App.Notify</c>), и она же молчит в изолированном прогоне — второго пути к шарику
+/// в панели быть не должно.
+/// </summary>
+public static class EngineUpdateNotice
+{
+    /// <summary>
+    /// ЧТО СТОИТ СЕЙЧАС: своя поставленная версия (из записи и папки), иначе версия общей установки
+    /// человека. Пусто — движка нет вовсе (тогда шарика не будет: сравнивать не с чем).
+    /// </summary>
+    public static string Installed(AppPaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        var engine = OwnEngine.Locate(paths);
+
+        return OwnEngine.VersionOf(engine?.BinPath);
+    }
+
+    /// <summary>
+    /// ГОВОРИТЬ ЛИ. Три условия, и все три обязательны: рекомендованная известна, она **новее**
+    /// поставленной (сравнение по правилу панели — числовая часть) и про неё **ещё не говорили**.
+    /// </summary>
+    public static bool ShouldAnnounce(string? installed, string? recommended, string? announced)
+    {
+        var version = (recommended ?? string.Empty).Trim();
+
+        if (version.Length == 0) return false;
+
+        var standing = (installed ?? string.Empty).Trim();
+
+        // Движка нет вовсе — это не «есть новее»: панель не зовёт ставить движок шариком.
+        if (standing.Length == 0) return false;
+
+        // Про эту версию уже сказали (за этот запуск) — второй раз не пристаём.
+        if (string.Equals(version, (announced ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return EngineUpdateDecisions.FreshIsNewer(version, standing);
+    }
+
+    /// <summary>Слова шарика: что нашлось и где это ставить. Без «нажмите здесь» — нажимать нечего.</summary>
+    public static string Message(string? version) => string.Format(
+        System.Globalization.CultureInfo.CurrentCulture,
+        Shell.PanelStrings.EngineUpdateNoticeFormat,
+        (version ?? string.Empty).Trim());
+}

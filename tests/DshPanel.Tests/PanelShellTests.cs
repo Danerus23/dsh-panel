@@ -5,6 +5,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using DshPanel.Isolation;
+using DshPanel.Server;
 using DshPanel.Shell;
 using DshPanel.Tray;
 using DshPanel.Views;
@@ -180,6 +181,67 @@ public class PanelShellTests
         Assert.Equal(1, about);
         Assert.Equal(1, exited);
     }
+
+    /// <summary>
+    /// СТРОКА ТЕЛЕФОНА В МЕНЮ ЗНАЧКА — РОВНО КОГДА ОНА ЕСТЬ (F1.d).
+    ///
+    /// Два обещания, и оба — требования владельца 10.10.2026: **пока телефон не разрешён, строки
+    /// нет вовсе** (не «выключено», а ничего), а разрешён — она стоит ПОСЛЕ состояния обновления
+    /// и перед разделителем, то есть в ряду состояний, а не среди дверей.
+    ///
+    /// ⚠️ Проверка идёт тем же путём, что жизнь, — через <see cref="PanelMenu.Build"/>: собрать
+    /// список кнопок проверкой заново значило бы проверить собственную выдумку, а не меню.
+    /// </summary>
+    [Fact]
+    public void Строка_телефона_появляется_ровно_когда_она_есть()
+    {
+        static TrayMenu Menu(bool phoneAllowed, bool connected)
+        {
+            var status = TrayStatus.Build(
+                connected: true,
+                presence: ServerPresence.Running,
+                owner: ServerOwner.Panel,
+                port: 3080,
+                agentTitle: "DeepSeek",
+                balanceSummary: "12,34 $",
+                inPeak: false,
+                update: new TrayStatusLine("СОСТОЯНИЕ-ОБНОВЛЕНИЕ", TrayTone.Neutral),
+                phone: PhoneDecisions.TrayLine(phoneAllowed, connected));
+
+            return PanelMenu.Build(
+                status: () => status,
+                show: () => { },
+                openAgent: () => { },
+                settings: () => { },
+                about: () => { },
+                checkUpdate: () => { },
+                updateSection: () => { },
+                exit: () => { });
+        }
+
+        // НЕ РАЗРЕШЁН: строки телефона нет вовсе, и меню — прежние 13 пунктов.
+        var off = Menu(phoneAllowed: false, connected: false);
+
+        Assert.Equal(13, off.Items.Count);
+        Assert.DoesNotContain(off.Items, item => item.Text == PhoneDecisions.TrayText(PhoneTrayState.Waiting));
+        Assert.DoesNotContain(off.Items, item => item.Text == PhoneDecisions.TrayText(PhoneTrayState.Connected));
+
+        // РАЗРЕШЁН, НИКТО НЕ ПОДКЛЮЧЁН: «ждёт подключения» — пятая строка состояния.
+        var waiting = Menu(phoneAllowed: true, connected: false);
+
+        Assert.Equal(14, waiting.Items.Count);
+        Assert.Equal(PanelStrings.PhoneTrayWaiting, waiting.Items[4].Text);
+        Assert.False(waiting.Items[4].IsEnabled, "строка состояния обязана быть серой");
+        Assert.Null(waiting.Items[4].Invoke);
+        Assert.True(waiting.Items[5].IsSeparator, "после строк состояния обязан идти разделитель");
+
+        // ПОДКЛЮЧЁН: та же строка говорит другое, и это НЕ тот же текст.
+        var live = Menu(phoneAllowed: true, connected: true);
+
+        Assert.Equal(14, live.Items.Count);
+        Assert.Equal(PanelStrings.PhoneTrayConnected, live.Items[4].Text);
+        Assert.NotEqual(waiting.Items[4].Text, live.Items[4].Text);
+    }
     /// <summary>
     /// Строки состояния собираются НА КАЖДЫЙ показ меню, а не один раз при старте панели.
     ///
@@ -317,7 +379,7 @@ public class PanelShellTests
 
         Assert.False(ok);
         Assert.Equal(0, opened);
-        Assert.Contains(log, line => line.Contains("прогон проверки", StringComparison.Ordinal));
+        Assert.Contains(log, line => line.Contains(PanelStrings.AgentBrowserSuppressedLog, StringComparison.Ordinal));
 
         // Дверь сообщений решение САМА: в изоляции молчит каждый вид — значит и это сообщение
         // до рабочего стола владельца не дойдёт, хотя в дверь его отдали.

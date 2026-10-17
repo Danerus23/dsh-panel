@@ -112,6 +112,31 @@ public static class PanelStrings
     /// </summary>
     public static string FoundServerOwnerPortSuffix => Loc.T(nameof(FoundServerOwnerPortSuffix));
 
+    /// <summary>
+    /// Найденный сервер поднят **НАШИМ** движком (этап E3) — порт, процесс и версия. Отдельно от
+    /// <see cref="FoundServerFormat"/>: «поднят не панелью» про свой же движок — неправда.
+    /// </summary>
+    public static string FoundServerOursFormat => Loc.T(nameof(FoundServerOursFormat));
+
+    /// <summary>
+    /// НАЙДЕНО НЕСКОЛЬКО: строка на каждого — порт, процесс и ПОМЕТКА, чей это движок
+    /// («наш движок (версия)» или «чужой»). Один найденный сервер показывается прежней строкой:
+    /// обычный случай менять нечем.
+    /// </summary>
+    public static string FoundServerListFormat => Loc.T(nameof(FoundServerListFormat));
+
+    /// <summary>Пометка найденного сервера: поднят НАШИМ движком, в скобках версия.</summary>
+    public static string FoundServerOwnMarkFormat => Loc.T(nameof(FoundServerOwnMarkFormat));
+
+    /// <summary>Пометка найденного сервера: движок чужой (установка человека).</summary>
+    public static string FoundServerForeignMark => Loc.T(nameof(FoundServerForeignMark));
+
+    /// <summary>
+    /// Подпись кнопки «взять под управление», когда найденных серверов НЕСКОЛЬКО: без порта
+    /// человек не знает, какой именно берёт. Один сервер — прежняя подпись без порта.
+    /// </summary>
+    public static string AdoptButtonPortFormat => Loc.T(nameof(AdoptButtonPortFormat));
+
     /// <summary>Порты посмотреть не удалось — это НЕ «серверов нет», и говорить так нельзя.</summary>
     public static string FoundTableUnreadable => Loc.T(nameof(FoundTableUnreadable));
 
@@ -129,7 +154,7 @@ public static class PanelStrings
     /// считать этот сервер своим и сможет гасить его одной кнопкой, и что отвязаться можно
     /// кнопкой «Отвязаться» — сервер при этом продолжит работу (решение владельца 26.09.2026).
     /// </summary>
-    public static string AdoptHint => Loc.T(nameof(AdoptHint));
+    public static string AdoptNote => Loc.T(nameof(AdoptNote));
 
     /// <summary>
     /// Отказ поднять СВОЙ сервер, когда рядом уже работает найденный DSH. Панель не поднимает
@@ -137,6 +162,382 @@ public static class PanelStrings
     /// заряжена в профиль владельца (свой порт свободен, а `DSH_HOME` тот же самый).
     /// </summary>
     public static string ParallelStartRefusedFormat => Loc.T(nameof(ParallelStartRefusedFormat));
+
+    /// <summary>
+    /// Отказ поднять свой сервер, когда на порту уже работает НАШ движок ДРУГОЙ версии
+    /// (этап E3). Прежние слова («поднят не панелью, возьмите под управление») про свой же движок
+    /// были бы неправдой, а «взять под управление» предлагало бы человеку взять то, что и так наше,
+    /// вместо «остановите старое». Две версии на одном профиле пишут в одни файлы — это опаснее
+    /// чужого сервера, и правило названо прямо.
+    /// </summary>
+    public static string ParallelStartOwnVersionRefusedFormat => Loc.T(nameof(ParallelStartOwnVersionRefusedFormat));
+
+    // ---- УСТАНОВКА СВОЕГО ДВИЖКА (этап E3.1): отказы СЛОВАМИ, а не молчание ----
+    //
+    // Строки живут в трёх словарях, а имена — в `Server\EngineInstallRefusals.cs`: решение
+    // «какую версию ставить» отдаёт КЛЮЧ, и человек читает причину, а не пустое место.
+
+    /// <summary>Установка: замка проверенного набора нет — ставить не по чему.</summary>
+    public static string EngineInstallNoLock => Loc.T(nameof(EngineInstallNoLock));
+
+    /// <summary>Установка: подсказок о проверенных версиях нет — а версия берётся из них.</summary>
+    public static string EngineInstallNoHints => Loc.T(nameof(EngineInstallNoHints));
+
+    /// <summary>Установка: ни одна версия не отмечена проверенной.</summary>
+    public static string EngineInstallNotVerified => Loc.T(nameof(EngineInstallNotVerified));
+
+    /// <summary>Установка: подсказки и замок говорят о РАЗНЫХ версиях — две правды об одном дереве.</summary>
+    public static string EngineInstallMismatch => Loc.T(nameof(EngineInstallMismatch));
+
+    /// <summary>Установка: в замке пакет не с официального реестра — набор подменён.</summary>
+    public static string EngineInstallForeignSource => Loc.T(nameof(EngineInstallForeignSource));
+
+    /// <summary>Установка: замок обрезан ИЛИ без сумм — записей меньше объявленного, либо суммы нет.</summary>
+    public static string EngineInstallIncomplete => Loc.T(nameof(EngineInstallIncomplete));
+
+    /// <summary>Установка: Node не нашёлся (установка идёт через npm, а он часть Node).</summary>
+    public static string EngineInstallNodeMissing => Loc.T(nameof(EngineInstallNodeMissing));
+
+    /// <summary>Установка: Node старше порога 20 — под старый Node движок не ставится.</summary>
+    public static string EngineInstallNodeOld => Loc.T(nameof(EngineInstallNodeOld));
+
+    /// <summary>Установка: npm не нашёлся ни рядом с Node, ни в PATH.</summary>
+    public static string EngineInstallNpmMissing => Loc.T(nameof(EngineInstallNpmMissing));
+
+    /// <summary>Установка: npm отказал — код возврата и последняя сказанная строка.</summary>
+    public static string EngineInstallNpmFailed => Loc.T(nameof(EngineInstallNpmFailed));
+
+    /// <summary>Установка: не уложилась в срок и снята.</summary>
+    public static string EngineInstallTooLong => Loc.T(nameof(EngineInstallTooLong));
+
+    /// <summary>Установка: папку версии не завести или файлы замка не записать.</summary>
+    public static string EngineInstallNoPlace => Loc.T(nameof(EngineInstallNoPlace));
+
+    /// <summary>Установка: поставленное дерево разошлось с проверенным набором.</summary>
+    public static string EngineInstallTreeWrong => Loc.T(nameof(EngineInstallTreeWrong));
+
+    /// <summary>Установка: официальный файл сумм Node не прочитался.</summary>
+    public static string EngineInstallNodeSourceFailed => Loc.T(nameof(EngineInstallNodeSourceFailed));
+
+    /// <summary>Установка: нашего архива Node нет в официальном файле сумм.</summary>
+    public static string EngineInstallNodeSumMissing => Loc.T(nameof(EngineInstallNodeSumMissing));
+
+    /// <summary>Установка: официальная сумма Node и закреплённая в сборке разошлись.</summary>
+    public static string EngineInstallNodeSumMismatch => Loc.T(nameof(EngineInstallNodeSumMismatch));
+
+    /// <summary>Установка: архив Node не скачался.</summary>
+    public static string EngineInstallNodeDownloadFailed => Loc.T(nameof(EngineInstallNodeDownloadFailed));
+
+    /// <summary>Установка: архив Node не распаковался.</summary>
+    public static string EngineInstallNodeUnpackFailed => Loc.T(nameof(EngineInstallNodeUnpackFailed));
+
+    /// <summary>Установка: распакованный Node не запускается или моложе порога.</summary>
+    public static string EngineInstallNodeBroken => Loc.T(nameof(EngineInstallNodeBroken));
+
+    /// <summary>Журнал: свой Node понадобился, качаем официальный выпуск.</summary>
+    public static string EngineInstallNodeDownloadingFormat => Loc.T(nameof(EngineInstallNodeDownloadingFormat));
+
+    /// <summary>Журнал: качаем архив Node.</summary>
+    public static string EngineInstallNodeFetchingFormat => Loc.T(nameof(EngineInstallNodeFetchingFormat));
+
+    /// <summary>Журнал: свой Node скачан, распакован и проверен.</summary>
+    public static string EngineInstallNodeReadyFormat => Loc.T(nameof(EngineInstallNodeReadyFormat));
+
+    /// <summary>Откат: установка не удалась, папка версии убрана, панель осталась на прежней, и предупреждение про сессии.</summary>
+    public static string EngineInstallRolledBackFormat => Loc.T(nameof(EngineInstallRolledBackFormat));
+
+    /// <summary>Журнал: сколько ненужных версий движка убрано.</summary>
+    public static string EngineInstallRemovedFormat => Loc.T(nameof(EngineInstallRemovedFormat));
+
+    /// <summary>Предупреждение перед гашением СВОЕГО сервера: порт и что прервётся.</summary>
+    public static string ServerStopWarningOwnFormat => Loc.T(nameof(ServerStopWarningOwnFormat));
+
+    /// <summary>Предупреждение перед гашением ВЗЯТОГО сервера: порт и что прервётся.</summary>
+    public static string ServerStopWarningAdoptedFormat => Loc.T(nameof(ServerStopWarningAdoptedFormat));
+
+    /// <summary>Подсказка главной кнопки блока движка.</summary>
+    public static string TipEngineUpdateButton => Loc.T(nameof(TipEngineUpdateButton));
+
+    /// <summary>
+    /// ПОДПИСЬ ГЛАВНОЙ КНОПКИ В СОСТОЯНИИ «СЕРВЕРА DSH НЕТ» (A5 §7): «Установить», а не «Обновить» —
+    /// обновлять нечего, и подпись обязана называть то, что произойдёт.
+    /// </summary>
+    public static string EngineInstallButton => Loc.T(nameof(EngineInstallButton));
+
+    /// <summary>Подсказка той же кнопки: поставится проверенная версия и, если нужно, Node.</summary>
+    public static string TipEngineInstallButton => Loc.T(nameof(TipEngineInstallButton));
+
+    /// <summary>
+    /// ПОДСКАЗКА КАРТОЧКИ ДВИЖКА ПО СОСТОЯНИЮ (находка F-1): в состоянии «сервера DSH нет» кнопка
+    /// подписана «Установить», и подсказка обязана называть ТУ ЖЕ кнопку, а не «Обновить».
+    /// </summary>
+    public static string EngineInstallHint => Loc.T(nameof(EngineInstallHint));
+
+    /// <summary>Подсказка отдельной кнопки непроверенной версии.</summary>
+    public static string TipEngineInstallFreshButton => Loc.T(nameof(TipEngineInstallFreshButton));
+
+    /// <summary>Блок движка: вторая нажимка — подтверждение непроверенной версии.</summary>
+    public static string EngineUpdateFreshConfirmButton => Loc.T(nameof(EngineUpdateFreshConfirmButton));
+
+    /// <summary>Копия профиля: дома движка нет.</summary>
+    public static string EngineProfileCopyNoProfile => Loc.T(nameof(EngineProfileCopyNoProfile));
+
+    /// <summary>Копия профиля: место не подготовилось.</summary>
+    public static string EngineProfileCopyNoPlace => Loc.T(nameof(EngineProfileCopyNoPlace));
+
+    /// <summary>Блок движка: заголовок карточки.</summary>
+    public static string EngineBlockTitle => Loc.T(nameof(EngineBlockTitle));
+
+    /// <summary>Блок движка: главная кнопка — ставит проверенную версию.</summary>
+    public static string EngineUpdateButton => Loc.T(nameof(EngineUpdateButton));
+
+    /// <summary>Блок движка: подсказка, что делает главная кнопка.</summary>
+    public static string EngineUpdateMainHint => Loc.T(nameof(EngineUpdateMainHint));
+
+    /// <summary>Блок движка: подсказка про отдельную дверь непроверенной версии.</summary>
+    public static string EngineUpdateFreshHint => Loc.T(nameof(EngineUpdateFreshHint));
+    /// <summary>Исполнитель: движок погашен.</summary>
+    public static string EngineUpdateStopped => Loc.T(nameof(EngineUpdateStopped));
+
+    /// <summary>Исполнитель: погасить движок не удалось.</summary>
+    public static string EngineUpdateStopFailed => Loc.T(nameof(EngineUpdateStopFailed));
+
+    /// <summary>Исполнитель: копия профиля снята.</summary>
+    public static string EngineUpdateCopied => Loc.T(nameof(EngineUpdateCopied));
+
+    /// <summary>Исполнитель: проба прошла.</summary>
+    public static string EngineUpdateProbed => Loc.T(nameof(EngineUpdateProbed));
+
+    /// <summary>Исполнитель: проба не прошла.</summary>
+    public static string EngineUpdateProbeFailed => Loc.T(nameof(EngineUpdateProbeFailed));
+
+    /// <summary>Исполнитель: обновление состоялось.</summary>
+    public static string EngineUpdateDone => Loc.T(nameof(EngineUpdateDone));
+    /// <summary>Путь обновления: обновляться некуда (нет проверенной версии).</summary>
+    public static string EngineUpdateNoRecommended => Loc.T(nameof(EngineUpdateNoRecommended));
+
+    /// <summary>Путь обновления: свежая не новее проверенной.</summary>
+    public static string EngineUpdateFreshNotNewer => Loc.T(nameof(EngineUpdateFreshNotNewer));
+
+    /// <summary>Путь обновления: предохранительная копия не снялась — обновление не начинается.</summary>
+    public static string EngineUpdateCopyNotWhole => Loc.T(nameof(EngineUpdateCopyNotWhole));
+
+    /// <summary>Путь обновления: спросить человека (всегда).</summary>
+    public static string EngineUpdateAskHuman => Loc.T(nameof(EngineUpdateAskHuman));
+
+    /// <summary>Путь обновления: предупредить и погасить свой движок.</summary>
+    public static string EngineUpdateWarnStopOwnEngineFormat => Loc.T(nameof(EngineUpdateWarnStopOwnEngineFormat));
+
+    /// <summary>Путь обновления: снять предохранительную копию профиля.</summary>
+    public static string EngineUpdateCopyProfileFormat => Loc.T(nameof(EngineUpdateCopyProfileFormat));
+
+    /// <summary>Путь обновления: поставить по замку.</summary>
+    public static string EngineUpdateInstallByLockFormat => Loc.T(nameof(EngineUpdateInstallByLockFormat));
+
+    /// <summary>Путь обновления: проба на поставленном движке.</summary>
+    public static string EngineUpdateProbeFormat => Loc.T(nameof(EngineUpdateProbeFormat));
+
+    /// <summary>Путь обновления: записать, что стоит сейчас.</summary>
+    public static string EngineUpdateWriteRecordFormat => Loc.T(nameof(EngineUpdateWriteRecordFormat));
+
+    /// <summary>Блок сервера DSH, первая строка: СВОЯ версия — «У вас: DSH 0.1.5-rc.2».</summary>
+    public static string EngineOwnVersionFormat => Loc.T(nameof(EngineOwnVersionFormat));
+
+    /// <summary>Свою версию прочитать не удалось — сказано словами, а не пустой строкой.</summary>
+    public static string EngineOwnVersionUnknown => Loc.T(nameof(EngineOwnVersionUnknown));
+
+    /// <summary>
+    /// СЕРВЕРА DSH НЕТ ВОВСЕ — отдельный факт, а не «версию прочитать не удалось» (A5 §7):
+    /// панель говорит «не найден», потому что «не установлен» она знать не может.
+    /// </summary>
+    public static string EngineOwnVersionAbsent => Loc.T(nameof(EngineOwnVersionAbsent));
+
+    /// <summary>Блок сервера DSH: своя версия И ЕСТЬ рекомендуемая — обновлять нечего.</summary>
+    public static string EngineUpdateSameLine => Loc.T(nameof(EngineUpdateSameLine));
+
+    /// <summary>Своя версия НОВЕЕ рекомендуемой: панель свою не понижает — это решение владельца.</summary>
+    public static string EngineUpdateNewerFormat => Loc.T(nameof(EngineUpdateNewerFormat));
+
+    /// <summary>Блок движка: рекомендуемая (проверенная) версия.</summary>
+    public static string EngineUpdateRecommendedFormat => Loc.T(nameof(EngineUpdateRecommendedFormat));
+
+    /// <summary>Блок движка: свежая версия — «новее, но нами не проверена».</summary>
+    public static string EngineUpdateFreshLineFormat => Loc.T(nameof(EngineUpdateFreshLineFormat));
+
+    /// <summary>Блок движка: свежая версия есть, но ЗАМКА для неё нет — поставить её нельзя.</summary>
+    public static string EngineUpdateFreshNoLockFormat => Loc.T(nameof(EngineUpdateFreshNoLockFormat));
+
+    /// <summary>Журнал: свою версию сервера DSH прочитать не удалось.</summary>
+    public static string EngineUpdateInstalledUnavailableLog => Loc.T(nameof(EngineUpdateInstalledUnavailableLog));
+
+    /// <summary>Установка: замка для запрошенной версии нет — поставить её нельзя (ставим только по замку).</summary>
+    public static string EngineInstallNoLockForVersionFormat => Loc.T(nameof(EngineInstallNoLockForVersionFormat));
+
+    /// <summary>Откат: кнопка «вернуться к версии {0}…».</summary>
+    public static string EngineRollbackButtonFormat => Loc.T(nameof(EngineRollbackButtonFormat));
+
+    /// <summary>Откат: заголовок вопроса.</summary>
+    public static string EngineRollbackAskTitle => Loc.T(nameof(EngineRollbackAskTitle));
+
+    /// <summary>Откат: вопрос с последствием для сессий — СЛОВАМИ.</summary>
+    public static string EngineRollbackAskFormat => Loc.T(nameof(EngineRollbackAskFormat));
+
+    /// <summary>Откат: кнопка «да».</summary>
+    public static string EngineRollbackAskYes => Loc.T(nameof(EngineRollbackAskYes));
+
+    /// <summary>Откат: кнопка «нет».</summary>
+    public static string EngineRollbackAskNo => Loc.T(nameof(EngineRollbackAskNo));
+
+    /// <summary>Откат: подсказка кнопки «да».</summary>
+    public static string TipEngineRollbackYes => Loc.T(nameof(TipEngineRollbackYes));
+
+    /// <summary>Откат: подсказка кнопки «нет».</summary>
+    public static string TipEngineRollbackNo => Loc.T(nameof(TipEngineRollbackNo));
+
+    /// <summary>Откат: записи нет — возвращаться некуда.</summary>
+    public static string EngineRollbackNoRecord => Loc.T(nameof(EngineRollbackNoRecord));
+
+    /// <summary>Откат: прежней версии на диске нет.</summary>
+    public static string EngineRollbackNoPrevious => Loc.T(nameof(EngineRollbackNoPrevious));
+
+    /// <summary>Откат: поднимаю прежний движок на свободном порту.</summary>
+    public static string EngineRollbackProbeFormat => Loc.T(nameof(EngineRollbackProbeFormat));
+
+    /// <summary>Откат: прежний движок не прошёл пробу — остаёмся на текущей версии.</summary>
+    public static string EngineRollbackProbeFailedFormat => Loc.T(nameof(EngineRollbackProbeFailedFormat));
+
+    /// <summary>Откат: переписываю запись «стоит сейчас».</summary>
+    public static string EngineRollbackRecordFormat => Loc.T(nameof(EngineRollbackRecordFormat));
+
+    /// <summary>Откат: запись не переписалась.</summary>
+    public static string EngineRollbackRecordFailedFormat => Loc.T(nameof(EngineRollbackRecordFailedFormat));
+
+    /// <summary>Откат: одна строка после дела — куда вернулись и про сессии.</summary>
+    public static string EngineRollbackDoneFormat => Loc.T(nameof(EngineRollbackDoneFormat));
+
+    /// <summary>Откат: сервер поднят заново уже на прежней версии.</summary>
+    public static string EngineRollbackStartedAgainFormat => Loc.T(nameof(EngineRollbackStartedAgainFormat));
+
+    /// <summary>Выжимка: заголовок поля с заметками про версии движка.</summary>
+    /// <summary>Ссылка карточки движка: раскрыть или свернуть выжимку про версии.</summary>
+    public static string EngineNotesShowAll => Loc.T(nameof(EngineNotesShowAll));
+
+    public static string EngineNotesTitle => Loc.T(nameof(EngineNotesTitle));
+
+    /// <summary>Выжимка: заметок нет — говорим это словами, а не пустым полем.</summary>
+    public static string EngineNotesEmpty => Loc.T(nameof(EngineNotesEmpty));
+
+    /// <summary>Выжимка: подпись «про версию {0}».</summary>
+    public static string EngineNotesForFormat => Loc.T(nameof(EngineNotesForFormat));
+
+    /// <summary>Выжимка: подпись «известные беды».</summary>
+    public static string EngineNotesTroubles => Loc.T(nameof(EngineNotesTroubles));
+
+    /// <summary>Ссылка на выпуски движка — тихой строкой, открывается только по щелчку человека.</summary>
+    public static string EngineReleasesLink => Loc.T(nameof(EngineReleasesLink));
+
+    /// <summary>Подсказка ссылки: что откроется и что панель сама никуда не ходит.</summary>
+    public static string TipEngineReleasesLink => Loc.T(nameof(TipEngineReleasesLink));
+    /// <summary>Обновление: неудачная попытка проверки — когда и чем кончилась.</summary>
+    public static string UpdateAttemptFailedFormat => Loc.T(nameof(UpdateAttemptFailedFormat));
+
+    /// <summary>Обновление: попытка упёрлась в лимит запросов — причина и когда попробуем снова.</summary>
+    public static string UpdateAttemptRateLimitedFormat => Loc.T(nameof(UpdateAttemptRateLimitedFormat));
+
+    /// <summary>Журнал: панель молчит из-за отступа после отказа по числу запросов — до какого времени.</summary>
+    public static string UpdateAttemptWaitingLogFormat => Loc.T(nameof(UpdateAttemptWaitingLogFormat));
+
+    /// <summary>Блок движка: кнопка отдельной двери для непроверенной версии.</summary>
+    public static string EngineUpdateFreshButton => Loc.T(nameof(EngineUpdateFreshButton));
+
+    /// <summary>Блок движка: подтверждение перед постановкой непроверенной версии (с последствием для сессий).</summary>
+    public static string EngineUpdateFreshWarningFormat => Loc.T(nameof(EngineUpdateFreshWarningFormat));
+
+    /// <summary>Блок движка: обновление здесь недоступно (прогон проверки, изоляция, нет своей папки).</summary>
+    public static string EngineUpdateUnavailable => Loc.T(nameof(EngineUpdateUnavailable));
+
+    /// <summary>Журнал: свежую версию из реестра узнать не удалось.</summary>
+    public static string EngineUpdateFreshUnavailableLog => Loc.T(nameof(EngineUpdateFreshUnavailableLog));
+
+    /// <summary>Вопрос перед обновлением: панель спрашивает ВСЕГДА (решение владельца 10.10.2026).</summary>
+    public static string EngineUpdateAskFormat => Loc.T(nameof(EngineUpdateAskFormat));
+
+    /// <summary>Заголовок вопроса перед обновлением движка.</summary>
+    public static string EngineUpdateAskTitle => Loc.T(nameof(EngineUpdateAskTitle));
+
+    /// <summary>Кнопка вопроса: да, обновляемся.</summary>
+    public static string EngineUpdateAskYes => Loc.T(nameof(EngineUpdateAskYes));
+
+    /// <summary>Кнопка вопроса: нет, не сейчас.</summary>
+    public static string EngineUpdateAskNo => Loc.T(nameof(EngineUpdateAskNo));
+
+    /// <summary>Строка состояния после отказа человека: обновление отменено, всё осталось как было.</summary>
+    public static string EngineUpdateAskCancelled => Loc.T(nameof(EngineUpdateAskCancelled));
+
+    /// <summary>Подсказка кнопки «да»: что произойдёт по нажатию.</summary>
+    public static string TipEngineUpdateAskYes => Loc.T(nameof(TipEngineUpdateAskYes));
+
+    /// <summary>Подсказка кнопки «нет»: что произойдёт по нажатию.</summary>
+    public static string TipEngineUpdateAskNo => Loc.T(nameof(TipEngineUpdateAskNo));
+
+    /// <summary>Строка состояния, пока обновление идёт: это минуты, а не мгновение.</summary>
+    public static string EngineUpdateWorking => Loc.T(nameof(EngineUpdateWorking));
+
+    /// <summary>Журнал: какой системный Node нашёлся перед обновлением движка.</summary>
+    public static string EngineUpdateNodeCheckLogFormat => Loc.T(nameof(EngineUpdateNodeCheckLogFormat));
+
+    /// <summary>Журнал: гасить чужой сервер панель не станет — обновление останавливается.</summary>
+    public static string EngineUpdateStopForeignLog => Loc.T(nameof(EngineUpdateStopForeignLog));
+
+    /// <summary>Журнал: движка поставленной версии нет на месте — проверять нечего.</summary>
+    public static string EngineUpdateProbeNoEngineLogFormat => Loc.T(nameof(EngineUpdateProbeNoEngineLogFormat));
+
+    /// <summary>Журнал: Node не нашёлся вовсе — живую пробу поднять нечем.</summary>
+    public static string EngineUpdateProbeNoNode => Loc.T(nameof(EngineUpdateProbeNoNode));
+
+    /// <summary>Журнал: свой сервер поднят заново на новой версии — панель работает как работала.</summary>
+    public static string EngineUpdateEngineStartedAgain => Loc.T(nameof(EngineUpdateEngineStartedAgain));
+
+    /// <summary>Журнал: движок поставлен и проверен, но поднять его заново не удалось.</summary>
+    public static string EngineUpdateEngineStartFailed => Loc.T(nameof(EngineUpdateEngineStartFailed));
+
+    /// <summary>Журнал: обновление не началось — прежний движок поднят заново, панель работает как работала.</summary>
+    public static string EngineUpdateEngineRestoredLog => Loc.T(nameof(EngineUpdateEngineRestoredLog));
+
+    /// <summary>Заголовок шарика: для движка есть проверенная версия поновее.</summary>
+    public static string NotifyEngineUpdateTitle => Loc.T(nameof(NotifyEngineUpdateTitle));
+
+    /// <summary>Слова шарика: какая версия нашлась и где её ставить.</summary>
+    public static string EngineUpdateNoticeFormat => Loc.T(nameof(EngineUpdateNoticeFormat));
+    /// <summary>Заголовок сообщения о гашении сервера.</summary>
+    public static string NotifyServerStopTitle => Loc.T(nameof(NotifyServerStopTitle));
+
+    /// <summary>Журнал: запись «что стоит сейчас» не удалась.</summary>
+    public static string EngineInstallRecordFailedFormat => Loc.T(nameof(EngineInstallRecordFailedFormat));
+
+    /// <summary>Установка: npm молчал — так и говорим, а не показываем пустоту.</summary>
+    public static string EngineInstallOutputSilent => Loc.T(nameof(EngineInstallOutputSilent));
+
+    /// <summary>Журнал: ставлю движок такой-то версии в такую-то папку.</summary>
+    public static string EngineInstallStartedFormat => Loc.T(nameof(EngineInstallStartedFormat));
+
+    /// <summary>Журнал: движок поставлен, сверка с проверенным набором — числами.</summary>
+    public static string EngineInstallDoneFormat => Loc.T(nameof(EngineInstallDoneFormat));
+
+    /// <summary>Сверка: числа — нет пакетов, других версий, лишних, не нужных этой машине.</summary>
+    public static string EngineTreeNumbersFormat => Loc.T(nameof(EngineTreeNumbersFormat));
+
+    /// <summary>Сверка: пакета из замка в дереве нет.</summary>
+    public static string EngineTreeProblemMissingFormat => Loc.T(nameof(EngineTreeProblemMissingFormat));
+
+    /// <summary>Сверка: у пакета другая версия.</summary>
+    public static string EngineTreeProblemVersionFormat => Loc.T(nameof(EngineTreeProblemVersionFormat));
+
+    /// <summary>Сверка: в дереве есть пакет, которого в замке нет.</summary>
+    public static string EngineTreeProblemExtraFormat => Loc.T(nameof(EngineTreeProblemExtraFormat));
+
+    /// <summary>Сверка: сколько расхождений осталось за названными поимённо.</summary>
+    public static string EngineTreeProblemsMoreFormat => Loc.T(nameof(EngineTreeProblemsMoreFormat));
 
     /// <summary>Журнал: согласие на найденный сервер запомнено — спрашивать больше не будем.</summary>
     public static string AdoptedConsentSavedLogFormat => Loc.T(nameof(AdoptedConsentSavedLogFormat));
@@ -335,10 +736,22 @@ public static class PanelStrings
     public static string SettingsPortLabel => Loc.T(nameof(SettingsPortLabel));
 
     /// <summary>
-    /// Пояснение к порту. Здесь прямо сказано и про запрет порта владельца, и про то, что
-    /// панель не съезжает на другой порт молча: обещать «порт найдётся сам» нельзя.
+    /// КОРОТКАЯ подсказка ПОД полем порта — одна фраза без точки (норма GOV.UK: «Keep hint text
+    /// to a single short sentence, without any full stops»; `40-forms.md` §3 и §11(б) п. 3).
+    ///
+    /// ⚠️ До 12.10.2026 здесь стояли ТРИ предложения с тремя точками, и читалка читала их целиком
+    /// при каждом входе в поле. Числа и обещания никуда не делись — они переехали в
+    /// <see cref="SettingsPortExplain"/> НАД полем.
     /// </summary>
     public static string SettingsPortHint => Loc.T(nameof(SettingsPortHint));
+
+    /// <summary>
+    /// Пояснение к порту НАД полем — обычным текстом, а не подсказкой: длинное место подсказки —
+    /// над полем, короткое — под ним (`40-forms.md` §3, §11(б) п. 3). Здесь прямо сказано и про
+    /// умолчание, и про то, что панель не съезжает на другой порт молча: обещать «порт найдётся
+    /// сам» нельзя.
+    /// </summary>
+    public static string SettingsPortExplain => Loc.T(nameof(SettingsPortExplain));
 
     /// <summary>
     /// Человек набрал порт, который панель занять не может. Говорим это СРАЗУ и называем,
@@ -347,19 +760,15 @@ public static class PanelStrings
     public static string SettingsPortForbiddenFormat => Loc.T(nameof(SettingsPortForbiddenFormat));
 
     // --- что панель видит вокруг -------------------------------------------
-
-    /// <summary>Порт, который панель займёт, поднимая свой сервер (уже приведённый к допустимому).</summary>
-
-    public static string ServerNotStartedWithPort => Loc.T(nameof(ServerNotStartedWithPort));
-
-    public static string ServerRunningOwnFormat => Loc.T(nameof(ServerRunningOwnFormat));
-
-    public static string ServerRunningForeignFormat => Loc.T(nameof(ServerRunningForeignFormat));
+    //
+    // ⚠️ ЧЕТЫРЁХ СТРОК ЗДЕСЬ БОЛЬШЕ НЕТ (14.10.2026): «сервер: не запущен», «сервер: работает
+    // на порту {0}, поднят панелью/не панелью» и «сервер: порт {0} занят другой программой» были
+    // фразами СТРОКИ ОТЧЁТА о порте. Отчёт теперь показывает номер порта сам, а рядом — короткое
+    // «свободен / занят своим сервером» (`EnvPort*`), поэтому целые фразы стали мёртвыми, и это
+    // названо проверкой `SourceStringsTests.Каждая_строка_панели_где_то_используется`.
 
     /// <summary>Панель встроилась в найденный сервер — это отдельное состояние, не «поднят не панелью».</summary>
     public static string ServerAdoptedFormat => Loc.T(nameof(ServerAdoptedFormat));
-
-    public static string ServerPortBusyFormat => Loc.T(nameof(ServerPortBusyFormat));
 
     // --- длительность словами (ОБЩИЕ строки панели) -------------------------
     //
@@ -647,6 +1056,95 @@ public static class PanelStrings
     /// </summary>
     public static string NotifyPanelStartedText => Loc.T(nameof(NotifyPanelStartedText));
 
+    // --- ОКНО ПЕРВОГО ЗАПУСКА (A5, находка C1 N-01) ------------------------
+    //
+    // Слова — из таблицы `_team\c2\a5-slova.md` §2.1–§2.4 (три языка, смысл один). Своего здесь
+    // не сочиняется: строка человека — не работа инженера.
+    //
+    // ⚠️ Ни одна строка не говорит «не установлен»: поиск сервера DSH пуст и когда пакет есть,
+    // а Node нет (`Server\DshEngine.cs`), поэтому и слова — «не найден».
+
+    /// <summary>Заголовок окна: «что нужно для работы», а не «добро пожаловать».</summary>
+    public static string FirstRunTitle => Loc.T(nameof(FirstRunTitle));
+
+    /// <summary>Первая строка тела: панель уже работает и живёт в трее, ниже — чего не хватает.</summary>
+    public static string FirstRunIntro => Loc.T(nameof(FirstRunIntro));
+
+    /// <summary>Заголовок строки 1: сервера DSH нет (не «не установлен» — панель не ставит диагноз).</summary>
+    public static string FirstRunServerMissingEngineTitle => Loc.T(nameof(FirstRunServerMissingEngineTitle));
+
+    /// <summary>Тело строки 1: что из этого следует для человека.</summary>
+    public static string FirstRunServerMissingEngineBody => Loc.T(nameof(FirstRunServerMissingEngineBody));
+
+    /// <summary>Подсказка строки 1: что произойдёт после установки (та же фраза годится и для Node).</summary>
+    public static string FirstRunServerMissingEngineHint => Loc.T(nameof(FirstRunServerMissingEngineHint));
+
+    /// <summary>Заголовок строки 1, когда сервер DSH есть, а подняться не смог.</summary>
+    public static string FirstRunServerNotStartedTitle => Loc.T(nameof(FirstRunServerNotStartedTitle));
+
+    /// <summary>Причина «сервер не поднялся» — фразой из закрытого списка, а не кодом.</summary>
+    public static string FirstRunServerNotStartedReasonFormat => Loc.T(nameof(FirstRunServerNotStartedReasonFormat));
+
+    /// <summary>Заголовок строки 2: ключа модели нет.</summary>
+    public static string FirstRunKeyMissingTitle => Loc.T(nameof(FirstRunKeyMissingTitle));
+
+    /// <summary>Тело строки 2: что без ключа не работает.</summary>
+    public static string FirstRunKeyMissingBody => Loc.T(nameof(FirstRunKeyMissingBody));
+
+    /// <summary>Подсказка строки 2: ключ задаётся в DSH, панель его не заводит и не хранит.</summary>
+    public static string FirstRunKeyMissingHint => Loc.T(nameof(FirstRunKeyMissingHint));
+
+    /// <summary>Заголовок строки 2, когда файл ключа есть, а прочитать не вышло.</summary>
+    public static string FirstRunKeyUnreadableTitle => Loc.T(nameof(FirstRunKeyUnreadableTitle));
+
+    /// <summary>Тело строки 2 в том же случае: причина и что сделать.</summary>
+    public static string FirstRunKeyUnreadableBody => Loc.T(nameof(FirstRunKeyUnreadableBody));
+
+    /// <summary>Дверь в раздел «Обновление» — кнопка называет то, что сделает.</summary>
+    public static string FirstRunDoorUpdate => Loc.T(nameof(FirstRunDoorUpdate));
+
+    /// <summary>Кнопка «Проверить снова».</summary>
+    public static string FirstRunRecheckButton => Loc.T(nameof(FirstRunRecheckButton));
+
+    /// <summary>Результат проверки: ничего не изменилось.</summary>
+    public static string FirstRunRecheckSameLine => Loc.T(nameof(FirstRunRecheckSameLine));
+
+    /// <summary>Результат проверки: всё на месте.</summary>
+    public static string FirstRunRecheckOkLine => Loc.T(nameof(FirstRunRecheckOkLine));
+
+    /// <summary>Правая (безопасная) кнопка окна.</summary>
+    public static string FirstRunCloseButton => Loc.T(nameof(FirstRunCloseButton));
+
+    /// <summary>Подсказка двери в раздел «Обновление».</summary>
+    public static string TipFirstRunDoorUpdate => Loc.T(nameof(TipFirstRunDoorUpdate));
+
+    /// <summary>Подсказка двери «Показать панель».</summary>
+    public static string TipFirstRunDoorPanel => Loc.T(nameof(TipFirstRunDoorPanel));
+
+    /// <summary>Подсказка «Проверить снова».</summary>
+    public static string TipFirstRunRecheck => Loc.T(nameof(TipFirstRunRecheck));
+
+    /// <summary>Подсказка «Закрыть».</summary>
+    public static string TipFirstRunClose => Loc.T(nameof(TipFirstRunClose));
+
+    /// <summary>Строка журнала: окно первого запуска показано, с чем (без путей и значений).</summary>
+    public static string FirstRunShownLogFormat => Loc.T(nameof(FirstRunShownLogFormat));
+
+    /// <summary>Причина «сервера нет»: порт панели занят другой программой.</summary>
+    public static string FirstRunReasonPortBusy => Loc.T(nameof(FirstRunReasonPortBusy));
+
+    /// <summary>Причина «сервера нет»: система не дала запустить программу.</summary>
+    public static string FirstRunReasonStartRefused => Loc.T(nameof(FirstRunReasonStartRefused));
+
+    /// <summary>Причина «сервера нет»: программа завершилась, не начав отвечать.</summary>
+    public static string FirstRunReasonExitedSilent => Loc.T(nameof(FirstRunReasonExitedSilent));
+
+    /// <summary>Причина «сервера нет»: подробности в окне панели (машинный текст в окно не идёт).</summary>
+    public static string FirstRunReasonUnknown => Loc.T(nameof(FirstRunReasonUnknown));
+
+    /// <summary>Что нужно до запуска: сеть и Node 20 или новее (свой Node панель скачает сама).</summary>
+    public static string FirstRunNeedsNote => Loc.T(nameof(FirstRunNeedsNote));
+
     // --- сообщения о балансе и пике ----------------------------------------
 
     public static string NotifyLowBalanceTitle => Loc.T(nameof(NotifyLowBalanceTitle));
@@ -673,7 +1171,7 @@ public static class PanelStrings
 
     public static string SettingsActiveAgentLabel => Loc.T(nameof(SettingsActiveAgentLabel));
 
-    public static string SettingsActiveAgentHint => Loc.T(nameof(SettingsActiveAgentHint));
+    public static string SettingsActiveAgentNote => Loc.T(nameof(SettingsActiveAgentNote));
 
     public static string SettingsBalanceAuto => Loc.T(nameof(SettingsBalanceAuto));
 
@@ -685,14 +1183,14 @@ public static class PanelStrings
 
     public static string SettingsPeakNotifyLabel => Loc.T(nameof(SettingsPeakNotifyLabel));
 
-    public static string SettingsPeakNotifyHint => Loc.T(nameof(SettingsPeakNotifyHint));
+    public static string SettingsPeakNotifyNote => Loc.T(nameof(SettingsPeakNotifyNote));
 
     /// <summary>
     /// Куда уехали расписание пиков и таблица цен из раздела «Баланс и тариф» (решение владельца
     /// 28.09.2026: у них своё окно). Сказано словами, а не пропажей: раздел, у которого что-то
     /// исчезло молча, читается как сломанный.
     /// </summary>
-    public static string SettingsPeakWhereHint => Loc.T(nameof(SettingsPeakWhereHint));
+    public static string SettingsPeakWhereNote => Loc.T(nameof(SettingsPeakWhereNote));
 
     /// <summary>
     /// РАЗДЕЛ «ОБНОВЛЕНИЕ» В НАСТРОЙКАХ (решение владельца 28.09.2026): «это будет просто
@@ -703,39 +1201,94 @@ public static class PanelStrings
     /// <summary>Подзаголовок раздела «Обновление»: что именно здесь видно и что можно сделать.</summary>
     public static string UpdateSectionSubtitle => Loc.T(nameof(UpdateSectionSubtitle));
 
-    // --- отчёт окружения (раздел «Сервер»): группы и строки находок ---------------------------
+    /// <summary>
+    /// РАЗДЕЛ «ТЕЛЕФОН» В НАСТРОЙКАХ (этап F1.d). Решение владельца 10.10.2026: состояние телефона
+    /// живёт строкой в меню значка и разделом здесь, а **главное окно не трогается**.
+    /// </summary>
+    public static string PhoneSectionTitle => Loc.T(nameof(PhoneSectionTitle));
 
-    /// <summary>Группа «Папки»: где лежат данные, настройки, копии, рабочая папка и порт.</summary>
-    public static string EnvGroupSetup => Loc.T(nameof(EnvGroupSetup));
+    /// <summary>Подзаголовок раздела «Телефон»: что именно здесь видно и что можно сделать.</summary>
+    public static string PhoneSectionSubtitle => Loc.T(nameof(PhoneSectionSubtitle));
+
+    /// <summary>
+    /// СЛОВА-ОГРАНИЧИТЕЛЬ ТЕЛЕФОНА (решение владельца 17.10.2026, дословно): «работает в своей
+    /// сети: вход по QR и ответ на вопрос агента; постановка задачи и управление агентами —
+    /// в разработке; наружу не выходит».
+    ///
+    /// ⚠️ ОДНА строка на ДВА места — раздел «Телефон» в настройках И страницу телефона (вход по QR
+    /// и страница вопроса): это одна и та же мысль, и разными словами в двух местах она разошлась бы.
+    /// Чего нельзя терять при переводе (все четыре ограничения): (а) только своя сеть; (б) вход по
+    /// QR и ответ на вопрос агента; (в) постановка задачи и управление агентами — в разработке;
+    /// (г) наружу не выходит. Ослабить или усилить любое из них — соврать человеку.
+    /// </summary>
+    public static string PhoneLimits => Loc.T(nameof(PhoneLimits));
+
+    // --- отчёт окружения (раздел «Сервер»): карточки, строки находок и метки состояния ---------
+
+    /// <summary>Карточка «Что найдено на этой машине» — имя блока находок (решение владельца 14.10.2026).</summary>
+    public static string EnvFoundTitle => Loc.T(nameof(EnvFoundTitle));
+
+    /// <summary>Пояснение под ним: одна строка, что именно в этом списке.</summary>
+    public static string EnvFoundSubtitle => Loc.T(nameof(EnvFoundSubtitle));
+
+    /// <summary>Пояснение под списком умений: что панель уже спрашивала у сервера DSH.</summary>
+    public static string EnvSkillsSubtitle => Loc.T(nameof(EnvSkillsSubtitle));
+
+    /// <summary>Строка «Живая проба умений» — она и отвечает на вопрос «а это про сейчас?».</summary>
+    public static string EnvSkillsProbe => Loc.T(nameof(EnvSkillsProbe));
+
+    /// <summary>Версия не прочиталась — «не прочитана» жёлтой меткой, а не красной бедой.</summary>
+    public static string EnvSkillVersionUnread => Loc.T(nameof(EnvSkillVersionUnread));
 
     public static string EnvDshHome => Loc.T(nameof(EnvDshHome));
     public static string EnvSettingsFile => Loc.T(nameof(EnvSettingsFile));
-    public static string EnvBackupsDir => Loc.T(nameof(EnvBackupsDir));
     public static string EnvWorkDir => Loc.T(nameof(EnvWorkDir));
+
+    /// <summary>Путь и откуда он взялся: «~\\Harness — задана в настройках».</summary>
+    public static string EnvValueDetailFormat => Loc.T(nameof(EnvValueDetailFormat));
+
+    /// <summary>Порт и его состояние: «3080 — занят своим сервером».</summary>
     public static string EnvServerPort => Loc.T(nameof(EnvServerPort));
-    public static string EnvServerState => Loc.T(nameof(EnvServerState));
     public static string EnvFromSetting => Loc.T(nameof(EnvFromSetting));
     public static string EnvFromPanel => Loc.T(nameof(EnvFromPanel));
 
+    /// <summary>Состояние своего порта словами — по строке на каждый из четырёх случаев.</summary>
+    public static string EnvPortOwn => Loc.T(nameof(EnvPortOwn));
+    public static string EnvPortTaken => Loc.T(nameof(EnvPortTaken));
+    public static string EnvPortOther => Loc.T(nameof(EnvPortOther));
+    public static string EnvPortFree => Loc.T(nameof(EnvPortFree));
+    public static string EnvPortUnbound => Loc.T(nameof(EnvPortUnbound));
+
     /// <summary>Подпись журнала: рабочая папка не задана, взята папка панели.</summary>
     public static string WorkDirFromPanel => Loc.T(nameof(WorkDirFromPanel));
-
-    /// <summary>Группа «Чем поднимается сервер»: Node, npm, pnpm.</summary>
-    public static string EnvGroupRuntime => Loc.T(nameof(EnvGroupRuntime));
 
     public static string EnvNode => Loc.T(nameof(EnvNode));
     public static string EnvNpm => Loc.T(nameof(EnvNpm));
     public static string EnvPnpm => Loc.T(nameof(EnvPnpm));
 
-    /// <summary>Группа «Движок DSH» — версия и путь.</summary>
-    public static string EnvGroupDsh => Loc.T(nameof(EnvGroupDsh));
+    /// <summary>pnpm панели не нужен — так и сказано рядом с «не найден».</summary>
+    public static string EnvPnpmUnused => Loc.T(nameof(EnvPnpmUnused));
 
     public static string EnvEngine => Loc.T(nameof(EnvEngine));
 
     /// <summary>«Найден» без версии, «не найден» и «версия не прочитана» — три разных ответа.</summary>
     public static string EnvFound => Loc.T(nameof(EnvFound));
     public static string EnvNotFound => Loc.T(nameof(EnvNotFound));
+
+    /// <summary>Тот же «найден», но по-русски согласованный с именем строки: папка — «найдена», данные — «найдены».</summary>
+    public static string EnvFoundF => Loc.T(nameof(EnvFoundF));
+    public static string EnvFoundP => Loc.T(nameof(EnvFoundP));
+
     public static string EnvValueUnknown => Loc.T(nameof(EnvValueUnknown));
+
+    /// <summary>Подробность находки с версией: «версия 22.11.0».</summary>
+    public static string EnvVersionFormat => Loc.T(nameof(EnvVersionFormat));
+
+    /// <summary>Действие строки: открыть папку, в которой лежит найденное.</summary>
+    public static string EnvOpenFolderButton => Loc.T(nameof(EnvOpenFolderButton));
+
+    /// <summary>Подсказка кнопки строки: говорит, что произойдёт по нажатию.</summary>
+    public static string TipEnvOpenFolder => Loc.T(nameof(TipEnvOpenFolder));
 
     // --- копии (этап 4) -----------------------------------------------------
 
@@ -810,7 +1363,7 @@ public static class PanelStrings
     /// <summary>Пустая настройка — это умолчание v1, и оно называется целиком, а не подразумевается.</summary>
     public static string BackupFolderHintFormat => Loc.T(nameof(BackupFolderHintFormat));
 
-    public static string BackupFolderCustomHint => Loc.T(nameof(BackupFolderCustomHint));
+    public static string BackupFolderCustomNote => Loc.T(nameof(BackupFolderCustomNote));
 
     public static string BackupCreateButton => Loc.T(nameof(BackupCreateButton));
 
@@ -965,7 +1518,7 @@ public static class PanelStrings
     public static string BackupsButton => Loc.T(nameof(BackupsButton));
 
     /// <summary>Подсказка под списком: как вернуть данные.</summary>
-    public static string BackupListSelectHint => Loc.T(nameof(BackupListSelectHint));
+    public static string BackupListSelectNote => Loc.T(nameof(BackupListSelectNote));
 
     /// <summary>Строка журнала: окно копий открыто.</summary>
     public static string BackupsOpenedLog => Loc.T(nameof(BackupsOpenedLog));
@@ -1047,7 +1600,7 @@ public static class PanelStrings
 
     public static string SettingsKeysDirsLabel => Loc.T(nameof(SettingsKeysDirsLabel));
 
-    public static string SettingsKeysDirsHint => Loc.T(nameof(SettingsKeysDirsHint));
+    public static string SettingsKeysDirsNote => Loc.T(nameof(SettingsKeysDirsNote));
 
     // --- «эта копия — для передачи» (решения владельца 26.09.2026 и 27.09.2026) ---------------
     //
@@ -1098,7 +1651,7 @@ public static class PanelStrings
     public static string BackupScopeCustom => Loc.T(nameof(BackupScopeCustom));
 
     /// <summary>Пояснение к автоматическому режиму — видно, когда он выбран.</summary>
-    public static string BackupScopeAutoHint => Loc.T(nameof(BackupScopeAutoHint));
+    public static string BackupScopeAutoNote => Loc.T(nameof(BackupScopeAutoNote));
 
     /// <summary>
     /// Предупреждение к полному режиму: он снимает ВСЁ, включая восстановимый мусор, и потому
@@ -1107,7 +1660,7 @@ public static class PanelStrings
     public static string BackupScopeFullWarning => Loc.T(nameof(BackupScopeFullWarning));
 
     /// <summary>Пояснение к своему фильтру — что именно он делает с автоматическим списком.</summary>
-    public static string BackupScopeCustomHint => Loc.T(nameof(BackupScopeCustomHint));
+    public static string BackupScopeCustomNote => Loc.T(nameof(BackupScopeCustomNote));
 
     /// <summary>Свой фильтр без названных имён: работает как автоматический, и это сказано словами.</summary>
     public static string BackupScopeCustomEmpty => Loc.T(nameof(BackupScopeCustomEmpty));
@@ -1122,7 +1675,7 @@ public static class PanelStrings
     public static string BackupScopeExtraLabel => Loc.T(nameof(BackupScopeExtraLabel));
 
     /// <summary>Как заполнять поле лишних имён и на что они действуют.</summary>
-    public static string BackupScopeExtraHint => Loc.T(nameof(BackupScopeExtraHint));
+    public static string BackupScopeExtraNote => Loc.T(nameof(BackupScopeExtraNote));
 
     /// <summary>Кнопка сохранения списка лишних имён.</summary>
     public static string BackupScopeExtraSave => Loc.T(nameof(BackupScopeExtraSave));
@@ -1253,10 +1806,10 @@ public static class PanelStrings
     public static string SettingsBackupKeepLabel => Loc.T(nameof(SettingsBackupKeepLabel));
 
     /// <summary>Как работает расписание: «каждые N часов» и догон пропущенного при запуске.</summary>
-    public static string SettingsBackupScheduleHint => Loc.T(nameof(SettingsBackupScheduleHint));
+    public static string SettingsBackupScheduleNote => Loc.T(nameof(SettingsBackupScheduleNote));
 
     /// <summary>Как работает хранение: лишние удаляются, свежая и предохранительные — нет.</summary>
-    public static string SettingsBackupKeepHint => Loc.T(nameof(SettingsBackupKeepHint));
+    public static string SettingsBackupKeepNote => Loc.T(nameof(SettingsBackupKeepNote));
 
     /// <summary>
     /// Строка-совет в разделе настроек: автокопия снимается НА ХОДУ, сервер и агент не
@@ -1338,6 +1891,13 @@ public static class PanelStrings
 
     /// <summary>Решение дирижёра: язык применяется при следующем запуске, и человеку об этом сказано словами.</summary>
     public static string SettingsLanguageAppliesNextStart => Loc.T(nameof(SettingsLanguageAppliesNextStart));
+
+    /// <summary>
+    /// Пояснение к языку НАД полем — по тому же правилу, что у порта: подсказка под полем это одна
+    /// короткая фраза без точки, всё длинное живёт над полем (`40-forms.md` §3, §11(б) п. 3).
+    /// Здесь сказано, что выбранное применится после перезапуска, — а не «когда-нибудь».
+    /// </summary>
+    public static string SettingsLanguageExplain => Loc.T(nameof(SettingsLanguageExplain));
 
     /// <summary>Имя продукта: заголовок главного окна. Не переводится.</summary>
     public static string AppName => Loc.T(nameof(AppName));
@@ -1445,8 +2005,16 @@ public static class PanelStrings
     /// <summary>Строка окна настроек. Перенесено из Settings\SettingsStore.cs.</summary>
     public static string SettingsBadFileFormat => Loc.T(nameof(SettingsBadFileFormat));
 
-    /// <summary>Строка окна настроек. Перенесено из Settings\SettingsStore.cs.</summary>
-    public static string SettingsUnknownKeysFormat => Loc.T(nameof(SettingsUnknownKeysFormat));
+    /// <summary>
+    /// ОДНА строка о значениях из более новой версии панели (дефект живого прогона 11.10.2026:
+    /// прежде здесь была простыня «не применены: {имена}; панель понимает: {все имена панели}» —
+    /// тридцать шесть имён, из которых человек не понимал, что делать). Показывается в окне
+    /// настроек; перечень имён уходит в журнал (<see cref="SettingsNewerVersionLogFormat"/>).
+    /// </summary>
+    public static string SettingsNewerVersionNote => Loc.T(nameof(SettingsNewerVersionNote));
+
+    /// <summary>Строка журнала: имена непринятых ключей через запятую ({0}). На экран не попадает.</summary>
+    public static string SettingsNewerVersionLogFormat => Loc.T(nameof(SettingsNewerVersionLogFormat));
 
     /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
     public static string KeyDirAndroid => Loc.T(nameof(KeyDirAndroid));
@@ -1550,6 +2118,57 @@ public static class PanelStrings
     /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
     public static string SrvForeignRunningFormat => Loc.T(nameof(SrvForeignRunningFormat));
 
+    /// <summary>
+    /// Сервер на порту — ПОДНЯТ НЕ ПАНЕЛЬЮ, и это сказано человеку ОТДЕЛЬНО от «взятого чужого»
+    /// (решение владельца 13.10.2026, ответ 1: различать словами и кнопкой).
+    ///
+    /// ⚠️ Разница по существу, а не по словам: «взятый чужой» — человек САМ нажал «Взять под
+    /// управление», и панель им управляет; «поднят не панелью» — панель этим сервером НЕ управляет,
+    /// своей ссылки входа у неё нет, вопросы агента на телефон не придут, а обновить сервер DSH
+    /// из панели нельзя. Прежняя общая строка («сервер поднят не панелью — панель им не управляет»)
+    /// не говорила ни того, что за этим следует, ни одного пути назад.
+    /// </summary>
+    public static string SrvNotStartedByPanelTitle => Loc.T(nameof(SrvNotStartedByPanelTitle));
+
+    /// <summary>Что за этим следует для человека: телефон и обновление сервера DSH.</summary>
+    public static string SrvNotStartedByPanelNote => Loc.T(nameof(SrvNotStartedByPanelNote));
+
+    /// <summary>Кнопка «поднять свой сервер заново» — единственный путь назад.</summary>
+    public static string SrvRecoverButton => Loc.T(nameof(SrvRecoverButton));
+
+    /// <summary>Заголовок окна вопроса у этого действия: оно НЕ «остановить сервер».</summary>
+    public static string SrvRecoverTitle => Loc.T(nameof(SrvRecoverTitle));
+
+    /// <summary>Ответ «да» в том же окне: «поднять свой сервер».</summary>
+    public static string SrvRecoverButtonYes => Loc.T(nameof(SrvRecoverButtonYes));
+
+    /// <summary>Подсказка кнопки «поднять свой сервер заново»: что произойдёт по нажатию.</summary>
+    public static string TipRecoverOwnServerButton => Loc.T(nameof(TipRecoverOwnServerButton));
+
+    /// <summary>
+    /// Строка устройства, у которого «подключился» и «видели» — ОДИН миг (находка владельца
+    /// 14.10.2026): две одинаковые отметки рядом читались бы как две разные величины.
+    /// </summary>
+    public static string PhoneDeviceOneMomentFormat => Loc.T(nameof(PhoneDeviceOneMomentFormat));
+
+    /// <summary>Вопрос перед этим действием: через найденный сервер может идти работа человека.</summary>
+    public static string SrvRecoverConfirmFormat => Loc.T(nameof(SrvRecoverConfirmFormat));
+
+    /// <summary>Журнал: остановил найденный сервер, поднимаю свой.</summary>
+    public static string SrvRecoverStoppedLogFormat => Loc.T(nameof(SrvRecoverStoppedLogFormat));
+
+    /// <summary>Найденного сервера уже нет — поднимать свой на его место нечего.</summary>
+    public static string SrvRecoverGoneFormat => Loc.T(nameof(SrvRecoverGoneFormat));
+
+    /// <summary>Найденный сервер не остановлен — свой заново не поднят, и это сказано словами.</summary>
+    public static string SrvRecoverRefusedFormat => Loc.T(nameof(SrvRecoverRefusedFormat));
+
+    /// <summary>
+    /// Раздел «Обновление»: почему обновить сервер DSH нельзя и куда идти (решение владельца
+    /// 13.10.2026, ответ 3: сказать словами и предложить тот же путь).
+    /// </summary>
+    public static string EngineUpdateNoOwnServer => Loc.T(nameof(EngineUpdateNoOwnServer));
+
     /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
     public static string SrvGoneNothingToStopFormat => Loc.T(nameof(SrvGoneNothingToStopFormat));
 
@@ -1558,6 +2177,11 @@ public static class PanelStrings
 
     /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
     public static string SrvNoEngine => Loc.T(nameof(SrvNoEngine));
+    /// <summary>
+    /// ЖУРНАЛ: ГДЕ ИСКАЛИ СЕРВЕР DSH (S-11, пачка B). Слова человеку о поиске больше не говорят —
+    /// «PATH, %APPDATA%\npm, Program Files» ушли сюда, в журнал: без них отказ нечем разобрать.
+    /// </summary>
+    public static string SrvNoEngineWhereLogFormat => Loc.T(nameof(SrvNoEngineWhereLogFormat));
 
     /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
     public static string SrvNothingToStopLogFormat => Loc.T(nameof(SrvNothingToStopLogFormat));
@@ -1616,13 +2240,19 @@ public static class PanelStrings
     public static string AutoStartRefusedLogFormat => Loc.T(nameof(AutoStartRefusedLogFormat));
 
     /// <summary>Причина отказа автоподъёма: прогон изолированный.</summary>
-    public static string AutoStartRefusedIsolated => Loc.T(nameof(AutoStartRefusedIsolated));
+    public static string AutoStartRefusedIsolatedLog => Loc.T(nameof(AutoStartRefusedIsolatedLog));
 
     /// <summary>Причина отказа автоподъёма: это прогон проверки, а не запуск человеком.</summary>
     public static string AutoStartRefusedCheckRun => Loc.T(nameof(AutoStartRefusedCheckRun));
 
     /// <summary>Строка журнала: файлы состояния сервера в этом прогоне не читаются и не пишутся.</summary>
     public static string ServerStateFilesSuppressedLog => Loc.T(nameof(ServerStateFilesSuppressedLog));
+
+    /// <summary>Строка журнала: опись поставленного на машину записана (сколько строк в ней).</summary>
+    public static string InstalledInventoryWrittenLog => Loc.T(nameof(InstalledInventoryWrittenLog));
+
+    /// <summary>Строка журнала: опись поставленного на машину записать не удалось (тип ошибки).</summary>
+    public static string InstalledInventoryFailedFormat => Loc.T(nameof(InstalledInventoryFailedFormat));
 
     /// <summary>Строка журнала: права «только владелец» на файл ссылки поставить не удалось.</summary>
     public static string SrvEntryLinkRightsFailedFormat => Loc.T(nameof(SrvEntryLinkRightsFailedFormat));
@@ -1648,13 +2278,13 @@ public static class PanelStrings
     public static string OpenAgentButton => Loc.T(nameof(OpenAgentButton));
 
     /// <summary>Подсказка под доступной кнопкой: работа агента откроется в браузере по щелчку человека.</summary>
-    public static string OpenAgentReadyHint => Loc.T(nameof(OpenAgentReadyHint));
+    public static string OpenAgentReadyNote => Loc.T(nameof(OpenAgentReadyNote));
 
     /// <summary>Подсказка под недоступной кнопкой: сервер не работает.</summary>
-    public static string OpenAgentNoServerHint => Loc.T(nameof(OpenAgentNoServerHint));
+    public static string OpenAgentNoServerNote => Loc.T(nameof(OpenAgentNoServerNote));
 
     /// <summary>Подсказка под недоступной кнопкой: ссылка входа ещё неизвестна.</summary>
-    public static string OpenAgentNoLinkHint => Loc.T(nameof(OpenAgentNoLinkHint));
+    public static string OpenAgentNoLinkNote => Loc.T(nameof(OpenAgentNoLinkNote));
 
     /// <summary>Заголовок сообщения: открыть агента не удалось.</summary>
     public static string OpenAgentFailedTitle => Loc.T(nameof(OpenAgentFailedTitle));
@@ -1700,8 +2330,21 @@ public static class PanelStrings
     /// <summary>Строка журнала: свой сервер узнан по записи после перезапуска панели.</summary>
     public static string SrvOwnServerRestoredLogFormat => Loc.T(nameof(SrvOwnServerRestoredLogFormat));
 
+    /// <summary>Запись о своём сервере: каким движком он поднят (путь и версия).</summary>
+    public static string SrvOwnServerEngineLogFormat => Loc.T(nameof(SrvOwnServerEngineLogFormat));
+
+    /// <summary>Свой сервер узнан по ПУТИ ДВИЖКА (третья примета владения, этап E3).</summary>
+    public static string SrvOwnServerRestoredByEngineLogFormat => Loc.T(nameof(SrvOwnServerRestoredByEngineLogFormat));
+
     /// <summary>Строка журнала: запись о своём сервере устарела и снята.</summary>
     public static string SrvOwnServerStaleLogFormat => Loc.T(nameof(SrvOwnServerStaleLogFormat));
+
+    /// <summary>
+    /// Слова человеку (и строка журнала): устаревшую запись о своём сервере НЕ удаётся убрать —
+    /// файл занят или закрыт правами. Говорится ОДИН раз после лимита попыток, а не каждую секунду:
+    /// осмотр идёт раз в секунду, и повторять это значило бы утопить в себе журнал.
+    /// </summary>
+    public static string SrvOwnServerForgetRefusedFormat => Loc.T(nameof(SrvOwnServerForgetRefusedFormat));
 
     /// <summary>Строка журнала: запись о своём сервере снята при остановке.</summary>
     public static string SrvOwnServerClearedLogFormat => Loc.T(nameof(SrvOwnServerClearedLogFormat));
@@ -1711,6 +2354,23 @@ public static class PanelStrings
 
     /// <summary>Отказ: своего сервера на порту уже нет — гасить нечего.</summary>
     public static string SrvOwnGoneNothingToStopFormat => Loc.T(nameof(SrvOwnGoneNothingToStopFormat));
+
+    // --- замки движка (разведка этапа B, 10.10.2026) --------------------------
+
+    /// <summary>Строка журнала: мёртвый замок движка убран — путь и номер мёртвого процесса.</summary>
+    public static string EngineLockStaleRemovedLogFormat => Loc.T(nameof(EngineLockStaleRemovedLogFormat));
+
+    /// <summary>Строка журнала: мёртвый замок назван, но убрать его не удалось.</summary>
+    public static string EngineLockStaleKeptLogFormat => Loc.T(nameof(EngineLockStaleKeptLogFormat));
+
+    /// <summary>Строка журнала: замок ЖИВОГО владельца — не тронут (путь и номер процесса).</summary>
+    public static string EngineLockLiveLogFormat => Loc.T(nameof(EngineLockLiveLogFormat));
+
+    /// <summary>Строка журнала: в замке не номер процесса — владельца не проверить, не тронуто.</summary>
+    public static string EngineLockUnreadableLogFormat => Loc.T(nameof(EngineLockUnreadableLogFormat));
+
+    /// <summary>Строка журнала: у прогона нет права на данные панели — замки не трогаются вовсе.</summary>
+    public static string EngineLockNoRightLog => Loc.T(nameof(EngineLockNoRightLog));
 
     /// <summary>Строка журнала: гашу свой сервер по записи — процесс, PID и порт.</summary>
     public static string SrvStoppingOwnByRecordLogFormat => Loc.T(nameof(SrvStoppingOwnByRecordLogFormat));
@@ -1747,6 +2407,25 @@ public static class PanelStrings
 
     /// <summary>Замечание плана: движка и Node нет — копия несамодостаточна.</summary>
     public static string BackupEngineNotFound => Loc.T(nameof(BackupEngineNotFound));
+
+    /// <summary>
+    /// ОТКАЗ ПЛАНА: машинная установка движка не берётся — она вне корня прогона, а права нет
+    /// (находка C1 CH-08). Это НЕ «движка нет»: он найден и не положен, и слова у факта свои.
+    /// </summary>
+    public static string BackupEngineOutsideRunRoot => Loc.T(nameof(BackupEngineOutsideRunRoot));
+
+    /// <summary>
+    /// ОТКАЗ ПЛАНА: рабочая папка вне корня прогона не берётся (находка C1 CH-11): в изолированный
+    /// корень её может положить накат настроек из архива, и это данные человека, а не объём.
+    /// </summary>
+    public static string BackupWorkingFolderOutsideRunRootFormat =>
+        Loc.T(nameof(BackupWorkingFolderOutsideRunRootFormat));
+
+    /// <summary>
+    /// ОТКАЗ ПЛАНА: каталог ключей вне корня прогона не берётся (находка C1 CH-11) — ключи вне
+    /// своего корня не «ключи прогона», и отказ называется, а не выдаётся за «ключей нет».
+    /// </summary>
+    public static string BackupKeyDirOutsideRunRootFormat => Loc.T(nameof(BackupKeyDirOutsideRunRootFormat));
 
     /// <summary>Замечание плана: один корень содержит другой.</summary>
     public static string BackupFolderContainsFormat => Loc.T(nameof(BackupFolderContainsFormat));
@@ -2230,8 +2909,8 @@ public static class PanelStrings
     // и нативных подсказок у его пунктов не бывает вовсе. Подсказка есть у САМОГО значка
     // (`TrayToolTipFormat`) — она показывает агента, баланс и тариф.
     //
-    // ⚠️ Строки, которые уже сказаны человеку рядом с кнопкой (например `AdoptHint` или
-    // `OpenAgentReadyHint`), здесь НЕ повторяются: подсказка берёт ту же строку. Двойник
+    // ⚠️ Строки, которые уже сказаны человеку рядом с кнопкой (например `AdoptNote` или
+    // `OpenAgentReadyNote`), здесь НЕ повторяются: подсказка берёт ту же строку. Двойник
     // разошёлся бы с ней на первом же изменении.
 
     /// <summary>Кнопка «О программе…»: что она откроет.</summary>
@@ -2566,8 +3245,9 @@ public static class PanelStrings
     /// <summary>Серый подзаголовок раздела «Баланс и тариф».</summary>
     public static string BalanceSectionSubtitle => Loc.T(nameof(BalanceSectionSubtitle));
 
-    /// <summary>Серый подзаголовок раздела «Сервер».</summary>
-    public static string ServerSectionSubtitle => Loc.T(nameof(ServerSectionSubtitle));
+    // ⚠️ ПОДЗАГОЛОВКА РАЗДЕЛА «СЕРВЕР» ЗДЕСЬ БОЛЬШЕ НЕТ (решение владельца 14.10.2026: он
+    // спросил «зачем этот текст?», и ответа не было). Пояснение переехало ПОД СВОЙ СПИСОК —
+    // там оно объясняет, о чём список, а над разделом объясняло сам раздел.
 
     // --- обновление панели: проверка выпусков и извещение (первый срез) -------
     //
@@ -2722,10 +3402,10 @@ public static class PanelStrings
     public static string TipUpdatePrepareButton => Loc.T(nameof(TipUpdatePrepareButton));
 
     /// <summary>Пояснение под кнопками: замена файлов сама не запускается.</summary>
-    public static string UpdatePrepareHint => Loc.T(nameof(UpdatePrepareHint));
+    public static string UpdatePrepareNote => Loc.T(nameof(UpdatePrepareNote));
 
     /// <summary>Адреса вложений панель узнаёт при проверке — что делать, если данных нет.</summary>
-    public static string UpdateNeedCheckHint => Loc.T(nameof(UpdateNeedCheckHint));
+    public static string UpdateNeedCheckNote => Loc.T(nameof(UpdateNeedCheckNote));
 
     /// <summary>Прогон проверки замену файлов не готовит вовсе.</summary>
     public static string UpdateInstallUnavailable => Loc.T(nameof(UpdateInstallUnavailable));
@@ -2821,6 +3501,12 @@ public static class PanelStrings
     /// <summary>Отказ: не названа папка, в которую распаковывать архив.</summary>
     public static string UpdateUnpackFolderMissing => Loc.T(nameof(UpdateUnpackFolderMissing));
 
+    /// <summary>
+    /// Отказ: папку обновления занять не удалось — на её месте лежит файл. Предмет сообщения —
+    /// ПУТЬ, а не архив (архив цел), и слова свои, а не чужая фраза внутри русского текста.
+    /// </summary>
+    public static string UpdateUnpackFolderOccupied => Loc.T(nameof(UpdateUnpackFolderOccupied));
+
     /// <summary>Отказ: архив не читается.</summary>
     public static string UpdateArchiveUnreadable => Loc.T(nameof(UpdateArchiveUnreadable));
 
@@ -2853,6 +3539,13 @@ public static class PanelStrings
 
     /// <summary>Отказ: сценарий замены или шапку журнала записать не удалось (значение — причина от исключения).</summary>
     public static string UpdateWriteFailedFormat => Loc.T(nameof(UpdateWriteFailedFormat));
+
+    /// <summary>
+    /// ОТКАЗ УБОРКИ: папка обновления осталась на диске (значение — причина от среды).
+    /// Строка нужна и рядом с отказом движка, и рядом с итогом замены: уборка может не удаться
+    /// и после удачного обновления.
+    /// </summary>
+    public static string UpdateCleanupFailedFormat => Loc.T(nameof(UpdateCleanupFailedFormat));
 
     /// <summary>Отказ, которого панель не знает: причина не названа (журнал правили руками).</summary>
     public static string UpdateRefusedUnknown => Loc.T(nameof(UpdateRefusedUnknown));
@@ -3031,4 +3724,696 @@ public static class PanelStrings
 
     /// <summary>Строка журнала: просьба открыть историю, а окна у панели нет (так бывает у прогонов).</summary>
     public static string PanelLogPricingHistoryUnavailable => Loc.T(nameof(PanelLogPricingHistoryUnavailable));
-}
+
+    // ---- УМЕНИЯ ПАНЕЛИ С ЭТИМ ДВИЖКОМ (этап E2): имена, вердикты, способы проверки, причины ----
+
+    /// <summary>Умения: строка по ключу «EnvSkillsTitle».</summary>
+    public static string EnvSkillsTitle => Loc.T(nameof(EnvSkillsTitle));
+
+    /// <summary>Умения: строка по ключу «EnvSkillValueFormat».</summary>
+    public static string EnvSkillValueFormat => Loc.T(nameof(EnvSkillValueFormat));
+
+    /// <summary>Умения: строка по ключу «EnvSkillsSummaryLabel».</summary>
+    public static string EnvSkillsSummaryLabel => Loc.T(nameof(EnvSkillsSummaryLabel));
+
+    /// <summary>Умения: строка по ключу «EnvSkillVersionsLabel».</summary>
+    public static string EnvSkillVersionsLabel => Loc.T(nameof(EnvSkillVersionsLabel));
+
+    /// <summary>Умения: строка по ключу «EnvSkillVersionsValueFormat».</summary>
+    public static string EnvSkillVersionsValueFormat => Loc.T(nameof(EnvSkillVersionsValueFormat));
+
+    /// <summary>Умения: строка по ключу «EnvSkillVersionsNone».</summary>
+    public static string EnvSkillVersionsNone => Loc.T(nameof(EnvSkillVersionsNone));
+
+    /// <summary>Умения: строка по ключу «EnvSkillsSummaryFormat».</summary>
+    public static string EnvSkillsSummaryFormat => Loc.T(nameof(EnvSkillsSummaryFormat));
+
+    /// <summary>Умения: момент пробы — «смотрено сейчас: {0} (это про этот сервер, а не запись о версии)».</summary>
+    public static string EnvSkillsMomentFormat => Loc.T(nameof(EnvSkillsMomentFormat));
+
+    /// <summary>Умения: пробы не было — «панель сейчас не спрашивала этот сервер DSH».</summary>
+    public static string EnvSkillsMomentNotAsked => Loc.T(nameof(EnvSkillsMomentNotAsked));
+
+    /// <summary>Журнал: проба умений не дошла до вердиктов — вход в сервер DSH не состоялся.</summary>
+    public static string EnvSkillsProbeNoFactsLog => Loc.T(nameof(EnvSkillsProbeNoFactsLog));
+
+    /// <summary>Журнал: проба умений не вышла — таблица остаётся без свежего ответа.</summary>
+    public static string EnvSkillsProbeFailedLogFormat => Loc.T(nameof(EnvSkillsProbeFailedLogFormat));
+
+    /// <summary>Умения: строка по ключу «EnvSkillHowLive».</summary>
+    public static string EnvSkillHowLive => Loc.T(nameof(EnvSkillHowLive));
+
+    /// <summary>Умения: строка по ключу «EnvSkillHowDeclared».</summary>
+    public static string EnvSkillHowDeclared => Loc.T(nameof(EnvSkillHowDeclared));
+
+    /// <summary>Умения: строка по ключу «EnvSkillHowFile».</summary>
+    public static string EnvSkillHowFile => Loc.T(nameof(EnvSkillHowFile));
+
+    /// <summary>Умения: строка по ключу «EnvSkillHowVersion».</summary>
+    public static string EnvSkillHowVersion => Loc.T(nameof(EnvSkillHowVersion));
+
+    /// <summary>Умения: строка по ключу «EnvSkillEntryLink».</summary>
+    public static string EnvSkillEntryLink => Loc.T(nameof(EnvSkillEntryLink));
+
+    /// <summary>Умения: строка по ключу «EnvSkillSessionList».</summary>
+    public static string EnvSkillSessionList => Loc.T(nameof(EnvSkillSessionList));
+
+    /// <summary>Умения: строка по ключу «EnvSkillTaskPrompt».</summary>
+    public static string EnvSkillTaskPrompt => Loc.T(nameof(EnvSkillTaskPrompt));
+
+    /// <summary>Умения: строка по ключу «EnvSkillTaskCancel».</summary>
+    public static string EnvSkillTaskCancel => Loc.T(nameof(EnvSkillTaskCancel));
+
+    /// <summary>Умения: строка по ключу «EnvSkillQuestionAnswer».</summary>
+    public static string EnvSkillQuestionAnswer => Loc.T(nameof(EnvSkillQuestionAnswer));
+
+    /// <summary>Умения: строка по ключу «EnvSkillModelKey».</summary>
+    public static string EnvSkillModelKey => Loc.T(nameof(EnvSkillModelKey));
+
+    /// <summary>Умения: строка по ключу «EnvSkillBackupLayout».</summary>
+    public static string EnvSkillBackupLayout => Loc.T(nameof(EnvSkillBackupLayout));
+
+    /// <summary>Умения: строка по ключу «EnvSkillEngineVersion».</summary>
+    public static string EnvSkillEngineVersion => Loc.T(nameof(EnvSkillEngineVersion));
+
+    /// <summary>Умения: строка по ключу «EnvSkillEntryLinkNo».</summary>
+    public static string EnvSkillEntryLinkNo => Loc.T(nameof(EnvSkillEntryLinkNo));
+
+    /// <summary>Умения: строка по ключу «EnvSkillSessionListNo».</summary>
+    public static string EnvSkillSessionListNo => Loc.T(nameof(EnvSkillSessionListNo));
+
+    /// <summary>Умения: строка по ключу «EnvSkillTaskPromptNo».</summary>
+    public static string EnvSkillTaskPromptNo => Loc.T(nameof(EnvSkillTaskPromptNo));
+
+    /// <summary>Умения: строка по ключу «EnvSkillTaskCancelNo».</summary>
+    public static string EnvSkillTaskCancelNo => Loc.T(nameof(EnvSkillTaskCancelNo));
+
+    /// <summary>Умения: строка по ключу «EnvSkillQuestionAnswerNoChannel».</summary>
+    public static string EnvSkillQuestionAnswerNoChannel => Loc.T(nameof(EnvSkillQuestionAnswerNoChannel));
+
+    /// <summary>Умения: строка по ключу «EnvSkillQuestionAnswerNoStream».</summary>
+    public static string EnvSkillQuestionAnswerNoStream => Loc.T(nameof(EnvSkillQuestionAnswerNoStream));
+
+    /// <summary>Умения: строка по ключу «EnvSkillModelKeyNo».</summary>
+    public static string EnvSkillModelKeyNo => Loc.T(nameof(EnvSkillModelKeyNo));
+
+    /// <summary>Умения: строка по ключу «EnvSkillBackupLayoutNo».</summary>
+    public static string EnvSkillBackupLayoutNo => Loc.T(nameof(EnvSkillBackupLayoutNo));
+
+    /// <summary>Умения: строка по ключу «EnvSkillEngineVersionNo».</summary>
+    public static string EnvSkillEngineVersionNo => Loc.T(nameof(EnvSkillEngineVersionNo));
+
+    // ---- ГЕЙТ ПО УМЕНИЯМ (этап E2): функции и отказ словами ----
+
+    /// <summary>Гейт умений: строка по ключу «SkillGateRefusedFormat».</summary>
+    public static string SkillGateRefusedFormat => Loc.T(nameof(SkillGateRefusedFormat));
+
+    /// <summary>Гейт умений: строка по ключу «PanelFunctionBalance».</summary>
+    public static string PanelFunctionBalance => Loc.T(nameof(PanelFunctionBalance));
+
+    /// <summary>Гейт умений: строка по ключу «PanelFunctionCopies».</summary>
+    public static string PanelFunctionCopies => Loc.T(nameof(PanelFunctionCopies));
+
+    /// <summary>Гейт умений: строка по ключу «PanelFunctionPhone».</summary>
+    public static string PanelFunctionPhone => Loc.T(nameof(PanelFunctionPhone));
+
+    /// <summary>Гейт умений: строка по ключу «PanelFunctionEngineUpdate».</summary>
+    public static string PanelFunctionEngineUpdate => Loc.T(nameof(PanelFunctionEngineUpdate));
+
+    /// <summary>Гейт умений: строка по ключу «PanelFunctionTray».</summary>
+    public static string PanelFunctionTray => Loc.T(nameof(PanelFunctionTray));
+
+    // ---- состояния умений (этап E2, шаг 3): проверена · не проверялась · известна беда ----
+
+    /// <summary>Умения: строка по ключу «EnvSkillLineBareFormat».</summary>
+    public static string EnvSkillLineBareFormat => Loc.T(nameof(EnvSkillLineBareFormat));
+
+    /// <summary>Умения: строка по ключу «EnvSkillChecked».</summary>
+    public static string EnvSkillChecked => Loc.T(nameof(EnvSkillChecked));
+
+    /// <summary>Умения: строка по ключу «EnvSkillNotChecked».</summary>
+    public static string EnvSkillNotChecked => Loc.T(nameof(EnvSkillNotChecked));
+
+    /// <summary>Умения: строка по ключу «EnvSkillTrouble».</summary>
+    public static string EnvSkillTrouble => Loc.T(nameof(EnvSkillTrouble));
+
+    /// <summary>Умения: строка по ключу «EnvSkillReasonNotChecked».</summary>
+    public static string EnvSkillReasonNotChecked => Loc.T(nameof(EnvSkillReasonNotChecked));
+
+    /// <summary>Умения: строка по ключу «EnvSkillsUncheckedFormat».</summary>
+    public static string EnvSkillsUncheckedFormat => Loc.T(nameof(EnvSkillsUncheckedFormat));
+
+    /// <summary>Умения: строка по ключу «EnvSkillVersionsFormat».</summary>
+    public static string EnvSkillVersionsFormat => Loc.T(nameof(EnvSkillVersionsFormat));
+
+    /// <summary>Умения: строка по ключу «EnvSkillVersionUnknown».</summary>
+    public static string EnvSkillVersionUnknown => Loc.T(nameof(EnvSkillVersionUnknown));
+
+    /// <summary>Подсказки о версиях: строка по ключу «EnvSkillNotes».</summary>
+    public static string EnvSkillNotes => Loc.T(nameof(EnvSkillNotes));
+
+    /// <summary>Подсказки о версиях: строка по ключу «EnvSkillTroubles».</summary>
+    public static string EnvSkillTroubles => Loc.T(nameof(EnvSkillTroubles));
+
+    /// <summary>Подсказки о версиях: строка журнала по ключу «EngineHintsLoadedLog».</summary>
+    public static string EngineHintsLoadedLog => Loc.T(nameof(EngineHintsLoadedLog));
+
+    /// <summary>Подсказки о версиях: строка журнала по ключу «EngineHintsUnavailableLog».</summary>
+    public static string EngineHintsUnavailableLog => Loc.T(nameof(EngineHintsUnavailableLog));
+
+    // ---- ТЕЛЕФОН (этап F1, фундамент): состояния, код сопряжения, отказы, адрес ----
+    //
+    // Здесь только те строки, которые НУЖНЫ ЭТОМУ КУСКУ: состояния строки в меню значка,
+    // код сопряжения, слова отказов (белый список, лимит попыток, срок кода) и выбор адреса
+    // для QR. Раздел «Телефон» в настройках — отдельный шаг, и его строки заведутся там же,
+    // где появится сам раздел: строка, за которой нет вызова, — мёртвая (стережёт
+    // `SourceStringsTests.Каждая_строка_панели_где_то_используется`).
+
+    /// <summary>Строка в меню значка: телефон подключён.</summary>
+    public static string PhoneTrayConnected => Loc.T(nameof(PhoneTrayConnected));
+
+    /// <summary>Строка в меню значка: телефон разрешён, но никто не подключён.</summary>
+    public static string PhoneTrayWaiting => Loc.T(nameof(PhoneTrayWaiting));
+
+    /// <summary>Код сопряжения крупно, с объяснением и сроком жизни: «{0}» и «{1}» минут.</summary>
+    public static string PhonePairingCodeFormat => Loc.T(nameof(PhonePairingCodeFormat));
+
+    /// <summary>Отказ: такого вызова телефону нельзя — с названным именем вызова и причиной.</summary>
+    public static string PhoneCallRefusedFormat => Loc.T(nameof(PhoneCallRefusedFormat));
+
+    /// <summary>Причина отказа: вызов не назван вовсе.</summary>
+    public static string PhoneCallNoName => Loc.T(nameof(PhoneCallNoName));
+
+    /// <summary>Причина отказа: имени нет в белом списке того, что телефону можно.</summary>
+    public static string PhoneCallOutsideList => Loc.T(nameof(PhoneCallOutsideList));
+
+    /// <summary>Отказ: с этого адреса неудачных попыток слишком много.</summary>
+    public static string PhoneTooManyFromAddress => Loc.T(nameof(PhoneTooManyFromAddress));
+
+    /// <summary>Отказ: неудачных попыток слишком много всего.</summary>
+    public static string PhoneTooManyTotal => Loc.T(nameof(PhoneTooManyTotal));
+
+    /// <summary>Отказ с паузой: попробуйте позже, через «{0}» минут.</summary>
+    public static string PhoneTryLaterFormat => Loc.T(nameof(PhoneTryLaterFormat));
+
+    /// <summary>Адрес для телефона найден: сам адрес и признак «подсеть on-link» — «{0}», «{1}».</summary>
+    public static string PhoneAddressOneFormat => Loc.T(nameof(PhoneAddressOneFormat));
+
+    /// <summary>Подходящих адресов несколько — пусть выберет человек: их «{0}».</summary>
+    public static string PhoneAddressManyFormat => Loc.T(nameof(PhoneAddressManyFormat));
+
+    /// <summary>Ни одного подходящего адреса — телефону показывать нечего.</summary>
+    public static string PhoneAddressNone => Loc.T(nameof(PhoneAddressNone));
+
+    /// <summary>Признак адреса: его подсеть ведёт на этот адаптер напрямую.</summary>
+    public static string PhoneAddressOnLink => Loc.T(nameof(PhoneAddressOnLink));
+
+    /// <summary>Признак адреса: подсеть on-link не подтвердилась.</summary>
+    public static string PhoneAddressNotOnLink => Loc.T(nameof(PhoneAddressNotOnLink));
+
+    // ---- ТЕЛЕФОН (этап F1, кусок «слушатель калитки»): запуск, страница входа, отказы, вопрос ----
+    //
+    // Здесь всё, что калитка ГОВОРИТ: слова запуска и остановки, страница входа (на трёх языках —
+    // её смотрит телефон, и язык у него свой), отказы сопряжения, отказы белого списка и слова
+    // вокруг вопроса агента. Раздел «Телефон» в настройках (F1.d) и страница телефона (F2)
+    // заведут здесь своё — строка, за которой нет вызова, мёртвая (стережёт
+    // `SourceStringsTests.Каждая_строка_панели_где_то_используется`).
+
+    /// <summary>Отказ запуска: калитку открывает только обычный запуск человеком и только при
+    /// включённом телефоне. Это и причина, и слова — они же уходят в журнал прогона проверки.</summary>
+    public static string PhoneGateNoRightLog => Loc.T(nameof(PhoneGateNoRightLog));
+
+    /// <summary>Отказ запуска: названный порт — порт сервера панели («{0}»), калитка его не занимает.</summary>
+    public static string PhoneGatePortServerLogFormat => Loc.T(nameof(PhoneGatePortServerLogFormat));
+
+    /// <summary>Отказ запуска: названное число («{0}») — не порт вовсе.</summary>
+    public static string PhoneGatePortWrongLogFormat => Loc.T(nameof(PhoneGatePortWrongLogFormat));
+
+    /// <summary>Отказ запуска: адреса в своей сети нет — открывать нечего.</summary>
+    public static string PhoneGateNoAddressLog => Loc.T(nameof(PhoneGateNoAddressLog));
+
+    /// <summary>Отказ запуска: порт «{0}» занят, а молчаливого переезда у панели нет.</summary>
+    public static string PhoneGatePortBusyFormat => Loc.T(nameof(PhoneGatePortBusyFormat));
+
+    /// <summary>Калитка открыта: адрес «{0}» и порт «{1}».</summary>
+    public static string PhoneGateOpenedLogFormat => Loc.T(nameof(PhoneGateOpenedLogFormat));
+
+    /// <summary>Калитка закрыта, порт освобождён.</summary>
+    public static string PhoneGateStoppedLog => Loc.T(nameof(PhoneGateStoppedLog));
+
+    /// <summary>Калитка не открылась — и вот причина словами: «{0}».</summary>
+    public static string PhoneGateRefusedLogFormat => Loc.T(nameof(PhoneGateRefusedLogFormat));
+
+    /// <summary>Двери к потоку событий нет — вопрос агента показать нечем.</summary>
+    public static string PhoneEventDoorsMissing => Loc.T(nameof(PhoneEventDoorsMissing));
+
+    /// <summary>Поток событий движка отказал («{0}») — подписка будет переоткрыта.</summary>
+    public static string PhoneEventBrokenLogFormat => Loc.T(nameof(PhoneEventBrokenLogFormat));
+
+    /// <summary>Входа в движок нет — подписку на события открыть нечем.</summary>
+    public static string PhoneEventNoEngine => Loc.T(nameof(PhoneEventNoEngine));
+
+    /// <summary>Подписка на события движка не открылась («{0}» — вид беды).</summary>
+    public static string PhoneEventOpenFailedFormat => Loc.T(nameof(PhoneEventOpenFailedFormat));
+
+    /// <summary>Подписка на события движка оборвалась — калитка переоткрывает её.</summary>
+    public static string PhoneEventLostLog => Loc.T(nameof(PhoneEventLostLog));
+
+    /// <summary>Cookie движка не приложилась к подписке на события.</summary>
+    public static string PhoneEventCookieFailed => Loc.T(nameof(PhoneEventCookieFailed));
+
+    /// <summary>Отказ: запрос телефон не разобран.</summary>
+    public static string PhoneGateBadRequest => Loc.T(nameof(PhoneGateBadRequest));
+
+    /// <summary>Отказ: запрос больше предела калитки («{0}» КиБ).</summary>
+    public static string PhoneGateTooBigFormat => Loc.T(nameof(PhoneGateTooBigFormat));
+
+    /// <summary>Отказ: по этому пути у калитки ничего нет («{0}»).</summary>
+    public static string PhoneGateNotFoundFormat => Loc.T(nameof(PhoneGateNotFoundFormat));
+
+    /// <summary>Отказ: этот путь не принимает такой метод — метод «{0}», путь «{1}».</summary>
+    public static string PhoneGateBadMethodFormat => Loc.T(nameof(PhoneGateBadMethodFormat));
+
+    /// <summary>Отказ сопряжения: код — ровно шесть цифр.</summary>
+    public static string PhoneGateCodeWrongShape => Loc.T(nameof(PhoneGateCodeWrongShape));
+
+    /// <summary>Отказ сопряжения: в панели сейчас нет выпущенного кода.</summary>
+    public static string PhoneGateNoCode => Loc.T(nameof(PhoneGateNoCode));
+
+    /// <summary>Отказ сопряжения: код истёк.</summary>
+    public static string PhoneGateCodeExpired => Loc.T(nameof(PhoneGateCodeExpired));
+
+    /// <summary>Отказ сопряжения: код не подошёл.</summary>
+    public static string PhoneGateBadCode => Loc.T(nameof(PhoneGateBadCode));
+
+    /// <summary>Отказ сопряжения: пропуск не записался на диск.</summary>
+    public static string PhoneGatePassNotSaved => Loc.T(nameof(PhoneGatePassNotSaved));
+
+    /// <summary>Сопряжение прошло — телефону можно закрыть страницу.</summary>
+    public static string PhoneGatePaired => Loc.T(nameof(PhoneGatePaired));
+
+    /// <summary>Отказ: телефон не сопряжён (нет cookie или подпись чужая).</summary>
+    public static string PhoneGateUnauthorized => Loc.T(nameof(PhoneGateUnauthorized));
+
+    /// <summary>Вопрос снят: на него уже ответили (с компьютера или с другого устройства).</summary>
+    public static string PhoneGateQuestionCancelled => Loc.T(nameof(PhoneGateQuestionCancelled));
+
+    /// <summary>Вопросов к человеку сейчас нет.</summary>
+    public static string PhoneGateNoQuestionNow => Loc.T(nameof(PhoneGateNoQuestionNow));
+
+    /// <summary>Отказ ответа: вопроса сейчас нет.</summary>
+    public static string PhoneGateNoQuestion => Loc.T(nameof(PhoneGateNoQuestion));
+
+    /// <summary>Отказ ответа: этот вопрос уже снят или не наш.</summary>
+    public static string PhoneGateStaleQuestion => Loc.T(nameof(PhoneGateStaleQuestion));
+
+    /// <summary>Отказ ответа: канал событий движка не открыт — ответ отправить нечем.</summary>
+    public static string PhoneGateNoChannel => Loc.T(nameof(PhoneGateNoChannel));
+
+    /// <summary>Отказ: движок не ответил («{0}» — вид беды).</summary>
+    public static string PhoneGateEngineSilentFormat => Loc.T(nameof(PhoneGateEngineSilentFormat));
+
+    /// <summary>Отказ: движок отказал (код «{0}»).</summary>
+    public static string PhoneGateEngineRefusedFormat => Loc.T(nameof(PhoneGateEngineRefusedFormat));
+
+    /// <summary>Ответ на вопрос агента отправлен.</summary>
+    public static string PhoneGateAnswerSent => Loc.T(nameof(PhoneGateAnswerSent));
+
+    /// <summary>Калитка не открыта: сначала нужно узкое правило брандмауэра.</summary>
+    public static string PhoneGateBlockedByFirewall => Loc.T(nameof(PhoneGateBlockedByFirewall));
+
+    /// <summary>Журнал: телефон сопряжён (устройство «{0}», адрес «{1}»).</summary>
+    public static string PhoneGatePairedLogFormat => Loc.T(nameof(PhoneGatePairedLogFormat));
+
+    /// <summary>Журнал: файл пропуска не записался («{0}» — вид отказа и код, БЕЗ пути).</summary>
+    public static string PhonePassSaveFailedLogFormat => Loc.T(nameof(PhonePassSaveFailedLogFormat));
+
+    /// <summary>Журнал: файл пропуска не прочитался («{0}» — вид отказа и код, БЕЗ пути).</summary>
+    public static string PhonePassReadFailedLogFormat => Loc.T(nameof(PhonePassReadFailedLogFormat));
+
+    /// <summary>Вид отказа: файл держит другой процесс (журнальная часть строки причины).</summary>
+    public static string PhonePassBusyLogReason => Loc.T(nameof(PhonePassBusyLogReason));
+
+    /// <summary>Вид отказа: прав на файл нет (журнальная часть строки причины).</summary>
+    public static string PhonePassNoRightsLogReason => Loc.T(nameof(PhonePassNoRightsLogReason));
+
+    /// <summary>Журнал: вопрос агента показан телефону (событие «{0}», вопросов «{1}»).</summary>
+    public static string PhoneGateQuestionLogFormat => Loc.T(nameof(PhoneGateQuestionLogFormat));
+
+    /// <summary>Журнал: ответ телефона ушёл в движок (событие «{0}», устройство «{1}»).</summary>
+    public static string PhoneGateAnswerLogFormat => Loc.T(nameof(PhoneGateAnswerLogFormat));
+
+    /// <summary>Журнал: ответ телефона не ушёл («{0}» — короткая причина).</summary>
+    public static string PhoneGateAnswerRefusedLogFormat => Loc.T(nameof(PhoneGateAnswerRefusedLogFormat));
+
+    /// <summary>Журнал: ход агента отменён с телефона (событие «{0}», устройство «{1}»).</summary>
+    public static string PhoneGateCancelledLogFormat => Loc.T(nameof(PhoneGateCancelledLogFormat));
+
+    /// <summary>Отказ: поток одиночным запросом не зовётся — названо имя («{0}»).</summary>
+    public static string PhoneGateStreamRefusedFormat => Loc.T(nameof(PhoneGateStreamRefusedFormat));
+
+    /// <summary>Отказ: это служебная дверь движка — телефон отвечает своей дверью.</summary>
+    public static string PhoneGateInternalRefused => Loc.T(nameof(PhoneGateInternalRefused));
+
+    /// <summary>Отказ: доводы не присланы — этот вызов ждёт объект «{0}» внутри args.</summary>
+    public static string PhoneGateNoArgumentsFormat => Loc.T(nameof(PhoneGateNoArgumentsFormat));
+
+    /// <summary>Отказ: ссылки входа в движок не нашлось.</summary>
+    public static string PhoneGateNoEngine => Loc.T(nameof(PhoneGateNoEngine));
+
+    /// <summary>Отказ: вход в движок не состоялся (код «{0}»).</summary>
+    public static string PhoneGateLoginFailedFormat => Loc.T(nameof(PhoneGateLoginFailedFormat));
+
+    /// <summary>Движок не принял вход (код «{0}») — панель войдёт заново.</summary>
+    public static string PhoneGateLoginStaleFormat => Loc.T(nameof(PhoneGateLoginStaleFormat));
+
+    /// <summary>Заголовок страницы входа.</summary>
+    public static string PhonePageTitle => Loc.T(nameof(PhonePageTitle));
+
+    /// <summary>Объяснение на странице входа: что за код и откуда его взять.</summary>
+    public static string PhonePageIntro => Loc.T(nameof(PhonePageIntro));
+
+    /// <summary>Подпись поля кода на странице входа.</summary>
+    public static string PhonePageCodeLabel => Loc.T(nameof(PhonePageCodeLabel));
+
+    /// <summary>Кнопка страницы входа.</summary>
+    public static string PhonePageSubmit => Loc.T(nameof(PhonePageSubmit));
+
+    /// <summary>Страница входа: запрос не ушёл вовсе (нет сети, страница устарела).</summary>
+    public static string PhonePageError => Loc.T(nameof(PhonePageError));
+
+    // ---- ТЕЛЕФОН (этап F1.d): РАЗДЕЛ «ТЕЛЕФОН» В ОКНЕ НАСТРОЕК --------------------------------
+    //
+    // Здесь всё, что говорит САМ РАЗДЕЛ: состояние и согласие, порт калитки, код сопряжения,
+    // список подключённых и адрес своей сети. Слова отказов и состояния страницы входа живут
+    // выше — они принадлежат калитке, а не окну.
+    //
+    // ⚠️ Ни одной строки «за компанию»: за каждой стоит вызов в `Views\SettingsWindow.axaml.cs`
+    // или `Shell\PhoneSection.cs`, и это стережёт
+    // `SourceStringsTests.Каждая_строка_панели_где_то_используется`.
+
+    /// <summary>Рубильник: разрешить телефону подключаться к этой панели.</summary>
+    public static string PhoneAllowedCheck => Loc.T(nameof(PhoneAllowedCheck));
+
+    /// <summary>Состояние телефона: РАЗРЕШЁН. «{0}» — что делает калитка, «{1}» — сколько устройств.</summary>
+    public static string PhoneStateAllowedFormat => Loc.T(nameof(PhoneStateAllowedFormat));
+
+    /// <summary>Состояние телефона: ВЫКЛЮЧЕН. «{0}» — что делает калитка, «{1}» — сколько устройств.</summary>
+    public static string PhoneStateOffFormat => Loc.T(nameof(PhoneStateOffFormat));
+
+    /// <summary>Когда человек разрешил телефон: «{0}» — та же отметка времени, что у цен.</summary>
+    public static string PhoneConsentFormat => Loc.T(nameof(PhoneConsentFormat));
+
+    /// <summary>Почему телефон разрешён, а калитка закрыта: её открывает только обычный запуск панели.</summary>
+    public static string PhoneRightNote => Loc.T(nameof(PhoneRightNote));
+
+    /// <summary>Телефоном в этом прогоне не управляют: двери к калитке нет вовсе.</summary>
+    public static string PhoneNoDoor => Loc.T(nameof(PhoneNoDoor));
+
+    /// <summary>Подпись поля порта калитки.</summary>
+    public static string PhonePortLabel => Loc.T(nameof(PhonePortLabel));
+
+    /// <summary>Подсказка под полем порта: на нём панель ждёт телефон.</summary>
+    public static string PhonePortNote => Loc.T(nameof(PhonePortNote));
+
+    /// <summary>Запрещённые порты названы словами: «{0}» — порт сервера панели, «{1}» — запасной.</summary>
+    public static string PhonePortForbiddenFormat => Loc.T(nameof(PhonePortForbiddenFormat));
+
+    /// <summary>Порт вне границ: «{0}» — что написано, «{1}» — что панель возьмёт вместо него.</summary>
+    public static string PhonePortWrongFormat => Loc.T(nameof(PhonePortWrongFormat));
+
+    /// <summary>Кнопка «Показать код» — живого кода ещё нет.</summary>
+    public static string PhoneShowCodeButton => Loc.T(nameof(PhoneShowCodeButton));
+
+    /// <summary>Та же кнопка, когда код уже выпущен: показать его снова, а не взять новый.</summary>
+    public static string PhoneShowCodeAgainButton => Loc.T(nameof(PhoneShowCodeAgainButton));
+
+    /// <summary>Заметка под кодом: код выпущен только что.</summary>
+    public static string PhoneCodeFresh => Loc.T(nameof(PhoneCodeFresh));
+
+    /// <summary>Заметка под кодом: это тот же код, что показывали.</summary>
+    public static string PhoneCodeShownAgain => Loc.T(nameof(PhoneCodeShownAgain));
+
+    /// <summary>Код показать не удалось: калитка закрыта — брать код неоткуда.</summary>
+    public static string PhoneCodeFailed => Loc.T(nameof(PhoneCodeFailed));
+
+    /// <summary>Заголовок списка подключённых.</summary>
+    public static string PhoneDevicesTitle => Loc.T(nameof(PhoneDevicesTitle));
+
+    /// <summary>Сколько устройств подключено: «{0}».</summary>
+    public static string PhoneDevicesCountFormat => Loc.T(nameof(PhoneDevicesCountFormat));
+
+    /// <summary>Устройств нет вовсе: телефон ещё не подключался.</summary>
+    public static string PhoneDevicesEmpty => Loc.T(nameof(PhoneDevicesEmpty));
+
+    /// <summary>Строка устройства: «{0}» — имя, «{1}» — когда подключился, «{2}» — когда видели.</summary>
+    public static string PhoneDeviceFormat => Loc.T(nameof(PhoneDeviceFormat));
+
+    /// <summary>Кнопка «Отвязать» у одного устройства.</summary>
+    public static string PhoneForgetDeviceButton => Loc.T(nameof(PhoneForgetDeviceButton));
+
+    /// <summary>Отвязать устройство не удалось: запись не сохранилась.</summary>
+    public static string PhoneForgetFailed => Loc.T(nameof(PhoneForgetFailed));
+
+    /// <summary>Заголовок блока адреса: по какому адресу телефон найдёт эту панель.</summary>
+    public static string PhoneAddressTitle => Loc.T(nameof(PhoneAddressTitle));
+
+    /// <summary>Замечание про смену адреса: он выдан по DHCP и может измениться.</summary>
+    public static string PhoneAddressNote => Loc.T(nameof(PhoneAddressNote));
+
+    /// <summary>Ни одного подходящего адреса: телефону показывать нечего.</summary>
+    public static string PhoneAddressNoAddresses => Loc.T(nameof(PhoneAddressNoAddresses));
+
+    /// <summary>Адрес ВЫБРАН человеком: среди нескольких подходящих он назвал этот — «{0}».</summary>
+    public static string PhoneAddressPickedFormat => Loc.T(nameof(PhoneAddressPickedFormat));
+
+    /// <summary>Выбор адреса запомнить не удалось: панель его не знает.</summary>
+    public static string PhoneAddressFailed => Loc.T(nameof(PhoneAddressFailed));
+
+    /// <summary>Когда телефон выходил на связь: «{0}» — та же отметка времени, что у цен.</summary>
+    public static string PhoneSeenFormat => Loc.T(nameof(PhoneSeenFormat));
+
+    /// <summary>Телефон на связь не выходил ни разу.</summary>
+    public static string PhoneSeenNever => Loc.T(nameof(PhoneSeenNever));
+
+    /// <summary>Заголовок блока QR: код, который человек наводит камерой телефона.</summary>
+    public static string PhoneQrTitle => Loc.T(nameof(PhoneQrTitle));
+
+    /// <summary>Слова про QR: в нём ТОЛЬКО адрес, шесть цифр человек вводит руками.</summary>
+    public static string PhoneQrNote => Loc.T(nameof(PhoneQrNote));
+
+    /// <summary>Адреса нет — значит и QR рисовать не с чего.</summary>
+    public static string PhoneQrNoAddress => Loc.T(nameof(PhoneQrNoAddress));
+
+    /// <summary>QR нарисовать не удалось: адрес не закодировался.</summary>
+    public static string PhoneQrFailed => Loc.T(nameof(PhoneQrFailed));
+
+    /// <summary>
+    /// Прогон съёмки: адрес под маской, и QR кадра нарисован ИЗ НЕЁ, а не из настоящего адреса, —
+    /// поэтому человеку и сказано, что код здесь **образец** (кадр уезжает в README).
+    /// </summary>
+    public static string PhoneQrMasked => Loc.T(nameof(PhoneQrMasked));
+
+    /// <summary>Рубильник не записался: телефон остался как был.</summary>
+    public static string PhoneToggleFailed => Loc.T(nameof(PhoneToggleFailed));
+
+    /// <summary>Журнал: при выключении телефона устройства отвязать не удалось.</summary>
+    public static string PhoneForgetAllFailedLog => Loc.T(nameof(PhoneForgetAllFailedLog));
+
+    /// <summary>Подсказка кнопки «Показать код».</summary>
+    public static string TipPhoneShowCodeButton => Loc.T(nameof(TipPhoneShowCodeButton));
+
+    /// <summary>Подсказка кнопки «Отвязать» у устройства.</summary>
+    public static string TipPhoneForgetDeviceButton => Loc.T(nameof(TipPhoneForgetDeviceButton));
+
+    /// <summary>Заголовок раздела брандмауэра.</summary>
+    public static string FirewallTitle => Loc.T(nameof(FirewallTitle));
+
+    /// <summary>Объяснение, зачем брандмауэру узкое правило.</summary>
+    public static string FirewallNote => Loc.T(nameof(FirewallNote));
+
+    /// <summary>Состояние: правило на порт есть.</summary>
+    public static string FirewallStateReadyFormat => Loc.T(nameof(FirewallStateReadyFormat));
+
+    /// <summary>Состояние: правила нет.</summary>
+    public static string FirewallStateAbsent => Loc.T(nameof(FirewallStateAbsent));
+
+    /// <summary>Состояние: правило с именем панели, но чужое.</summary>
+    public static string FirewallStateOther => Loc.T(nameof(FirewallStateOther));
+
+    /// <summary>Состояние: правил с именем панели несколько.</summary>
+    public static string FirewallStateSeveral => Loc.T(nameof(FirewallStateSeveral));
+
+    /// <summary>Состояние брандмауэра прочитать не удалось.</summary>
+    public static string FirewallStateUnknownFormat => Loc.T(nameof(FirewallStateUnknownFormat));
+
+    /// <summary>Правило есть, но проверить его не удалось («{0}» — причина).</summary>
+    public static string FirewallStateUnverifiedFormat => Loc.T(nameof(FirewallStateUnverifiedFormat));
+
+    /// <summary>Этому прогону брандмауэр не подчиняется.</summary>
+    public static string FirewallNoDoor => Loc.T(nameof(FirewallNoDoor));
+
+    /// <summary>Кнопка «Разрешить подключение с телефона».</summary>
+    public static string FirewallAllowButton => Loc.T(nameof(FirewallAllowButton));
+
+    /// <summary>Кнопка «Убрать правило панели».</summary>
+    public static string FirewallRemoveButton => Loc.T(nameof(FirewallRemoveButton));
+
+    /// <summary>Предупреждение перед добавлением правила.</summary>
+    public static string FirewallBeforeAddFormat => Loc.T(nameof(FirewallBeforeAddFormat));
+
+    /// <summary>Предупреждение перед снятием правила.</summary>
+    public static string FirewallBeforeRemove => Loc.T(nameof(FirewallBeforeRemove));
+
+    /// <summary>Ожидание подтверждения Windows.</summary>
+    public static string FirewallWorking => Loc.T(nameof(FirewallWorking));
+
+    /// <summary>Итог: правило добавлено.</summary>
+    public static string FirewallDoneAddFormat => Loc.T(nameof(FirewallDoneAddFormat));
+
+    /// <summary>Итог: правило убрано.</summary>
+    public static string FirewallDoneRemove => Loc.T(nameof(FirewallDoneRemove));
+
+    /// <summary>Итог: подтверждения Windows не было, ничего не изменено.</summary>
+    public static string FirewallRefused => Loc.T(nameof(FirewallRefused));
+
+    /// <summary>Итог: изменение не удалось, ничего не изменено.</summary>
+    public static string FirewallFailedFormat => Loc.T(nameof(FirewallFailedFormat));
+
+    /// <summary>Убрать правило не удалось: оно на месте.</summary>
+    public static string FirewallNotRemoved => Loc.T(nameof(FirewallNotRemoved));
+
+    /// <summary>Для этого порта правило не ставится.</summary>
+    public static string FirewallPortUnusableFormat => Loc.T(nameof(FirewallPortUnusableFormat));
+
+    /// <summary>Подсказка кнопки изменения правила брандмауэра.</summary>
+    public static string FirewallTipButton => Loc.T(nameof(FirewallTipButton));
+
+    /// <summary>Журнал: правило брандмауэра добавлено.</summary>
+    public static string FirewallAddedLogFormat => Loc.T(nameof(FirewallAddedLogFormat));
+
+    /// <summary>Журнал: правило панели убрано.</summary>
+    public static string FirewallRemovedLog => Loc.T(nameof(FirewallRemovedLog));
+
+    /// <summary>Журнал: изменение правил отменено.</summary>
+    public static string FirewallRefusedLog => Loc.T(nameof(FirewallRefusedLog));
+
+    /// <summary>Журнал: правилом не управляем — прогону не разрешено.</summary>
+    public static string FirewallNoRightLog => Loc.T(nameof(FirewallNoRightLog));
+
+    /// <summary>Страница телефона: вопросов нет.</summary>
+    public static string PhonePageWaiting => Loc.T(nameof(PhonePageWaiting));
+
+    /// <summary>Страница телефона: заголовок ожидающего вопроса.</summary>
+    public static string PhonePageQuestionTitle => Loc.T(nameof(PhonePageQuestionTitle));
+
+    /// <summary>Страница телефона: кнопка ответа.</summary>
+    public static string PhonePageAnswerButton => Loc.T(nameof(PhonePageAnswerButton));
+
+    /// <summary>Страница телефона: просьба ответить на каждый вопрос.</summary>
+    public static string PhonePageChooseAll => Loc.T(nameof(PhonePageChooseAll));
+
+    /// <summary>Страница телефона: ответ отправлен.</summary>
+    public static string PhonePageAnswered => Loc.T(nameof(PhonePageAnswered));
+
+    /// <summary>Страница телефона: ответ уже отправлен.</summary>
+    public static string PhonePageAnsweredAgain => Loc.T(nameof(PhonePageAnsweredAgain));
+
+    /// <summary>Страница телефона: вопрос уже не ждёт.</summary>
+    public static string PhonePageTaken => Loc.T(nameof(PhonePageTaken));
+
+    /// <summary>Страница телефона: ход агента отменён.</summary>
+    public static string PhonePageCancelled => Loc.T(nameof(PhonePageCancelled));
+
+    /// <summary>Страница телефона: кнопка отмены хода агента.</summary>
+    public static string PhonePageCancelButton => Loc.T(nameof(PhonePageCancelButton));
+
+    /// <summary>Страница телефона: предупреждение перед отменой хода.</summary>
+    public static string PhonePageCancelWarning => Loc.T(nameof(PhonePageCancelWarning));
+
+    /// <summary>Страница телефона: отменить не удалось.</summary>
+    public static string PhonePageCancelFailedFormat => Loc.T(nameof(PhonePageCancelFailedFormat));
+
+    /// <summary>Страница телефона: вопрос не разобран.</summary>
+    public static string PhonePageUnreadable => Loc.T(nameof(PhonePageUnreadable));
+
+    /// <summary>Страница телефона: вопроса сейчас нет.</summary>
+    public static string PhonePageNoQuestion => Loc.T(nameof(PhonePageNoQuestion));
+
+    /// <summary>Страница телефона: номер вопроса из общего числа.</summary>
+    public static string PhonePageQuestionCountFormat => Loc.T(nameof(PhonePageQuestionCountFormat));
+
+
+    /// <summary>Страница телефона: кнопка-ссылка «проверить» (работает и без скрипта).</summary>
+    public static string PhonePageCheckButton => Loc.T(nameof(PhonePageCheckButton));
+
+
+    /// <summary>Страница телефона: путь из беды — «повторить».</summary>
+    public static string PhonePageRepeatButton => Loc.T(nameof(PhonePageRepeatButton));
+
+    /// <summary>Страница телефона: подпись поля «свой ответ».</summary>
+    public static string PhonePageOwnLabel => Loc.T(nameof(PhonePageOwnLabel));
+
+    /// <summary>Страница телефона: короткая подсказка внутри поля «свой ответ».</summary>
+    public static string PhonePageOwnPlaceholder => Loc.T(nameof(PhonePageOwnPlaceholder));
+
+    /// <summary>Страница телефона: объяснение под полем «свой ответ».</summary>
+
+    /// <summary>Страница телефона: ответ не отправлен.</summary>
+    public static string PhonePageAnswerFailedFormat => Loc.T(nameof(PhonePageAnswerFailedFormat));
+
+    /// <summary>Страница телефона: каким устройством человек вошёл ({0} — phone-N).</summary>
+    public static string PhonePageDeviceFormat => Loc.T(nameof(PhonePageDeviceFormat));
+
+    /// <summary>
+    /// ЧЕСТНОЕ «телефон» — когда телефон себя не назвал (решение владельца 12.10.2026): имя разобрано
+    /// из <c>User-Agent</c>, и незнакомая строка даёт пустоту, а не выдуманное имя. Внутренний
+    /// `phone-N` человеку не показывается: он остался в записи панели и в cookie.
+    /// </summary>
+    public static string PhonePageDeviceFallback => Loc.T(nameof(PhonePageDeviceFallback));
+
+    /// <summary>
+    /// ЗАГОЛОВОК ЭКРАНА ОЖИДАНИЯ (решение владельца 12.10.2026). ⚠️ Отдельно от
+    /// <see cref="PhonePageQuestionTitle"/>: «Агент ждёт ответа» — правда **только** там, где вопрос
+    /// есть; у ожидания она была бы ложью, и человек ждал бы ответа на вопрос, которого нет.
+    /// </summary>
+    public static string PhonePageWaitingTitle => Loc.T(nameof(PhonePageWaitingTitle));
+
+    /// <summary>Что делать, если ничего не происходит (четвёртый вопрос ожидания) — тихой строкой.</summary>
+    public static string PhonePageWaitingNext => Loc.T(nameof(PhonePageWaitingNext));
+
+    /// <summary>
+    /// ЗАГОЛОВОК СОСТОЯНИЯ «СВЯЗИ С СЕРВЕРОМ DSH НЕТ» (решение владельца 13.10.2026, вариант «а»).
+    ///
+    /// ⚠️ Отдельно от <see cref="PhonePageWaitingTitle"/>, и это не украшение: ожидание ОБЕЩАЕТ,
+    /// что вопрос придёт сам, а при отсутствии связи приходить ему неоткуда. Прежняя страница
+    /// в этом положении говорила «панель на связи и ждёт вопроса от агента» — то есть обещала
+    /// то, чего не будет.
+    /// </summary>
+    public static string PhonePageNoEngineTitle => Loc.T(nameof(PhonePageNoEngineTitle));
+
+    /// <summary>Сама правда для телефона: связи с сервером DSH нет — вопрос показать нечем.</summary>
+    public static string PhonePageNoEngine => Loc.T(nameof(PhonePageNoEngine));
+
+    /// <summary>Что человеку делать: посмотреть на компьютер (сервер не поднят или не отвечает).</summary>
+    public static string PhonePageNoEngineNext => Loc.T(nameof(PhonePageNoEngineNext));
+
+    /// <summary>
+    /// ТО ЖЕ САМОЕ В РАЗДЕЛЕ «ТЕЛЕФОН» на компьютере: связи с сервером DSH нет, вопросы агента
+    /// на телефон не придут. Одна правда — и на телефоне, и на компьютере, но разными словами:
+    /// на компьютере человек может это починить, с телефона — нет.
+    /// </summary>
+    public static string PhoneSectionNoEngine => Loc.T(nameof(PhoneSectionNoEngine));
+
+    /// <summary>Заголовок беды: коротко «не получилось», причина — телом рядом (`Ш-31`).</summary>
+    public static string PhonePageProblemTitle => Loc.T(nameof(PhonePageProblemTitle));
+
+    /// <summary>Что дальше после отправленного ответа — «что мне теперь делать».</summary>
+    public static string PhonePageAnsweredNext => Loc.T(nameof(PhonePageAnsweredNext));
+
+    /// <summary>Что дальше, когда вопрос сняли не мной.</summary>
+    public static string PhonePageTakenNext => Loc.T(nameof(PhonePageTakenNext));
+
+    /// <summary>Что дальше, когда ход отменён.</summary>
+    public static string PhonePageCancelledNext => Loc.T(nameof(PhonePageCancelledNext));
+}

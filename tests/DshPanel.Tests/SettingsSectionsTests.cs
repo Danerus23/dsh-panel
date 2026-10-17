@@ -39,6 +39,7 @@ public class SettingsSectionsTests
     private const int Balance = 2;
     private const int Server = 3;
     private const int Update = 4;
+    private const int Phone = 5;
 
     private static void Settle() => PanelTestStand.Settle();
 
@@ -74,7 +75,7 @@ public class SettingsSectionsTests
 
             var titles = list!.ItemsSource!.Cast<string>().ToList();
 
-            Assert.Equal(5, titles.Count);
+            Assert.Equal(6, titles.Count);
             Assert.Equal(
                 new[]
                 {
@@ -83,6 +84,7 @@ public class SettingsSectionsTests
                     PanelStrings.SettingsBalanceSection,
                     PanelStrings.SettingsServerSection,
                     PanelStrings.UpdateSectionTitle,
+                    PanelStrings.PhoneSectionTitle,
                 },
                 titles);
 
@@ -90,7 +92,7 @@ public class SettingsSectionsTests
             Assert.Equal(General, list.SelectedIndex);
             Assert.Equal(General, window.VisibleSection);
 
-            foreach (var index in new[] { General, Backup, Balance, Server, Update })
+            foreach (var index in new[] { General, Backup, Balance, Server, Update, Phone })
             {
                 window.ShowSection(index);
                 Settle();
@@ -305,7 +307,7 @@ public class SettingsSectionsTests
             var save = window.FindControl<Button>("SaveButton");
             Assert.NotNull(save);
 
-            for (var index = 0; index < 5; index++)
+            for (var index = 0; index < 6; index++)
             {
                 window.ShowSection(index);
                 Settle();
@@ -351,7 +353,7 @@ public class SettingsSectionsTests
             var size = window.ClientSize;
             var viewport = scroll!.Viewport.Height;
 
-            for (var index = 0; index < 5; index++)
+            for (var index = 0; index < 6; index++)
             {
                 window.ShowSection(index);
                 Settle();
@@ -400,7 +402,7 @@ public class SettingsSectionsTests
             Assert.NotNull(list);
 
             var items = list!.GetVisualDescendants().OfType<ListBoxItem>().ToList();
-            Assert.Equal(5, items.Count);
+            Assert.Equal(6, items.Count);
 
             var listRight = list.TranslatePoint(new Point(0, 0), window);
             Assert.NotNull(listRight);

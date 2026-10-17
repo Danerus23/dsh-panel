@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using DshPanel.Files;
 using DshPanel.Isolation;
 using DshPanel.Restore;
 using DshPanel.Server;
@@ -85,7 +86,13 @@ public static class BackupSelfTest
         var area = Path.Combine(context.Paths.Root, "backup-selftest");
         var subject = AppPaths.Under(Path.Combine(area, "subject"));
         var work = Path.Combine(subject.Root, "projects");
-        var probeEngine = ProbeEngine(area);
+
+        // ⚠️ ПОДСТАВНОЙ ДВИЖОК ЛЕЖИТ ПОД КОРНЕМ ПЛОЩАДКИ (A4, находка C1 CH-08).
+        // Прежде он строился в `area`, то есть РЯДОМ с корнем прогона, а не под ним. Для правила
+        // «изолированная копия берёт только корни под своим корнем» это уже чужой путь, и движок
+        // перестал попадать в копию — проба честно упала на «пять групп». Место движка и раньше
+        // называлось «внутри площадки»; теперь это так и есть, и правило остаётся строгим.
+        var probeEngine = ProbeEngine(subject.Root);
         var archive = Path.Combine(area, "copy.zip");
 
         ServerController? controller = null;
@@ -93,6 +100,12 @@ public static class BackupSelfTest
         try
         {
             report.Add($"площадка пробы = {area}");
+
+            // Машинная установка движка в копию не берётся — и это сказано СЛОВАМИ, а не молчанием:
+            // иначе «движка в копии нет» читалось бы как «движка нет на машине» (A4, §4.7).
+            report.Add("движок для копии — подставной, под корнем прогона; машинная установка движка " +
+                       "в копию не берётся (право MachineEngineData — только у обычного запуска человеком), " +
+                       "а настоящий движок поднимается на восстановленном профиле");
 
             // --- (1) пустой файл ключа возвращать нельзя -----------------------------
             //
@@ -393,58 +406,12 @@ public static class BackupSelfTest
     /// Уборка площадки. Ссылки снимаются ЗВЕНЬЯМИ, а не обходом: рекурсивное удаление по дереву
     /// со ссылкой внутри — известный способ снести не то, что собирался (правило проекта).
     /// </summary>
-    private static void RemoveTree(string root)
-    {
-        static void Walk(string directory)
-        {
-            string[] children;
-            try
-            {
-                children = Directory.GetFileSystemEntries(directory);
-            }
-            catch
-            {
-                return;
-            }
-
-            foreach (var child in children)
-            {
-                try
-                {
-                    if (!Directory.Exists(child))
-                    {
-                        File.Delete(child);
-                        continue;
-                    }
-
-                    if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
-                    {
-                        Directory.Delete(child);
-                        continue;
-                    }
-
-                    Walk(child);
-                    Directory.Delete(child);
-                }
-                catch
-                {
-                    // Занятый файл (движок мог не отпустить) — не повод падать в уборке.
-                }
-            }
-        }
-
-        try
-        {
-            if (!Directory.Exists(root)) return;
-
-            Walk(root);
-            Directory.Delete(root, recursive: true);
-        }
-        catch
-        {
-            // Не убралось — проба скажет об этом отдельной строкой отчёта.
-        }
-    }
+    /// <summary>
+    /// Уборка пробы. Правило «ссылку снимаем, внутрь не идём» жило ЗДЕСЬ своей копией
+    /// (`ReparsePoint` → <c>Directory.Delete(child)</c> без рекурсии) — с 10.10.2026 оно одно
+    /// на панель, в <c>Files\TreeDeletion.cs</c>, вместе с проверкой, что дерева не осталось.
+    /// </summary>
+    private static void RemoveTree(string root) => TreeDeletion.Remove(root);
 
     private static void Print(List<string> report, List<string> log)
     {

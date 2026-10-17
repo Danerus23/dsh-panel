@@ -40,6 +40,7 @@ public class BackupWindowRenderTests
                 AppPaths.Under(root),
                 () => new PanelSettings { BackupFolder = Path.Combine(root, "Копии") },
                 allowed: false,
+                mayTakeMachineEngineData: false,
                 locateEngine: noEngine);
 
             var window = new BackupWindow();

@@ -55,10 +55,29 @@ public sealed class ServerPanelModel
         ServerDecisions.CanAdopt(Owner, _discovery.Any) ? _discovery.First : null;
 
     /// <summary>
-    /// Строка про найденный чужой сервер. Пустая — говорить нечего.
+    /// ВСЕ найденные серверы, когда панель ничем не управляет. Пусто — предлагать нечего.
+    ///
+    /// ⚠️ **Почему список, а не первый.** Разведка находит **все** серверы DSH на машине
+    /// (`ServerDiscovery.Find`), и их бывает два: например чужой на 3080 и наш движок другой версии
+    /// рядом. Решение владельца 10.10.2026: показать **оба** и дать выбрать — «предложили то, что
+    /// нашлось первым в таблице портов» это не решение, а случайность.
+    /// </summary>
+    public IReadOnlyList<FoundServer> Candidates =>
+        ServerDecisions.CanAdopt(Owner, _discovery.Any) ? _discovery.Found : Array.Empty<FoundServer>();
+
+    /// <summary>Найдено больше одного: одной кнопки без порта человеку мало.</summary>
+    public bool ManyCandidates => Candidates.Count > 1;
+
+    /// <summary>
+    /// Строка про найденные серверы. Пустая — говорить нечего.
     ///
     /// Отдельно сказано, когда порты посмотреть НЕ удалось: «ничего не нашли» и «не смотрели» —
     /// разные утверждения, и второе нельзя показывать первым.
+    ///
+    /// ⚠️ **Один сервер — прежняя строка слово в слово** (обычный случай менять нечем).
+    /// Несколько — строка на каждого, с пометкой, **чей это движок**: «наш движок (версия)» или
+    /// «чужой». Без пометки два сервера неразличимы, а разница между ними — это разница между
+    /// «возьмите под управление» и «сначала остановите своё старое».
     /// </summary>
     public string FoundText
     {
@@ -69,19 +88,57 @@ public sealed class ServerPanelModel
 
             if (!_discovery.TableReadable) return PanelStrings.FoundTableUnreadable;
 
-            var candidate = Candidate;
-            if (candidate is null) return string.Empty;
+            var candidates = Candidates;
+            if (candidates.Count == 0) return string.Empty;
+            if (candidates.Count == 1) return Single(candidates[0]);
 
-            var text = string.Format(
+            return string.Join(
+                Environment.NewLine,
+                candidates.Select(found => string.Format(
+                    CultureInfo.CurrentCulture,
+                    PanelStrings.FoundServerListFormat,
+                    found.Port,
+                    found.Pid,
+                    Mark(found))));
+        }
+    }
+
+    /// <summary>
+    /// Подпись кнопки для ЭТОГО найденного сервера. Один сервер — прежняя подпись без порта;
+    /// несколько — с портом, иначе человек не знает, какой именно берёт.
+    /// </summary>
+    public string AdoptLabel(FoundServer found) =>
+        ManyCandidates
+            ? string.Format(CultureInfo.CurrentCulture, PanelStrings.AdoptButtonPortFormat, found.Port)
+            : PanelStrings.AdoptButton;
+
+    /// <summary>Пометка, чей это движок: наш (с версией) или чужой.</summary>
+    private static string Mark(FoundServer found) =>
+        found.IsOurEngine
+            ? string.Format(CultureInfo.CurrentCulture, PanelStrings.FoundServerOwnMarkFormat, found.OwnVersion)
+            : PanelStrings.FoundServerForeignMark;
+
+    /// <summary>Строка про ОДИН найденный сервер — та же, что была до списка.</summary>
+    private static string Single(FoundServer candidate)
+    {
+        // Найденный сервер бывает ПОДНЯТ НАШИМ движком — например старой версией, пережившей
+        // обновление. Тогда «поднят не панелью» было бы неправдой, и слова другие (этап E3).
+        var text = candidate.IsOurEngine
+            ? string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.FoundServerOursFormat,
+                candidate.Port,
+                candidate.Pid,
+                candidate.OwnVersion)
+            : string.Format(
                 CultureInfo.CurrentCulture,
                 PanelStrings.FoundServerFormat,
-                candidate.Value.Port,
-                candidate.Value.Pid);
+                candidate.Port,
+                candidate.Pid);
 
-            return candidate.Value.IsOwnerPort
-                ? text + PanelStrings.FoundServerOwnerPortSuffix
-                : text;
-        }
+        return candidate.IsOwnerPort
+            ? text + PanelStrings.FoundServerOwnerPortSuffix
+            : text;
     }
 
     /// <summary>Предлагать ли встроиться: панель ничем не управляет, а сервер найден.</summary>
@@ -160,10 +217,10 @@ public sealed class ServerPanelModel
     /// от них нужно разное.
     /// </summary>
     public string OpenAgentHint => !ServerAnswers
-        ? PanelStrings.OpenAgentNoServerHint
+        ? PanelStrings.OpenAgentNoServerNote
         : LinkKnown
-            ? PanelStrings.OpenAgentReadyHint
-            : PanelStrings.OpenAgentNoLinkHint;
+            ? PanelStrings.OpenAgentReadyNote
+            : PanelStrings.OpenAgentNoLinkNote;
 
     /// <summary>
     /// Подпись кнопки остановки. Многоточие у встроенного сервера — не украшение: оно честно
@@ -184,4 +241,35 @@ public sealed class ServerPanelModel
     /// </summary>
     public string RestartButtonText =>
         NeedsStopConfirmation ? PanelStrings.RestartButtonAsks : PanelStrings.RestartButton;
+
+    // --- «сервер поднят не панелью»: назвать состояние и дать ОДИН путь назад ----------------
+    //
+    // Решение владельца 13.10.2026 (ответ 1): «взятый чужой» и «поднят не панелью» РАЗЛИЧАЮТСЯ
+    // словами и кнопкой. Разница по существу: «взятый чужой» — человек сам нажал «Взять под
+    // управление», и панель им управляет; «поднят не панелью» — панель НЕ управляет, своей ссылки
+    // входа у неё нет, вопросы агента на телефон не придут, обновить сервер DSH нельзя.
+
+    /// <summary>
+    /// Сервер на порту РАБОТАЕТ, а панель им НЕ управляет (и не брала его под управление).
+    /// Ровно это положение владелец и увидел живьём 13.10.2026.
+    /// </summary>
+    public bool NotStartedByPanel =>
+        _server is not null
+        && Owner == ServerOwner.None
+        && _server.State.Presence == ServerPresence.Running;
+
+    /// <summary>Крупная строка этого положения — ДРУГАЯ, чем у «взятого чужого».</summary>
+    public string NotStartedByPanelTitle =>
+        string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvNotStartedByPanelTitle, _server?.State.Port ?? 0);
+
+    /// <summary>Что за этим следует для человека: телефон и обновление сервера DSH.</summary>
+    public string NotStartedByPanelNote => PanelStrings.SrvNotStartedByPanelNote;
+
+    /// <summary>
+    /// Кнопка «Поднять свой сервер заново». Видна РОВНО в этом положении и нигде больше:
+    /// у «взятого чужого» на её месте «Отвязаться» (вернуть как было).
+    /// </summary>
+    public bool CanRecoverOwnServer => NotStartedByPanel;
+
+    public string RecoverOwnServerButtonText => PanelStrings.SrvRecoverButton;
 }

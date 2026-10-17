@@ -1,3 +1,5 @@
+using DshPanel.Localization;
+using DshPanel.Server;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -198,7 +200,8 @@ public class BalanceTests
         string credentialsPath,
         Action<NoticeKind, string, string> notify,
         bool allowed = true,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        Func<string>? skillsBlock = null)
     {
         var clock = now ?? new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
 
@@ -210,7 +213,33 @@ public class BalanceTests
             () => clock,
             action => action(),
             _ => { },
-            notify);
+            notify,
+            skillsBlock: skillsBlock);
+    }
+
+    // ---------------------------------------------------------------- гейт по умениям
+
+    /// <summary>
+    /// БЕЗ УМЕНИЯ БАЛАНС ОТКАЗЫВАЕТ И ОБЪЯСНЯЕТ СЛОВАМИ. Это связка гейта (этап E2) с живой
+    /// дверью: решение гейта проверяется отдельно (`SkillGateTests`), а здесь видно, что человек
+    /// ЧИТАЕТ его слова в строке состояния — и что слова эти не «заблокировано вообще»,
+    /// а про недостающее умение.
+    /// </summary>
+    [Fact]
+    public void Без_умения_баланс_говорит_словами_чего_не_хватает()
+    {
+        var settings = new PanelSettings();
+        var blocked = Loc.T(SkillKeys.GateRefusedFormat, Loc.T(SkillGate.NameKey(PanelFunction.Balance)), Loc.T(SkillKeys.Name(EngineSkill.ModelKey)), Loc.T(SkillKeys.Reason(EngineSkill.ModelKey)));
+
+        var controller = Controller(new FakeClient(), settings, "нет-такого-файла", (_, _, _) => { }, skillsBlock: () => blocked);
+
+        Assert.Equal(blocked, controller.StatusText);
+        Assert.NotEqual(DshPanel.Shell.PanelStrings.BalanceLocked, controller.StatusText);
+        Assert.Contains(Loc.T(SkillKeys.Name(EngineSkill.ModelKey)), controller.StatusText, StringComparison.Ordinal);
+
+        // Обратная сторона: умения на месте — строка живёт своей жизнью, гейт молчит.
+        var free = Controller(new FakeClient(), settings, "нет-такого-файла", (_, _, _) => { });
+        Assert.NotEqual(blocked, free.StatusText);
     }
 
     // ---------------------------------------------------------------- ключ
@@ -880,7 +909,7 @@ public class BalanceTests
         window.AttachBalance(new FakeBalance());
 
         var box = window.FindControl<ComboBox>("AgentBox");
-        var hint = window.FindControl<TextBlock>("AgentHintText");
+        var hint = window.FindControl<TextBlock>("AgentNoteText");
         var label = window.FindControl<TextBlock>("ActiveAgentLabel");
 
         Assert.NotNull(box);
@@ -896,7 +925,7 @@ public class BalanceTests
         // И ЧЕСТНО: выбор один — список недоступен, а под ним сказано, почему.
         Assert.False(AgentCatalog.HasChoice, "в каталоге появился второй агент — проверка устарела");
         Assert.False(box.IsEnabled, "список из одного агента выглядит как выбор, которого нет");
-        Assert.Equal(PanelStrings.SettingsActiveAgentHint, hint!.Text);
+        Assert.Equal(PanelStrings.SettingsActiveAgentNote, hint!.Text);
     }
 
     /// <summary>
@@ -957,7 +986,7 @@ public class BalanceTests
         Assert.Equal("мусор-из-файла", settings.Settings.ActiveAgent);
         Assert.Equal(0, balance.AgentChanges);
 
-        var hint = window.FindControl<TextBlock>("AgentHintText");
+        var hint = window.FindControl<TextBlock>("AgentNoteText");
         Assert.NotNull(hint);
         Assert.Equal(PanelStrings.SettingsSaveFailed, hint!.Text);
 
@@ -976,7 +1005,7 @@ public class BalanceTests
         var window = new MainWindow();
 
         var box = window.FindControl<ComboBox>("AgentBox");
-        var hint = window.FindControl<TextBlock>("AgentHintText");
+        var hint = window.FindControl<TextBlock>("AgentNoteText");
 
         Assert.NotNull(box);
         Assert.NotNull(hint);

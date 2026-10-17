@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using DshPanel.Server;
 using DshPanel.Shell;
@@ -17,12 +18,23 @@ public readonly record struct SettingsLoad(PanelSettings Settings, bool Ok, stri
 ///
 /// Три свойства, каждое из случая:
 ///
-/// 1. **Файл без BOM.** `.json` с BOM не разбирает Node — на этом уже спотыкались в области
-///    (`C:\Harness\AGENTS.md`, правило 9), и панель пишет файлы строго без метки.
+/// 1. **Файл без BOM.** `.json` с BOM не разбирает Node — на этом уже спотыкались в правилах
+///    рабочей области (правило про кодировку `.json`), и панель пишет файлы строго без метки.
 /// 2. **Запись через временный файл.** Панель могут выключить в момент записи; тогда человек
 ///    получил бы обрезанный `settings.json` и потерял все настройки. Пишем рядом, потом переносим.
 /// 3. **Мусор в файле не роняет панель.** Файл правят руками; непрочитанный JSON — это
 ///    «настройки по умолчанию плюс честная строка о причине», а не исключение при старте.
+///
+/// ⚠️ **ЧЕТВЁРТОЕ, И ОНО ЖЕ САМОЕ ДОРОГОЕ (дефект живого прогона 11.10.2026): НЕЗНАКОМЫЕ КЛЮЧИ
+/// ПЕРЕЖИВАЮТ ЗАПИСЬ.** Прежняя панель (2.0.3), прочитав файл НОВОЙ сборки, объявляла незнакомые
+/// ключи простынёй на экране и **перезаписывала файл без них**: откат на прежнюю версию молча
+/// стирал настройки новой (замер владельца: пропали <c>phoneEnabled</c>, <c>phonePort</c>,
+/// <c>updateAttemptAt</c> и ещё семь). Поэтому ключи, которых эта панель не знает, запоминаются
+/// при чтении и **кладутся обратно как есть** при записи: их значения не применяются, но и не
+/// теряются. Что с ними стало — сказано одной строкой на экране
+/// (<see cref="PanelStrings.SettingsNewerVersionNote"/>), а ПЕРЕЧЕНЬ имён уходит в журнал
+/// (<see cref="PanelStrings.SettingsNewerVersionLogFormat"/>): простыня на экране — не забота,
+/// а шум, из которого человек не понимает, что делать.
 /// </summary>
 public sealed class SettingsStore
 {
@@ -48,6 +60,18 @@ public sealed class SettingsStore
 
     private readonly string _path;
 
+    /// <summary>
+    /// ЗНАЧЕНИЯ ИЗ ФАЙЛА, КОТОРЫХ ЭТА ПАНЕЛЬ НЕ ЗНАЕТ, — имя как написано в файле и значение
+    /// как есть. Наполняется ЧТЕНИЕМ (<see cref="Load"/>) и отдаётся обратно ЗАПИСЬЮ
+    /// (<see cref="Save"/>): «прочитал — записал — они на месте».
+    ///
+    /// ⚠️ Почему это поле, а не «перечитать файл при записи»: читать его второй раз — значит
+    /// завести ВТОРУЮ правду о настройках (между чтением и записью файл могли поправить руками,
+    /// и тогда панель записала бы не то, что показывала). Здесь же помнится ровно то, что панель
+    /// прочитала сама.
+    /// </summary>
+    private List<(string Name, JsonElement Value)> _newer = new();
+
     public SettingsStore(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -59,23 +83,47 @@ public sealed class SettingsStore
 
     public bool Exists => File.Exists(_path);
 
+    /// <summary>
+    /// ИМЕНА КЛЮЧЕЙ ФАЙЛА, КОТОРЫХ ПАНЕЛЬ НЕ ЗНАЕТ, — в том написании, в каком они лежат в файле,
+    /// и в том порядке, в каком их прочитали. Пусто — всё прочитанное панель понимает.
+    ///
+    /// Читает их ЖУРНАЛ (<see cref="SettingsController"/>): человеку на экране показывается одна
+    /// строка, а перечень — тем, кто разбирается в записях, а не тому, кто просто открыл настройки.
+    /// </summary>
+    public IReadOnlyList<string> NewerKeys =>
+        _newer.Select(pair => pair.Name).ToArray();
+
     public SettingsLoad Load()
     {
-        if (!File.Exists(_path)) return new SettingsLoad(PanelSettings.Default, true, string.Empty);
+        if (!File.Exists(_path))
+        {
+            _newer = new List<(string, JsonElement)>();
+            return new SettingsLoad(PanelSettings.Default, true, string.Empty);
+        }
 
         try
         {
             var text = File.ReadAllText(_path);
-            if (string.IsNullOrWhiteSpace(text)) return new SettingsLoad(PanelSettings.Default, true, string.Empty);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                _newer = new List<(string, JsonElement)>();
+                return new SettingsLoad(PanelSettings.Default, true, string.Empty);
+            }
 
             var parsed = JsonSerializer.Deserialize<PanelSettings>(text, Reading);
             if (parsed is null) return Bad(PanelStrings.SettingsBadFileEmpty);
 
+            // ПЕРЕЧЕНЬ СНИМАЕТСЯ ДО ПРИВЕДЕНИЯ: «чего панель не знает» — свойство ФАЙЛА, а не
+            // приведённых настроек, и после `Clean` о нём уже не спросить.
+            _newer = NewerValues(text);
+
             var clean = Clean(parsed);
-            return new SettingsLoad(clean, true, Join(OldDefaultPort(parsed, clean), Unknown(text)));
+            return new SettingsLoad(clean, true, Join(OldDefaultPort(parsed, clean), NewerNote()));
         }
         catch (Exception ex)
         {
+            _newer = new List<(string, JsonElement)>();
+
             return Bad($"{ex.GetType().Name} — {ex.Message}");
         }
 
@@ -90,45 +138,50 @@ public sealed class SettingsStore
     }
 
     /// <summary>
-    /// Ключи, которых панель не знает: молчание о них и есть дефект Д7 — человек правит файл руками,
-    /// пишет ключ по-своему и не узнаёт, что значение не применилось. Неизвестное имя называется
-    /// словами, с указанием, какое имя панель знает (сравнение без учёта регистра).
+    /// ОДНА СТРОКА О ЗНАЧЕНИЯХ ИЗ БОЛЕЕ НОВОЙ ВЕРСИИ ПАНЕЛИ — или пусто, если таких нет.
     ///
-    /// ⚠️ Настоящие опечатки ЭТИМ не лечатся: ключ <c>serverWrokingDir</c> остаётся неизвестным
-    /// и просто называется — «принять любой регистр» и «угадать опечатку» разные вещи.
+    /// ⚠️ Именно ОДНА и без перечня: прежде здесь стояла простыня «не применены: {имена}; панель
+    /// понимает: {все имена панели}» — тридцать шесть имён на экране, из которых человек не понимал
+    /// ничего. Перечень имён уходит в журнал (<see cref="NewerKeys"/>), а человеку говорится, ЧТО
+    /// произошло и что с этим делать.
     /// </summary>
-    private static string Unknown(string text)
+    private string NewerNote() =>
+        _newer.Count == 0 ? string.Empty : PanelStrings.SettingsNewerVersionNote;
+
+    /// <summary>
+    /// НЕЗНАКОМЫЕ КЛЮЧИ ФАЙЛА СО ЗНАЧЕНИЯМИ КАК ЕСТЬ: имя — в том написании, в каком оно в файле,
+    /// значение — снимок (<see cref="JsonElement.Clone"/>, иначе документ был бы уже закрыт).
+    ///
+    /// Сравнение с известными именами — БЕЗ учёта регистра: ключ <c>ServerWorkingDir</c> панель
+    /// ПРИНИМАЕТ, и объявлять его незнакомым значило бы ругаться на свой же файл.
+    /// </summary>
+    private static List<(string Name, JsonElement Value)> NewerValues(string text)
     {
-        List<string> written;
+        var newer = new List<(string Name, JsonElement Value)>();
 
         try
         {
             using var document = JsonDocument.Parse(text);
-            if (document.RootElement.ValueKind != JsonValueKind.Object) return string.Empty;
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return newer;
 
-            written = document.RootElement.EnumerateObject().Select(property => property.Name).ToList();
+            var known = Written();
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (known.Contains(property.Name, StringComparer.OrdinalIgnoreCase)) continue;
+                if (newer.Any(pair => string.Equals(pair.Name, property.Name, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                newer.Add((property.Name, property.Value.Clone()));
+            }
         }
         catch
         {
             // Разобрать не удалось — об этом скажет внешний catch: причину назовёт он, а не это.
-            return string.Empty;
+            return newer;
         }
 
-        var known = Written();
-        var unknown = written
-            .Where(name => !known.Contains(name, StringComparer.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (unknown.Length == 0) return string.Empty;
-
-        // Строка целиком — из словаря: её читает человек в окне настроек, и она обязана
-        // переводиться вместе с остальными. Кавычки-ёлочки вокруг имён — знаки, а не текст.
-        return string.Format(
-            System.Globalization.CultureInfo.CurrentCulture,
-            PanelStrings.SettingsUnknownKeysFormat,
-            string.Join(", ", unknown.Select(name => "«" + name + "»")),
-            string.Join(", ", known));
+        return newer;
     }
 
     /// <summary>
@@ -194,7 +247,7 @@ public sealed class SettingsStore
             var dir = Path.GetDirectoryName(_path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-            var text = JsonSerializer.Serialize(Clean(settings), Format);
+            var text = WithNewer(Clean(settings));
             var temp = _path + ".tmp";
 
             // Без BOM — намеренно (см. комментарий класса).
@@ -206,6 +259,35 @@ public sealed class SettingsStore
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// НАШИ НАСТРОЙКИ ПЛЮС НЕЗНАКОМЫЕ КЛЮЧИ ФАЙЛА — тем же видом и тем же письмом, что и раньше.
+    ///
+    /// ⚠️ **Здесь исполняется обещание «откат не стирает настройки новой версии».** Панель пишет
+    /// только те ключи, которые знает, а ключи из более новой версии кладёт обратно КАК ЕСТЬ:
+    /// их значения не применены этой панелью, но и не потеряны — вернувшись на новую версию,
+    /// человек найдёт свои настройки на месте.
+    ///
+    /// Имя берётся из файла (не приводится к регистру), значение — из снимка чтения. Ключ, который
+    /// панель теперь ЗНАЕТ, сюда не попадает вовсе: он уже записан своим, приведённым значением,
+    /// и второе его значение в файле было бы двумя правдами об одном.
+    /// </summary>
+    private string WithNewer(PanelSettings settings)
+    {
+        if (_newer.Count == 0) return JsonSerializer.Serialize(settings, Format);
+
+        var node = JsonSerializer.SerializeToNode(settings, Format)?.AsObject()
+                   ?? new JsonObject();
+
+        foreach (var (name, value) in _newer)
+        {
+            if (node.ContainsKey(name)) continue;
+
+            node[name] = JsonNode.Parse(value.GetRawText());
+        }
+
+        return node.ToJsonString(Format);
     }
 
     /// <summary>Приводит настройки к известному виду перед записью и после чтения — в одном месте.</summary>
@@ -301,6 +383,54 @@ public sealed class SettingsStore
         // Пропущенная версия — решение ЧЕЛОВЕКА, и оно тоже приводится к виду: версия сравнивается
         // как версия, поэтому «v2.1.0» и «2.1.0+хеш» — одна и та же пропущенная версия.
         UpdateSkippedVersion = Update.UpdateDecisions.Numeric(settings.UpdateSkippedVersion),
+
+        // ПОПЫТКА ПРОВЕРКИ (независимо от исхода) — той же дверью, что отметка удачной проверки:
+        // неразобранное время значит «попытки не помним» (панель просто проверит по расписанию),
+        // а не «попытка была только что». Вид оставляем как есть, но пустое и пробелы — пусто.
+        UpdateAttemptAt = Pricing.PricingDecisions
+            .TryParse(settings.UpdateAttemptAt, out var attemptAt)
+            ? Pricing.PricingDecisions.Stamp(attemptAt)
+            : string.Empty,
+        UpdateAttemptKind = (settings.UpdateAttemptKind ?? string.Empty).Trim().ToLowerInvariant(),
+        UpdateAttemptError = (settings.UpdateAttemptError ?? string.Empty).Trim(),
+
+        // ТЕЛЕФОН (этап F). Порт — в границы: файл правят руками, а «порт 0» или «порт 70000»
+        // не порт вовсе. Вне 1..65535 значение становится УМОЛЧАНИЕМ (43127), а не «первым портом»,
+        // и умолчание берётся у PhonePass — второе число рядом однажды разошлось бы с первым.
+        PhoneEnabled = settings.PhoneEnabled,
+        PhonePort = PanelSettings.NormalizePhonePort(settings.PhonePort),
+
+        // Признак «человек выбирал порт сам» проходит дверь НЕТРОНУТЫМ — ровно как у порта сервера:
+        // обнули его здесь, и перенос умолчания срабатывал бы при каждом чтении.
+        PhonePortChosen = settings.PhonePortChosen,
+
+        // Адрес, «когда видели» и «когда разрешили» — через ТУ ЖЕ дверь отметки времени, что у цен
+        // и обновления: неразобранная отметка значит «не было» (панель не покажет выдуманное время),
+        // а не «было только что». Второй реализации формата в панели нет и быть не должно.
+        PhoneLastAddress = (settings.PhoneLastAddress ?? string.Empty).Trim(),
+
+        // ВЫБОР ЧЕЛОВЕКА среди нескольких подходящих адресов — тем же правилом, что и след адреса:
+        // пробелы и пустое значат «не выбирал», и панель тогда берёт единственный подходящий сама.
+        // Обрезается, а не проверяется на «похоже на адрес»: адресов у машины бывает несколько
+        // семейств и видов, и решать здесь, какой из них настоящий, значило бы завести второе
+        // место правды рядом с правилом выбора (`Shell\NetworkAddresses`).
+        PhoneChosenAddress = (settings.PhoneChosenAddress ?? string.Empty).Trim(),
+        PhoneLastSeen = Pricing.PricingDecisions
+            .TryParse(settings.PhoneLastSeen, out var phoneSeen)
+            ? Pricing.PricingDecisions.Stamp(phoneSeen)
+            : string.Empty,
+        PhoneConsentAt = Pricing.PricingDecisions
+            .TryParse(settings.PhoneConsentAt, out var phoneConsent)
+            ? Pricing.PricingDecisions.Stamp(phoneConsent)
+            : string.Empty,
+
+        // ОТМЕТКА ОКНА ПЕРВОГО ЗАПУСКА (A5): та же дверь отметки и то же правило — неразобранное
+        // значит «окна не видели». ⚠️ Старая запись настроек без этого поля читается как пустая,
+        // то есть окно покажется: это и нужно — профиль, заведённый до A5, окна действительно не видел.
+        WelcomeShownAt = Pricing.PricingDecisions
+            .TryParse(settings.WelcomeShownAt, out var welcome)
+            ? Pricing.PricingDecisions.Stamp(welcome)
+            : string.Empty,
 
         // Размер и положение главного окна — той же дверью и по той же причине: файл правят
         // руками, а абсурдная координата завела бы окно туда, где его не найти. Правило живёт

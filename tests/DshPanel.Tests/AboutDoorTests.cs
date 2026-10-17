@@ -104,7 +104,7 @@ public class AboutDoorTests
                 "дверь «О программе» лежит ВНУТРИ прокрутки — при длинном разделе она уедет " +
                 "из виду, а дверь обязана быть видна всегда");
 
-            for (var index = 0; index < 4; index++)
+            for (var index = 0; index < 6; index++)
             {
                 window.ShowSection(index);
                 PanelTestStand.Settle();
@@ -229,7 +229,7 @@ public class AboutDoorTests
             var titles = list!.ItemsSource!.Cast<string>().ToList();
 
             Assert.DoesNotContain(PanelStrings.AboutButton, titles);
-            Assert.Equal(5, titles.Count);
+            Assert.Equal(6, titles.Count);
 
             window.CloseQuietly();
         }

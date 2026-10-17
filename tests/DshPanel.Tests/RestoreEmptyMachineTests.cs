@@ -4,11 +4,14 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using DshPanel.Backup;
 using DshPanel.Isolation;
 using DshPanel.Restore;
 using Xunit;
+using DshPanel.Shell;
+using System.Globalization;
 
 namespace DshPanel.Tests;
 
@@ -308,10 +311,10 @@ public class RestoreEmptyMachineTests
             Assert.Contains("записей невыбранных групп: 3", report, StringComparison.Ordinal);
 
             // Настоящий сигнал — отдельной строкой и отдельным числом.
-            Assert.Contains("записей БЕЗ ГРУППЫ в описи: 1", report, StringComparison.Ordinal);
+            Assert.Contains(string.Format(CultureInfo.CurrentCulture, PanelStrings.RestoreUnmatchedEntriesFormat, 1), report, StringComparison.Ordinal);
 
             // Ложная строка, которой называли ОБА случая, больше не появляется ни в одном виде.
-            Assert.DoesNotContain("записей без группы в описи", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("запись без группы в списке содержимого копии: 1", report, StringComparison.Ordinal);
         }
         finally
         {

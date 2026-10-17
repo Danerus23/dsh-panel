@@ -33,7 +33,7 @@
 
 **Your DSH server, under control** — and out of the way in the tray. One file, `DshPanel.exe`:
 installed into your user profile, no administrator rights, no separate .NET install — the runtime is
-inside. This panel version is **2.0.1**.
+inside. This panel version is **2.1.0**.
 
 Start and stop the server, a tray icon that shows its state, your balance, peak windows and price
 history, copies of your data with restore, and the panel updating itself — all of it **in three
@@ -144,6 +144,7 @@ looked for, what it found, which versions of DSH, Node, npm and pnpm are install
 
 ## What is missing
 
+* **Phone.** Works on your own network: sign in by QR and answer the agent's question; setting tasks and managing agents are in development; it makes no external connections.
 * **You need your own installed DSH.** No engine and no Node come with the download: the panel
   manages your server, it does not bring one. Your own DSH is what makes the server start and what
   fills the environment report.

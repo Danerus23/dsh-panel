@@ -175,6 +175,9 @@ public sealed class BalanceController : IBalanceControl, IDisposable
     /// </summary>
     private bool _askAgainAfterBusy;
 
+    /// <summary>Отказ гейта по умениям словами (пусто — умения на месте). См. <c>Server\SkillGate.cs</c>.</summary>
+    private readonly Func<string> _skillsBlock;
+
     public BalanceController(
         IBalanceClient client,
         string credentialsPath,
@@ -184,7 +187,8 @@ public sealed class BalanceController : IBalanceControl, IDisposable
         Action<Action> dispatch,
         Action<string> log,
         Action<NoticeKind, string, string> notify,
-        bool isolatedRun = false)
+        bool isolatedRun = false,
+        Func<string>? skillsBlock = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _credentialsPath = credentialsPath ?? string.Empty;
@@ -193,6 +197,7 @@ public sealed class BalanceController : IBalanceControl, IDisposable
         _dispatch = dispatch ?? throw new ArgumentNullException(nameof(dispatch));
         _log = log ?? throw new ArgumentNullException(nameof(log));
         _notify = notify ?? throw new ArgumentNullException(nameof(notify));
+        _skillsBlock = skillsBlock ?? (() => string.Empty);
 
         Allowed = allowed;
         IsolatedRun = isolatedRun;
@@ -220,6 +225,12 @@ public sealed class BalanceController : IBalanceControl, IDisposable
         get
         {
             if (!Allowed) return PanelStrings.BalanceLocked;
+
+            // УМЕНИЯ (этап E2): без файла ключа модели баланс невозможен, и об этом человеку
+            // говорят СЛОВАМИ — гейт по умениям собирает фразу из имени функции, имени умения
+            // и причины. Проверка идёт ЗДЕСЬ, в момент показа строки и запроса, а не при старте
+            // панели: дёргать движок зря владелец запретил.
+            if (_skillsBlock() is { Length: > 0 } blocked) return blocked;
 
             // Отказ запроса: сервер ОТВЕРГ ключ, «ответа нет вовсе» и «ещё не спрашивали» — три
             // разные правды, и слова у них разные. Прежняя редакция называла 401 «баланс не

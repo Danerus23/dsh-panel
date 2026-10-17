@@ -375,10 +375,10 @@ public class PeakTableTests
 
             // И человеку сказано СЛОВАМИ, куда это уехало: раздел, у которого что-то исчезло молча,
             // читается как сломанный.
-            var hint = window.FindControl<TextBlock>("PeakWhereHintText");
+            var hint = window.FindControl<TextBlock>("PeakWhereNoteText");
 
             Assert.NotNull(hint);
-            Assert.Equal(PanelStrings.SettingsPeakWhereHint, hint!.Text);
+            Assert.Equal(PanelStrings.SettingsPeakWhereNote, hint!.Text);
             Assert.Contains(PanelStrings.PeakButton, hint.Text!, StringComparison.Ordinal);
 
             // А НАСТРОЙКИ раздела остались на месте: убраны таблицы, а не сам раздел.

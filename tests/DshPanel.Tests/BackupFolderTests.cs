@@ -226,7 +226,7 @@ public class BackupFolderTests
 
             Assert.False(entry.Readable);
             Assert.NotEqual(string.Empty, entry.Error);
-            Assert.Contains("описи", entry.Error);
+            Assert.Contains("списка содержимого копии", entry.Error, StringComparison.Ordinal);
 
             // И в списке он есть: пропустить его молча значило бы показать «копий меньше, чем есть».
             var list = BackupFolder.List(root);
@@ -293,6 +293,7 @@ public class BackupFolderTests
                 AppPaths.Under(root),
                 () => settings,
                 allowed: false,
+                mayTakeMachineEngineData: false,
                 locateEngine: noEngine,
                 clock: () => new DateTimeOffset(2026, 9, 26, 1, 35, 0, TimeSpan.Zero));
 
@@ -333,6 +334,7 @@ public class BackupFolderTests
                 AppPaths.Under(root),
                 () => settings,
                 allowed: true,
+                mayTakeMachineEngineData: false,
                 locateEngine: noEngine,
                 clock: () => new DateTimeOffset(2026, 9, 26, 1, 35, 0, TimeSpan.Zero));
 

@@ -482,7 +482,15 @@ public sealed class PanelShell : IDisposable
         window.Position = new PixelPoint(spot.X, spot.Y);
     }
 
-    private void ShowPanel()
+    /// <summary>
+    /// ПОКАЗАТЬ ОКНО ПАНЕЛИ — ОДНА ДВЕРЬ НА ДВА СЛУЧАЯ: щелчок по значку и кнопка окна первого
+    /// запуска («Показать панель», A5). Действие одно и то же, поэтому и дверь одна: второе имя для
+    /// того же действия разошлось бы с первым (70-writing.md §4).
+    ///
+    /// ⚠️ Открывается ТОЛЬКО по щелчку человека: окно первого запуска само ничего не нажимает,
+    /// а прогон проверки такого окна не получает вовсе (FirstRunDecisions.ShouldShow).
+    /// </summary>
+    public void ShowPanel()
     {
         if (_window.Show()) _log(PanelStrings.WindowShownLog);
     }
@@ -508,8 +516,8 @@ public sealed class PanelShell : IDisposable
 
         if (url.Length == 0)
         {
-            _log(PanelStrings.OpenAgentNoLinkHint);
-            _notify(NoticeKind.Error, PanelStrings.OpenAgentNoLinkTitle, PanelStrings.OpenAgentNoLinkHint);
+            _log(PanelStrings.OpenAgentNoLinkNote);
+            _notify(NoticeKind.Error, PanelStrings.OpenAgentNoLinkTitle, PanelStrings.OpenAgentNoLinkNote);
             return;
         }
 

@@ -14,8 +14,9 @@
 ;   * тот же AppId и та же папка установки — 2.0 встаёт ПОВЕРХ 1.x (решение владельца
 ;     28.09.2026): один пакет winget, один листинг, одна панель в трее;
 ;   * `AppMutex` НЕ задан: Inno показал бы неподавляемое окно «панель уже работает» до [Code],
-;     и `winget upgrade` встал бы на окне, которого никто не закроет. Панель закрывает наш
-;     `taskkill` (см. [Code]) плюс родной `CloseApplications`;
+;     и `winget upgrade` встал бы на окне, которого никто не закроет. Панель закрывает ТОЛЬКО
+;     наш `taskkill` (см. [Code]); родной `CloseApplications` выключен намеренно — почему,
+;     сказано в [Setup];
 ;   * все сообщения — через `SayOrLog`: в тихой установке ни одного окна;
 ;   * уборка МЁРТВОЙ записи автозапуска прежней генерации (`DSHPanel` ведёт на удаляемый
 ;     `DshTray.exe`) и ярлыка `DeepSeek Harness.lnk`, который ведёт на `DshTray.exe`;
@@ -71,7 +72,13 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 
-CloseApplications=yes
+; Панель закрывает НАШ taskkill ([Code]), а не Restart Manager: закрывать работающую панель —
+; решение прогона, и прогон говорит о нём ключом /SKIPPANELSTOP=1.
+; ⚠️ ИЗМЕРЕНО 17.10.2026 (цикл V-02, прогон в ВМ, дефект D-2): при `yes` установщик гасил панель
+; СВОИМ Restart Manager — в журнале «RestartManager found an application using one of our files:
+; DshPanel», — хотя рычаг /SKIPPANELSTOP=1 обещал обратное. То есть обещание рычага было ЛОЖЬЮ.
+; При `no` единственный убийца — наш taskkill, и он рычаг слушает.
+CloseApplications=no
 RestartApplications=no
 UsePreviousTasks=no
 ; Приглашение «This will install…» не отключается ключами /SILENT и /VERYSILENT: только
@@ -147,9 +154,13 @@ Name: "autostart"; Description: "{cm:Autostart}"; GroupDescription: "{cm:GroupOp
 [Files]
 ; status.txt и logs\* — отчёты и журналы проверок (в них состояние сервера и пути),
 ; settings.json — настройки конкретной машины, *.pdb — отладочные символы.
+; `uninsrestartdelete` — запасной ход для дефекта D-1 (17.10.2026): при снятии Windows держала
+; образ DshPanel.exe ещё мгновение после taskkill, и Inno оставлял файл в папке (3 из 4 прогонов).
+; Основной ход — ожидание в [Code] (CurUninstallStepChanged); этот флаг делает хвост честным:
+; не вышло удалить сейчас — файл уносится при перезагрузке, а не остаётся навсегда.
 Source: "{#AppSource}\*"; DestDir: "{app}"; \
     Excludes: "status.txt,logs\*,settings.json,*.log,*.pdb"; \
-    Flags: ignoreversion recursesubdirs createallsubdirs
+    Flags: ignoreversion recursesubdirs createallsubdirs uninsrestartdelete
 
 ; Установщик кладём и рядом с панелью: тогда панель всегда знает, чем её поставили
 ; ({srcexe} — сам этот файл; в Source: он доступен только с флагом external).
@@ -195,6 +206,8 @@ Filename: "{app}\{#AppExeName}"; Description: "{cm:Launch}"; \
 [UninstallRun]
 ; Перед удалением закрываем работающую панель: иначе Inno не сможет удалить занятый
 ; DshPanel.exe и предложит перезагрузку, а значок в трее останется жить из недобитой папки.
+; ⚠️ Сам taskkill завершения процесса НЕ ЖДЁТ (дефект D-1, замер 17.10.2026: 3 снятия из 4
+; оставляли файл) — поэтому окончательное ожидание стоит в [Code], CurUninstallStepChanged.
 ; Данные панели лежат в %LOCALAPPDATA%\DshPanel2 и удалением файлов не затрагиваются —
 ; это данные человека, а не файлы программы.
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM {#AppExeName} /F"; \
@@ -472,6 +485,11 @@ begin
     29.09.2026: прогон установщика в песочницу закрывает не только свою копию, а ЛЮБУЮ
     работающую панель с этим именем. Поэтому прогон обязан идти с /SKIPPANELSTOP=1 — тогда
     панель человека не гасится, а установщик говорит об этом строкой в журнале. }
+  { ⚠️ Цена ремонта D-2 (17.10.2026): `CloseApplications=no` в [Setup] убрало из-за спины
+    родной Restart Manager. Значит, если процесс не успеет умереть за паузу ниже, установка
+    скажет об этом ГРОМКО (файл занят, код возврата не 0), а не закроет панель за спиной
+    человека. Ждать здесь, как при снятии, нечем: на этом шаге файл панели ещё НЕ удаляется,
+    и «освободился ли он» делом не проверить. }
   if CurStep = ssInstall then
   begin
     if SkipPanelStop then
@@ -489,4 +507,92 @@ begin
   { Ярлык прежней генерации убираем сразу после копирования файлов: свои ярлыки установщик
     уже разложил, имена разные, чужое не задеваем. }
   RemoveLegacyShortcuts;
+end;
+
+{ ─────────────────────────────────────────── D-1: снятие не оставляет файл
+
+  ИЗМЕРЕНО 17.10.2026 (цикл V-02, прогон в ВМ, дефект D-1): снятие оставляло DshPanel.exe
+  в папке в 3 прогонах из 4. Причина не в том, что панель не закрылась, а в том, что
+  `taskkill` из [UninstallRun] НЕ ЖДЁТ завершения процесса: Windows держит образ ещё
+  мгновение, Inno пробует удалить файл, получает отказ доступа (5) и оставляет его. Поэтому
+  ждём ДО удаления файлов. Потолок нужен, чтобы снятие не зависло: не дождались — говорим
+  прямо (в тихом режиме строкой журнала), а хвост уносит флаг `uninsrestartdelete` из [Files]}
+
+const
+  PanelWaitCeilingMs = 10000;
+  PanelWaitStepMs = 250;
+
+{ В снятии нет `WizardSilent` — у него свой признак тишины, `UninstallSilent`. }
+procedure SayOrLogUninstall(const text: String; const kind: TMsgBoxType);
+begin
+  if UninstallSilent then
+    Log('Сообщение установщика (окно подавлено, тихий режим): ' + text)
+  else
+    MsgBox(text, kind, MB_OK);
+end;
+
+{ True — файл панели на диске свободен (или его уже нет). }
+function StopPanelAndWait: Boolean;
+var
+  resultCode: Integer;
+  waited: Integer;
+  exePath: String;
+begin
+  exePath := ExpandConstant('{app}\{#AppExeName}');
+
+  { Рычаг /SKIPPANELSTOP=1 здесь намеренно НЕ читается: он про прогон УСТАНОВКИ, который не
+    имеет права гасить чужую панель. Здесь снятие: человек сам просит убрать программу,
+    и оставить её процесс жить — обман. }
+
+  if not FileExists(exePath) then
+  begin
+    Log('Снятие: файла панели на диске нет, ждать нечего');
+    Result := True;
+    Exit;
+  end;
+
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#AppExeName} /F',
+    '', SW_HIDE, ewWaitUntilTerminated, resultCode);
+  Log(Format('Снятие: taskkill вернул код %d', [resultCode]));
+
+  waited := 0;
+  while True do
+  begin
+    { Освободился ли файл, спрашиваем у Windows делом, а не догадкой: пробуем удалить.
+      Удалось — файла нет, и это ровно тот исход, ради которого всё делается (позднее удаление
+      из [Files] просто не найдёт файл; ошибкой это не считается). }
+    if not FileExists(exePath) then
+    begin
+      Log(Format('Снятие: файл панели освобождён за %d мс', [waited]));
+      Result := True;
+      Exit;
+    end;
+
+    if DeleteFile(exePath) then
+    begin
+      Log(Format('Снятие: файл панели удалён после ожидания %d мс', [waited]));
+      Result := True;
+      Exit;
+    end;
+
+    if waited >= PanelWaitCeilingMs then
+    begin
+      Log(Format('Снятие: файл панели занят и после %d мс ожидания', [waited]));
+      Result := False;
+      Exit;
+    end;
+
+    Sleep(PanelWaitStepMs);
+    waited := waited + PanelWaitStepMs;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep <> usUninstall then Exit;
+
+  if StopPanelAndWait then Exit;
+
+  SayOrLogUninstall('Файл панели занят, закрыть её не удалось. Удаление файла отложено до ' +
+    'перезагрузки: папка ' + ExpandConstant('{app}') + ' освободится после неё.', mbError);
 end;

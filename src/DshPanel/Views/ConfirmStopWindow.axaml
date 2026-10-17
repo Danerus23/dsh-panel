@@ -11,8 +11,8 @@
     <TextBlock x:Name="QuestionText" TextWrapping="Wrap" FontSize="14" />
 
     <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
-      <Button x:Name="CancelButton" />
       <Button x:Name="ConfirmButton" />
+      <Button x:Name="CancelButton" />
     </StackPanel>
   </StackPanel>
 </Window>

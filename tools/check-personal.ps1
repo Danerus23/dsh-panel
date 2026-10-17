@@ -47,6 +47,14 @@ $ErrorActionPreference = 'Stop'
 if (-not $Root) {
     $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 }
+
+# ⚠️ ПРОПАВШИЙ ВХОД = ОТКАЗ, А НЕ АВАРИЯ (t15, 17.10.2026). Было: `-Root <нет такого>` роняло
+# Resolve-Path — PowerShell печатал «не удаётся найти путь» и код 1, то есть не наш отказ, а
+# исключение. Замер до правки: код 1 и строка .NET вместо названного отказа.
+if (-not (Test-Path -LiteralPath $Root)) {
+    Write-Host ('неприменимо: под корнем «' + $Root + '» нет каталога — проверять нечего')
+    exit 2
+}
 $Root = (Resolve-Path -LiteralPath $Root).Path
 
 # Только текстовые файлы: PNG и ZIP как текст разбирать бессмысленно.
@@ -60,6 +68,23 @@ $skipFirst = @('bin', 'obj', 'dist', 'upd-build', '.git', '.vs', '.nuget')
 $markers = @()
 if ($env:USERNAME) { $markers += ('C:\Users\' + $env:USERNAME) }
 if ($env:COMPUTERNAME) { $markers += $env:COMPUTERNAME }
+
+# ВТОРОЙ НАБОР — ПУТИ ЭТОЙ МАШИНЫ, КОТОРЫХ В ВЫПУСКЕ БЫТЬ НЕ ДОЛЖНО (заведён 10.10.2026).
+# Рабочая область и репозиторий — тоже машинные пути. Личными данными человека они не являются,
+# но в том, что уезжает к людям, означают ровно то же: «написано на этой машине и работает только
+# на ней». Тогда это и нашлось — в `src\DshPanel\Update\UpdateDownload.cs` временная отладка
+# писала в `C:\Harness\…\dbgA.txt`; у всех остальных людей такого каталога нет, `AppendAllText`
+# бросил бы исключение вне `try`, и обновление панели падало бы У КАЖДОГО, а сторожа молчали:
+# ни имени пользователя, ни имени машины в той строке не было.
+#
+# ⚠️ Смотрятся эти пути ТОЛЬКО там, где они и опасны: продуктовые исходники (`src\`), установщик
+# и публичные тексты. Во внутренних документах путь рабочей области — обычное дело
+# (`docs\…` называют `upd-build\…`), и запрет там сделал бы сторожа крикливым, а крикливый
+# сторож не сторож. Родитель диска (`C:\`) в набор не попадает: он нашёлся бы в каждом пути.
+$machineMarkers = @()
+$workspace = Split-Path -Parent $Root
+if ($workspace -and (Split-Path -Parent $workspace)) { $machineMarkers += $workspace }
+if ($Root -and (Split-Path -Parent $Root)) { $machineMarkers += $Root }
 
 if ($markers.Count -eq 0) {
     Write-Host 'не знаю, что искать: не видно ни имени пользователя, ни имени машины'
@@ -92,10 +117,19 @@ if ($list.Count -eq 0) {
 # поблажка: в них «решение владельца» — рабочий термин («кто принял решение и какое»), а не
 # голос модели, обращённый к человеку. Находка там не значит ничего, а находок там 140 —
 # проверка, кричащая на всех, не проверка. Публичными здесь считаются только те файлы,
-# которые уезжают к людям: README, история версий и текст установщика.
-$publicDocs = @('README.md', 'README.ru.md', 'README.zh.md',
-    'CHANGELOG.md', 'CHANGELOG.en.md', 'CHANGELOG.zh.md',
-    'installer\dsh-panel.iss', 'winget\Danerus23.DSHPanel.locale.en-US.yaml')
+# которые уезжают к людям: данные выпуска из `release\tree\` (README ×3, CHANGELOG ×3,
+# описание пакета winget) и текст установщика.
+#
+# ⚠️ ПУТИ ПЕРЕЕХАЛИ В `release\tree\` — CH-12 цикла V-01 (ADR-001 §5.2(6), 17.10.2026).
+# До переноса список называл `README.md` и `CHANGELOG*.md` В КОРНЕ, то есть внутренние файлы,
+# и вдобавок несуществующий `CHANGELOG.en.md` (настоящий — `CHANGELOG.ru.md`). После переноса
+# источника выпуска в `release\tree\` публичные тексты лежат ТАМ, и список называет их:
+# запись, которой нет на диске, упасть не может, а «список того, что уезжает к людям», где
+# стоит внутренний README (96 КБ рабочих заметок), — обещание, а не измерение. Проверено
+# подложенными находками (путь машины и голос модели в `release\tree\README.md`) — краснеет.
+$publicDocs = @('release\tree\README.md', 'release\tree\README.ru.md', 'release\tree\README.zh.md',
+    'release\tree\CHANGELOG.md', 'release\tree\CHANGELOG.ru.md', 'release\tree\CHANGELOG.zh.md',
+    'installer\dsh-panel.iss', 'release\tree\winget\Danerus23.DSHPanel.locale.en-US.yaml')
 
 # И шаблоны узкие — по ЗАВЕРЕНИЯМ и ПРОСЬБАМ, а не по слову «владелец»: «порт владельца» и
 # «машина владельца» — обычная речь о чужой машине, а вот «снимки сделаны на отдельном
@@ -113,6 +147,13 @@ $voicePatterns = @(
 $found = @()
 $scanned = 0
 $skippedBinary = 0
+
+# СКОЛЬКО РАЗ НАЙДЕН ПУТЬ ЭТОЙ МАШИНЫ — СЧИТАЕТСЯ, А НЕ ПЕЧАТАЕТСЯ ЛИТЕРАЛОМ (CH-06 цикла C1).
+# Было: `-f (… | -join ', '), 0` — второй довод формата стоял числом 0, $found не участвовал,
+# и строка «путей этой машины …: 0» была ОБЕЩАНИЕМ, а не измерением. Хуже того, печаталась она
+# ПОСЛЕ ветки находок, то есть при любой находке не печаталась вовсе — и «0» в ней не мог быть
+# не-нулём НИКОГДА. Теперь счётчик считается по ходу разбора и печатается ВЫШЕ ветки находок.
+$machineHits = 0
 
 foreach ($file in $list) {
     if (-not (Test-Path -LiteralPath $file)) { continue }
@@ -133,6 +174,19 @@ foreach ($file in $list) {
         foreach ($marker in $markers) {
             if ($line -match [regex]::Escape($marker)) {
                 $found += ($relative + ':' + $number + ' — встречается «' + $marker + '»')
+            }
+        }
+
+        # Пути этой машины — только в том, что уезжает к людям (см. объяснение в начале файла).
+        # ⚠️ У установщика берётся ТОЛЬКО `.iss`: рядом лежит `installer\AGENTS.md` — внутренняя
+        # инструкция агента, она никуда не уезжает, и путь рабочей области в ней законен
+        # (проверено прогоном 10.10.2026: широкое правило назвало её находкой).
+        if ($relative -like 'src\*' -or $relative -like 'installer\*.iss' -or ($publicDocs -contains $relative)) {
+            foreach ($marker in $machineMarkers) {
+                if ($line -match [regex]::Escape($marker)) {
+                    $machineHits++
+                    $found += ($relative + ':' + $number + ' — путь этой машины «' + $marker + '» в том, что уезжает к людям')
+                }
             }
         }
 
@@ -158,11 +212,26 @@ if ($scanned -eq 0) {
     exit 2
 }
 
+# ОХВАТ И ЧИСЛО — ВЫШЕ ВЕТКИ НАХОДОК (CH-06): при находке сторож выходит кодом 1, и всё, что
+# напечатано ниже этой строки, человек не увидит. Число путей этой машины — ПОСЧИТАННОЕ.
+Write-Host ('проверено текстовых файлов: {0} ({1}); не читались двоичные: {2}' -f $scanned, $how, $skippedBinary)
+Write-Host ('путей этой машины в том, что уезжает к людям ({0}): найдено {1}' -f (($machineMarkers | Where-Object { $_ }) -join ', '), $machineHits)
+
+# ⚠️ ПРОПАВШИЙ ВХОД — ЭТО НАХОДКА, А НЕ МОЛЧАНИЕ (t15, 17.10.2026). Голос модели и пути машины
+# ищутся ПО СПИСКУ `$publicDocs`; файл, которого нет, обход просто не встречает — и сторож молчал.
+# Замер до правки: убран `release\tree\README.md` — код 0, «личных данных не нашёл».
+$missingDocs = @($publicDocs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Root $_)) })
+if ($missingDocs.Count -gt 0) {
+    Write-Host ('ПРОПАВШИЙ ВХОД: нет файла из списка публичных текстов — ' + $missingDocs.Count + ' из ' + $publicDocs.Count)
+    foreach ($item in $missingDocs) { Write-Host ('  ' + $item) }
+    Write-Host 'список публичных текстов — перечень того, что уезжает к людям: файл из него не исчезает молча'
+    exit 1
+}
+
 if ($found.Count -gt 0) {
     Write-Host ('ЛИЧНЫЕ ДАННЫЕ: {0} находок' -f $found.Count)
     foreach ($item in $found) { Write-Host ('  ' + $item) }
     Write-Host ''
-    Write-Host ('проверено текстовых файлов: {0} ({1}); не читались двоичные: {2}' -f $scanned, $how, $skippedBinary)
     Write-Host 'двоичные (PNG, ICO, ZIP, EXE) не читаются вовсе — про них этот вердикт не говорит НИЧЕГО'
     exit 1
 }

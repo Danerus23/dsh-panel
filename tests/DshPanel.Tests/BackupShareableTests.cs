@@ -64,10 +64,11 @@ public class BackupShareableTests
 
             Assert.Equal(new[] { AppPaths.CredentialsFileName }, home.Source.SkipFileNames);
 
-            // Панель СОДЕРЖИТ и домашний каталог движка, и файл ссылки входа — без этого ключ уехал
-            // бы второй группой, а ссылка входа с токеном уехала бы к другому человеку.
+            // Панель СОДЕРЖИТ и домашний каталог движка, и файл ссылки входа, и ПРОПУСК ТЕЛЕФОНА —
+            // без этого ключ уехал бы второй группой, ссылка входа с токеном уехала бы к другому
+            // человеку, а по пропуску получатель копии вошёл бы в калитку того, кто её снял (A1).
             Assert.Equal(
-                new[] { AppPaths.CredentialsFileName, AppPaths.EntryLinkFileName },
+                new[] { AppPaths.CredentialsFileName, AppPaths.EntryLinkFileName, AppPaths.PhonePassFileName },
                 panel.Source.SkipFileNames);
 
             // Рабочая папка ни того, ни другого не содержит — правило к ней не применяется.
@@ -560,6 +561,65 @@ public class BackupShareableTests
         }
     }
 
+    /// <summary>
+    /// ПРОПУСК ТЕЛЕФОНА (`state\phone-pass.txt`) — СЕКРЕТ, И В «КОПИЮ ДЛЯ ПЕРЕДАЧИ» ОН НЕ КЛАДЁТСЯ
+    /// (A1, находка C1).
+    ///
+    /// **От какого случая.** По этому файлу калитка телефона пускает устройство к движку — то есть
+    /// это пропуск, а не настройка. Прежде он уезжал в архив, которым делятся с другим человеком:
+    /// получатель копии получил бы пропуск к движку того, кто копию снял. Правило то же, что у файла
+    /// ключей и ссылки входа, и проверка та же — НА НАСТОЯЩЕМ АРХИВЕ, а не рассуждением.
+    ///
+    /// **Мутации, которые обязаны упасть:** «убрать пропуск из `Restricted`» (в копии для передачи
+    /// файл появится) · «исключить его из ВСЕХ копий» (в своей копии файла не станет).
+    /// </summary>
+    [Fact]
+    public void Копия_для_передачи_не_берёт_пропуск_телефона_а_своя_берёт()
+    {
+        var root = NewRoot();
+
+        try
+        {
+            var paths = AppPaths.Under(root);
+            BuildSubject(paths);
+
+            // Файл пропуска кладём РУКОЙ, в формате продукта: сервер панели в проверке не поднимается,
+            // а правило про ФАЙЛ, а не про то, кто его записал.
+            Directory.CreateDirectory(paths.StateDir);
+            File.WriteAllText(
+                paths.PhonePassFile,
+                "{\"version\":1,\"pass\":\"TEST-PASS\",\"devices\":[{\"id\":\"phone-1\",\"name\":\"телефон\"}]}\n");
+
+            var shared = Path.Combine(paths.BackupsDir, "share-pass.zip");
+            var sharedRun = Copy(paths, shared, shareable: true, sevenZip: "");
+
+            Assert.True(sharedRun.Ok, sharedRun.Error);
+            Assert.DoesNotContain(
+                Names(shared),
+                name => name.EndsWith(AppPaths.PhonePassFileName, StringComparison.OrdinalIgnoreCase));
+
+            // И ЭТО НЕ «АРХИВ ПУСТОЙ»: сессии в нём есть — иначе «файла нет» зеленело бы на архиве,
+            // в который не попало вообще ничего. Файла ключей доступа здесь тоже нет, и это его
+            // собственное правило (соседняя проверка), а не побочный эффект этой.
+            var sharedNames = Names(shared);
+            Assert.Contains(sharedNames, name => name.EndsWith("session.v3.jsonl.zstd", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(sharedNames, name => name.EndsWith(AppPaths.CredentialsFileName, StringComparison.OrdinalIgnoreCase));
+
+            // СВОЯ КОПИЯ — С ПРОПУСКОМ: без него развёрнутая на той же машине панель потеряла бы
+            // сопряжённые устройства, а это потеря данных, а не «мера осторожности».
+            var own = Path.Combine(paths.BackupsDir, "own-pass.zip");
+            var ownRun = Copy(paths, own, shareable: false, sevenZip: "");
+
+            Assert.True(ownRun.Ok, ownRun.Error);
+            Assert.Contains(
+                Names(own),
+                name => name.EndsWith(AppPaths.PhonePassFileName, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
     // --- площадка -------------------------------------------------------------
 
     /// <summary>Домашний каталог движка, папка панели и ключи доступа — то, из чего состоит копия.</summary>
@@ -605,6 +665,7 @@ public class BackupShareableTests
             paths,
             () => settings.Settings,
             allowed: true,
+            mayTakeMachineEngineData: false,
             locateEngine: () => null,
             clock: () => new DateTimeOffset(2026, 9, 26, 12, 0, 0, TimeSpan.Zero),
             log: _ => { },

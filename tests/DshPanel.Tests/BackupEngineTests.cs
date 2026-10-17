@@ -9,6 +9,7 @@ using DshPanel.Backup;
 using DshPanel.Isolation;
 using DshPanel.Server;
 using Xunit;
+using DshPanel.Shell;
 
 namespace DshPanel.Tests;
 
@@ -487,7 +488,7 @@ public class BackupEngineTests
             true, string.Empty, @"C:\Temp\copy.zip", 10, 1, 10, ZipWriterKind.BuiltIn, "своими силами",
             TimeSpan.FromSeconds(1), Restricted: false, Verified: null, Notes: Array.Empty<string>());
 
-        Assert.Contains("ВНИМАНИЕ", result.Summary());
+        Assert.Contains(PanelStrings.BackupRightsOpenWarning, result.Summary(), StringComparison.Ordinal);
         Assert.Contains("в открытом виде", result.Summary());
 
         // «Проверить нечем» никогда не выдаётся за «проверено».
@@ -585,6 +586,260 @@ public class BackupEngineTests
         {
             Cleanup(stand);
             if (Directory.Exists(other)) Directory.Delete(other, recursive: true);
+        }
+    }
+    // --- машинная установка движка и корни вне корня прогона (A4 + CH-11) ------
+
+    /// <summary>
+    /// УСТАНОВКА ДВИЖКА ВНЕ КОРНЯ ПРОГОНА: своя временная площадка в форме машинной
+    /// (`npm\node_modules\@deepseek-ai\dsh\lib\bin.js` и `nodejs\node.exe`). Возвращает движок
+    /// и папку, чтобы проверка убрала за собой.
+    /// </summary>
+    private static (DshEngine Engine, string Folder) MachineEngine()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "dsh machine " + Guid.NewGuid().ToString("N")[..8]);
+
+        var npm = Path.Combine(folder, "npm");
+        var nodeDir = Path.Combine(folder, "nodejs");
+        var bin = Path.Combine(npm, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+
+        WriteFile(bin, "// machine engine\n");
+        WriteFile(Path.Combine(nodeDir, "node.exe"), "MZ\n");
+
+        return (new DshEngine(Path.Combine(nodeDir, "node.exe"), bin), folder);
+    }
+
+    /// <summary>
+    /// ИЗОЛИРОВАННАЯ КОПИЯ НЕ БЕРЁТ МАШИННУЮ УСТАНОВКУ ДВИЖКА И НАЗЫВАЕТ ОТКАЗ (A4, находка C1 CH-08).
+    ///
+    /// **От какого случая.** Копия изолированного прогона унесла в архив каталоги машины —
+    /// 276,0 МБ / 29 899 файлов. Здесь проверяются ТРИ утверждения, и каждое может упасть:
+    /// (а) в плане нет ни одного корня видов движка; (б) НИ ОДИН корень плана не лежит вне корня
+    /// прогона (сторож всей группы, а не одного места); (в) отказ назван ИМЕННО своей строкой,
+    /// а не проглочен и не выдан за «движка не нашли».
+    ///
+    /// ⚠️ **Шлаг берётся ИЗ ПРАВА, а не литералом:** проверка утверждает ПРАВО, а не константу,
+    /// и «право стало true» роняет её раньше, чем дело дойдёт до плана.
+    ///
+    /// **Мутации, которые обязаны упасть:** «шлаг игнорируется» (CD1) · «право всегда true» (CD2).
+    /// </summary>
+    [Fact]
+    public void Изолированная_копия_не_берёт_машинную_установку_движка_и_называет_отказ()
+    {
+        var stand = CreateStand();
+        var (engine, machine) = MachineEngine();
+
+        try
+        {
+            // ПРАВО ПРОГОНА — не литерал: изолированный прогон, запущенный не человеком.
+            var context = RunContext.Create(RunRequest.Parse(
+                new[] { RunRequest.RootSwitchArgument, stand.Root }, _ => null));
+            var mayTake = RunRights.MachineEngineData(context, humanLaunch: false);
+
+            Assert.False(mayTake);
+
+            var plan = BackupPlanner.Full(stand.Paths, stand.Work, engine, mayTakeMachineEngineData: mayTake);
+
+            Assert.True(plan.Ok, plan.Error);
+
+            // (а) корней видов движка нет вовсе — ни пакетов, ни Node.
+            Assert.DoesNotContain(plan.Roots, root => BackupRootKinds.IsEngine(root.Kind));
+
+            // (б) сторож всей группы: ни один корень не лежит вне корня прогона. Панельный корень —
+            // это и есть корень прогона, он не «внутри себя», поэтому сравнивается отдельно.
+            foreach (var root in plan.Roots)
+            {
+                var inside = BackupPlanner.IsInside(root.Directory, stand.Paths.Root)
+                             || string.Equals(
+                                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(root.Directory)),
+                                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(stand.Paths.Root)),
+                                 StringComparison.OrdinalIgnoreCase);
+
+                Assert.True(inside, $"в копию изолированного прогона попал корень вне его: «{root.Prefix}» — {root.Directory}");
+            }
+
+            // (в) отказ НАЗВАН и назван своей строкой: «не найден» и «не положено» — разные факты.
+            Assert.Contains(PanelStrings.BackupEngineOutsideRunRoot, plan.Notes);
+            Assert.DoesNotContain(PanelStrings.BackupEngineNotFound, plan.Notes);
+        }
+        finally
+        {
+            Cleanup(stand);
+            try
+            {
+                if (Directory.Exists(machine)) Directory.Delete(machine, recursive: true);
+            }
+            catch
+            {
+                // Временный каталог в %TEMP%: не убрался — не провал проверки.
+            }
+        }
+    }
+
+    /// <summary>
+    /// ЧЕЛОВЕК БЕРЁТ МАШИННУЮ УСТАНОВКУ ДВИЖКА В СВОЮ КОПИЮ — и она остаётся самодостаточной (A4).
+    ///
+    /// **Зачем эта половина.** Без неё «запретить всем» проходило бы молча: копия человека перестала
+    /// бы быть самодостаточной (критерий этапа 4 «копия → чистая ВМ → работает»), а падало бы на этом
+    /// нечему. Мутация «право всегда false» обязана упасть здесь.
+    /// </summary>
+    [Fact]
+    public void Человек_берёт_машинную_установку_движка_в_свою_копию()
+    {
+        var stand = CreateStand();
+        var (engine, machine) = MachineEngine();
+
+        try
+        {
+            var context = RunContext.Create(RunRequest.Owner());
+            var mayTake = RunRights.MachineEngineData(context, humanLaunch: true);
+
+            Assert.True(mayTake);
+
+            var plan = BackupPlanner.Full(stand.Paths, stand.Work, engine, mayTakeMachineEngineData: mayTake);
+
+            Assert.True(plan.Ok, plan.Error);
+
+            // Обе половины установки — в копии, и обе ВНЕ корня прогона (это и есть машинная).
+            Assert.Contains(plan.Roots, root => root.Kind == BackupRootKind.EnginePackages);
+            Assert.Contains(plan.Roots, root => root.Kind == BackupRootKind.EngineNode);
+
+            Assert.All(
+                plan.Roots.Where(root => BackupRootKinds.IsEngine(root.Kind)),
+                root => Assert.False(BackupPlanner.IsInside(root.Directory, stand.Paths.Root)));
+
+            Assert.DoesNotContain(PanelStrings.BackupEngineOutsideRunRoot, plan.Notes);
+        }
+        finally
+        {
+            Cleanup(stand);
+            try
+            {
+                if (Directory.Exists(machine)) Directory.Delete(machine, recursive: true);
+            }
+            catch
+            {
+                // Временный каталог в %TEMP%: не убрался — не провал проверки.
+            }
+        }
+    }
+
+    /// <summary>
+    /// РАБОЧАЯ ПАПКА ВНЕ КОРНЯ ПРОГОНА В ИЗОЛИРОВАННУЮ КОПИЮ НЕ БЕРЁТСЯ — И ЭТО НАЗВАНО (CH-11).
+    ///
+    /// **От какого случая (находка CH-11).** `--restore &lt;архив&gt; --with-panel` кладёт в корень
+    /// прогона настройки из архива, а в настройках бывает записана рабочая папка человека —
+    /// и следующий `--backup` уносил её в архив: это его проекты, а не «просто объём».
+    ///
+    /// **Мутации, которые обязаны упасть:** «правило пути снято» (корень вернётся) · «корень выкинут
+    /// молча» (замечания не будет) · «правило распространено на обычный запуск» (вторая половина
+    /// проверки — там корень обязан остаться).
+    /// </summary>
+    [Fact]
+    public void Изолированная_копия_не_берёт_рабочую_папку_вне_корня_и_называет_отказ()
+    {
+        var stand = CreateStand();
+        var outside = NewRoot();
+
+        try
+        {
+            WriteFile(Path.Combine(outside, "proj", "src", "a.txt"), "A\n");
+
+            var plan = BackupPlanner.Full(
+                stand.Paths, outside, engine: null, withEngine: false, confineToRunRoot: true);
+
+            Assert.True(plan.Ok, plan.Error);
+            Assert.DoesNotContain(plan.Roots, root => root.Kind == BackupRootKind.WorkingFolder);
+
+            Assert.Contains(
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.BackupWorkingFolderOutsideRunRootFormat,
+                    DisplayMask.Path(outside)),
+                plan.Notes);
+
+            // ЗАКОННЫЙ СЛУЧАЙ НЕ ОТНЯТ: у обычного запуска человеком та же папка остаётся в копии.
+            var human = BackupPlanner.Full(
+                stand.Paths, outside, engine: null, withEngine: false, confineToRunRoot: false);
+
+            Assert.Contains(human.Roots, root => root.Kind == BackupRootKind.WorkingFolder);
+        }
+        finally
+        {
+            Cleanup(stand);
+            try
+            {
+                if (Directory.Exists(outside)) Directory.Delete(outside, recursive: true);
+            }
+            catch
+            {
+                // Временный каталог в %TEMP%: не убрался — не провал проверки.
+            }
+        }
+    }
+
+    /// <summary>
+    /// КАТАЛОГ КЛЮЧЕЙ ВНЕ КОРНЯ ПРОГОНА В ИЗОЛИРОВАННУЮ КОПИЮ НЕ БЕРЁТСЯ — И ЭТО НАЗВАНО (CH-11).
+    ///
+    /// Ключи — данные человека, и каталог за корнем прогона не «ключи прогона». Отказ называется
+    /// СЛОВАМИ: молча выкинутый каталог ключей читался бы как «ключей нет», то есть ложь в отчёте.
+    ///
+    /// **Мутации, которые обязаны упасть:** «правило пути снято у ключей» · «каталог выкинут молча» ·
+    /// «правило распространено на обычный запуск».
+    /// </summary>
+    [Fact]
+    public void Изолированная_копия_не_берёт_каталог_ключей_вне_корня_и_называет_отказ()
+    {
+        var stand = CreateStand();
+        var outside = NewRoot();
+        var keys = Path.Combine(outside, "keys");
+
+        try
+        {
+            WriteFile(Path.Combine(keys, "id_test"), "PRIVATE\n");
+
+            var plan = BackupPlanner.Full(
+                stand.Paths,
+                stand.Work,
+                engine: null,
+                withEngine: false,
+                withKeys: true,
+                keyDirectories: new[] { keys },
+                confineToRunRoot: true);
+
+            Assert.True(plan.Ok, plan.Error);
+            Assert.DoesNotContain(plan.Roots, root => root.Kind == BackupRootKind.KeyRing);
+
+            Assert.Contains(
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.BackupKeyDirOutsideRunRootFormat,
+                    DisplayMask.Path(keys)),
+                plan.Notes);
+
+            // ЗАКОННЫЙ СЛУЧАЙ: у обычного запуска человеком тот же каталог берётся.
+            var human = BackupPlanner.Full(
+                stand.Paths,
+                stand.Work,
+                engine: null,
+                withEngine: false,
+                withKeys: true,
+                keyDirectories: new[] { keys },
+                confineToRunRoot: false);
+
+            Assert.Contains(human.Roots, root => root.Kind == BackupRootKind.KeyRing);
+        }
+        finally
+        {
+            Cleanup(stand);
+            try
+            {
+                if (Directory.Exists(outside)) Directory.Delete(outside, recursive: true);
+            }
+            catch
+            {
+                // Временный каталог в %TEMP%: не убрался — не провал проверки.
+            }
         }
     }
 }

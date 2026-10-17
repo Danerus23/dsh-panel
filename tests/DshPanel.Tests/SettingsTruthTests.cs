@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.Json;
+using DshPanel.Isolation;
 using DshPanel.Restore;
 using DshPanel.Settings;
 using DshPanel.Shell;
@@ -37,7 +39,7 @@ public class SettingsTruthTests
         var note = RestoreEngine.VersionNote(copy, installed);
 
         Assert.Contains(copy, note, StringComparison.Ordinal);
-        Assert.Contains("движка нет", note, StringComparison.Ordinal);
+        Assert.Contains("сервера DSH нет", note, StringComparison.Ordinal);
         Assert.Contains("неизвестна", note, StringComparison.Ordinal);
 
         // Ложь, из-за которой дефект и заведён: «той же версии, что стоит сейчас» — нельзя.
@@ -50,7 +52,7 @@ public class SettingsTruthTests
     {
         var same = RestoreEngine.VersionNote("0.1.5-rc.3", "0.1.5-RC.3");
         Assert.Contains("той же версии", same, StringComparison.Ordinal);
-        Assert.DoesNotContain("движка нет", same, StringComparison.Ordinal);
+        Assert.DoesNotContain("сервера DSH нет", same, StringComparison.Ordinal);
 
         var differs = RestoreEngine.VersionNote("0.1.5-rc.3", "0.1.7-rc.2");
         Assert.Contains("0.1.5-rc.3", differs, StringComparison.Ordinal);
@@ -119,9 +121,14 @@ public class SettingsTruthTests
     }
 
     /// <summary>
-    /// Ключ, которого панель не знает ВООБЩЕ (опечатка), обязан быть назван: «настройки прочитаны»
-    /// при молча потерянном значении — это и есть дефект. Названо и имя ключа, и то, что значение
-    /// не применено.
+    /// Ключ, которого панель не знает ВООБЩЕ (опечатка ИЛИ значение от более новой версии панели),
+    /// обязан быть назван: «настройки прочитаны» при молча потерянном значении — это и есть дефект.
+    ///
+    /// ⚠️ **И назван он ЖУРНАЛУ, а не экрану** (уточнение владельца 11.10.2026 по живому прогону):
+    /// прежняя панель 2.0.3, прочитав файл новой сборки, показывала в окне простыню из тридцати
+    /// шести имён, и человек по ней ничего не мог сделать. Теперь на экране ОДНА строка
+    /// (<see cref="PanelStrings.SettingsNewerVersionNote"/>), а перечень имён читает тот, кто
+    /// разбирается в записях (<see cref="SettingsStore.NewerKeys"/> → <c>SettingsNewerVersionLogFormat</c>).
     /// </summary>
     [Fact]
     public void Неизвестный_ключ_называется_а_не_молчит()
@@ -137,7 +144,8 @@ public class SettingsTruthTests
                 "{\"serverWrokingDir\":\"C:\\\\Работа\",\"theme\":\"dark\"}",
                 new UTF8Encoding(false));
 
-            var load = new SettingsStore(path).Load();
+            var store = new SettingsStore(path);
+            var load = store.Load();
 
             // Файл разобран — и это правда: остальные ключи применены.
             Assert.True(load.Ok);
@@ -145,11 +153,153 @@ public class SettingsTruthTests
 
             // Значение потеряно — и об этом СКАЗАНО, а не умолчано.
             Assert.Equal(string.Empty, load.Settings.ServerWorkingDir);
-            Assert.Contains("serverWrokingDir", load.Problem, StringComparison.Ordinal);
-            Assert.Contains("НЕ применены", load.Problem, StringComparison.Ordinal);
 
-            // Названо и то, какое имя панель понимает: иначе человеку нечего исправлять.
-            Assert.Contains("serverWorkingDir", load.Problem, StringComparison.Ordinal);
+            // НА ЭКРАНЕ — СЛОВА О СЛУЧИВШЕМСЯ И НИ ОДНОГО ИМЕНИ: «одна строка вместо простыни».
+            Assert.Contains(PanelStrings.SettingsNewerVersionNote, load.Problem, StringComparison.Ordinal);
+            Assert.DoesNotContain("serverWrokingDir", load.Problem, StringComparison.Ordinal);
+            Assert.DoesNotContain(Environment.NewLine, PanelStrings.SettingsNewerVersionNote, StringComparison.Ordinal);
+
+            // А САМО ИМЯ — В ПЕРЕЧНЕ, КОТОРЫЙ ЧИТАЕТ ЖУРНАЛ, и в том написании, в каком оно в файле:
+            // иначе человеку нечего исправлять.
+            Assert.Equal(new[] { "serverWrokingDir" }, store.NewerKeys);
+        }
+        finally
+        {
+            RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// **НЕЗНАКОМЫЕ КЛЮЧИ ПЕРЕЖИВАЮТ ЗАПИСЬ — ЦЕНОЮ ОТКАТА ЖИВОГО ПРОГОНА.**
+    ///
+    /// Дефект, ради которого проверка заведена (замер владельца 11.10.2026): прежняя панель 2.0.3
+    /// прочитала файл новой сборки и **перезаписала его без незнакомых ключей** — вернувшись на
+    /// прежнюю версию, человек молча терял настройки новой (пропали <c>phoneEnabled</c>,
+    /// <c>phonePort</c>, <c>updateAttemptAt</c> и ещё семь). Поэтому запись обязана вернуть в файл
+    /// всё, чего панель не понимает, — КАК ЕСТЬ: их значения не применены, но и не потеряны.
+    ///
+    /// Имена здесь нарочно выдуманные: то, что панель знает сегодня, незнакомым не считается,
+    /// а «значение от более новой версии» — это ровно ключ, которого в ЭТОЙ версии ещё нет.
+    /// </summary>
+    [Fact]
+    public void Незнакомые_ключи_переживают_запись()
+    {
+        var dir = TempDir();
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "settings.json");
+
+            File.WriteAllText(
+                path,
+                "{\"theme\":\"dark\",\"serverWrokingDir\":\"C:\\\\Работа\",\"phoneSmsCode\":\"123456\","
+                + "\"panel3TrayMode\":\"quiet\",\"panel3Limits\":{\"depth\":[1,2,3],\"on\":true}}",
+                new UTF8Encoding(false));
+
+            var store = new SettingsStore(path);
+            var load = store.Load();
+
+            Assert.True(load.Ok);
+            Assert.Equal(PanelSettings.ThemeDark, load.Settings.Theme);
+
+            // (1) НЕЗНАКОМОЕ НАЗВАНО — и ровно оно, а не «всё подряд».
+            Assert.Equal(
+                new[] { "serverWrokingDir", "phoneSmsCode", "panel3TrayMode", "panel3Limits" },
+                store.NewerKeys);
+
+            // (2) ЗАПИСЬ — ТЕМ ЖЕ путём, что и кнопка «Сохранить».
+            Assert.True(store.Save(load.Settings));
+
+            using var written = JsonDocument.Parse(File.ReadAllText(path));
+            var root = written.RootElement;
+
+            // (3) ЧУЖИЕ ЗНАЧЕНИЯ НА МЕСТЕ И ТЕ ЖЕ: строка, число-строка, вложенный объект с массивом.
+            Assert.Equal(@"C:\Работа", root.GetProperty("serverWrokingDir").GetString());
+            Assert.Equal("123456", root.GetProperty("phoneSmsCode").GetString());
+            Assert.Equal("quiet", root.GetProperty("panel3TrayMode").GetString());
+            Assert.Equal(3, root.GetProperty("panel3Limits").GetProperty("depth").GetArrayLength());
+            Assert.True(root.GetProperty("panel3Limits").GetProperty("on").GetBoolean());
+
+            // (4) И СВОИ НАСТРОЙКИ ТОЖЕ ЗАПИСАНЫ: файл — не «только чужое».
+            Assert.Equal(PanelSettings.ThemeDark, root.GetProperty("theme").GetString());
+
+            // (5) КРУГ ЗАМКНУЛСЯ: перечитанный файл снова читается панелью, и замечание — прежнее.
+            var again = new SettingsStore(path);
+            var reloaded = again.Load();
+
+            Assert.True(reloaded.Ok);
+            Assert.Equal(PanelSettings.ThemeDark, reloaded.Settings.Theme);
+            Assert.Contains(PanelStrings.SettingsNewerVersionNote, reloaded.Problem, StringComparison.Ordinal);
+
+            // (6) И ВТОРАЯ ЗАПИСЬ ДАЁТ ТО ЖЕ САМОЕ: файл не «плывёт» от чтения-записи (иначе панель
+            //     переписывала бы его при каждом запуске, а разница в копии пугала бы человека).
+            Assert.Equal(4, again.NewerKeys.Count);
+            Assert.True(again.Save(reloaded.Settings));
+
+            var once = File.ReadAllText(path);
+
+            var third = new SettingsStore(path);
+            var thirdLoad = third.Load();
+
+            Assert.True(third.Save(thirdLoad.Settings));
+
+            Assert.Equal(once, File.ReadAllText(path));
+        }
+        finally
+        {
+            RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ПЕРЕЧЕНЬ НЕПРИНЯТЫХ ИМЁН УХОДИТ В ЖУРНАЛ — живым путём контроллера, а не «где-то вызывается».
+    ///
+    /// Проверяются обе стороны одного решения владельца 11.10.2026: на экране (это
+    /// <see cref="ISettingsControl.LoadProblem"/>, его и показывает окно) — одна строка без имён,
+    /// а имена — в журнале, той же строкой словаря. Мутации, которые обязаны упасть здесь:
+    /// «вернуть простыню в окно» · «не сказать о непринятых ключах вовсе» · «перечень в журнал
+    /// не уходит».
+    /// </summary>
+    [Fact]
+    public void Перечень_непринятых_ключей_уходит_в_журнал()
+    {
+        var dir = TempDir();
+        try
+        {
+            var paths = AppPaths.Under(dir);
+            Directory.CreateDirectory(paths.DataDir);
+
+            File.WriteAllText(
+                paths.SettingsFile,
+                "{\"theme\":\"dark\",\"phoneSmsCode\":\"123456\",\"panel3TrayMode\":\"quiet\"}",
+                new UTF8Encoding(false));
+
+            var log = new List<string>();
+
+            var control = new SettingsController(
+                new SettingsStore(paths.SettingsFile),
+                paths,
+                allowed: true,
+                canReadOwnerEnvironment: false,
+                locateEngine: () => null,
+                server: () => null,
+                applyTheme: _ => { },
+                log: log.Add);
+
+            // (1) ЭКРАН: слова о случившемся есть, имён нет.
+            Assert.Contains(PanelStrings.SettingsNewerVersionNote, control.LoadProblem, StringComparison.Ordinal);
+            Assert.DoesNotContain("phoneSmsCode", control.LoadProblem, StringComparison.Ordinal);
+            Assert.DoesNotContain("panel3TrayMode", control.LoadProblem, StringComparison.Ordinal);
+
+            // (2) ЖУРНАЛ: оба имени, через запятую, той же строкой словаря.
+            var head = PanelStrings.SettingsNewerVersionLogFormat.Split("{0}")[0];
+
+            Assert.Contains(
+                log,
+                line => line.StartsWith(head, StringComparison.Ordinal)
+                    && line.Contains("phoneSmsCode", StringComparison.Ordinal)
+                    && line.Contains("panel3TrayMode", StringComparison.Ordinal)
+                    && line.Contains(", ", StringComparison.Ordinal));
         }
         finally
         {

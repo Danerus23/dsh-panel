@@ -1,5 +1,6 @@
 using DshPanel.Agents;
 using DshPanel.Balance;
+using DshPanel.Files;
 using DshPanel.Isolation;
 using DshPanel.Peak;
 using DshPanel.Settings;
@@ -229,14 +230,12 @@ public static class BalanceSelfTest
         }
         finally
         {
-            var gone = true;
+            // Уборка идёт ОДНИМ местом и сама проверяет, что дерева не осталось: прежний
+            // `Directory.Delete(recursive: true)` оставлял дерево на junction и на файле
+            // «только для чтения», а пустой `catch` отвечал на это успехом.
+            var gone = TreeDeletion.Remove(root).Ok;
 
-            try
-            {
-                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
-                try { if (Directory.Exists(parent)) Directory.Delete(parent); } catch { }
-            }
-            catch { gone = false; }
+            try { if (Directory.Exists(parent)) Directory.Delete(parent); } catch { }
 
             report.Add($"уборка: временный каталог пробы убран = {gone}");
             if (!gone) failed = true;

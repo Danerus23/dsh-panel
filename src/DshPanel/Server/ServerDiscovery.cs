@@ -22,6 +22,14 @@ public sealed record ServerProbe(
     Func<int, long> StartTicks,
     Func<int, bool> AnswersFingerprint)
 {
+    /// <summary>
+    /// Жив ли процесс — тремя ответами (<see cref="ProcessFacts.Liveness"/>). Отдельным свойством,
+    /// а не седьмым доводом записи: нужно оно ровно одному делу — уборке МЁРТВЫХ замков движка,
+    /// и там важна разница между «мёртв» и «не смог узнать». По умолчанию — настоящая проверка;
+    /// проверки подставляют свой ответ.
+    /// </summary>
+    public Func<int, ProcessFacts.Liveness> Liveness { get; init; } = ProcessFacts.LivenessOf;
+
     /// <summary>Настоящие источники: таблица портов, сведения о процессе и HTTP-отпечаток.</summary>
     public static ServerProbe System() => new(
         PortTable.GetListenerPid,
@@ -77,7 +85,17 @@ public static class ServerDiscovery
     /// отвечает) и сервер, в который она уже встроена. Без этого панель предлагала бы
     /// встроиться в то, чем уже управляет.
     /// </param>
-    public static DiscoveryResult Find(ServerProbe probe, IReadOnlySet<int>? excludePids = null)
+    /// <param name="ownEngineDir">
+    /// СВОЯ ПАПКА ДВИЖКА (этап E3). Не пусто — найденный сервер, поднятый из неё, помечается
+    /// <see cref="FoundServer.OwnVersion"/>: это **наш** движок (например старая версия, пережившая
+    /// обновление), и говорить о нём словами «поднят не панелью» было бы неправдой.
+    /// Пусто — приметы нет, и все находки остаются «чужими»: прогон без права на файлы панели
+    /// своего движка не ставит вовсе.
+    /// </param>
+    public static DiscoveryResult Find(
+        ServerProbe probe,
+        IReadOnlySet<int>? excludePids = null,
+        string? ownEngineDir = null)
     {
         ArgumentNullException.ThrowIfNull(probe);
 
@@ -107,7 +125,12 @@ public static class ServerDiscovery
 
             if (!ServerDecisions.LooksLikeDshProcess(facts, listener.Port)) continue;
 
-            found.Add(new FoundServer(listener.Port, listener.Pid, name));
+            // Чей это движок: наш (из своей папки) или человека. Путь берётся из той же
+            // командной строки, что уже прочитана, — второго разбора здесь не заводится.
+            var engineBin = OwnEngine.BinPathFromCommandLine(commandLine);
+            var ownVersion = OwnEngine.VersionFolder(engineBin, ownEngineDir);
+
+            found.Add(new FoundServer(listener.Port, listener.Pid, name, engineBin, ownVersion));
         }
 
         // Порядок по порту — чтобы предложение не зависело от порядка строк в таблице портов:

@@ -64,7 +64,18 @@ public class ModeTests
         // `--update-prepare` — без них прогон упирался бы в «неизвестный ключ».
         // И ещё один дала разовая «копия для передачи» (п. 11 `docs\DESIGN.md`): `--shareable` —
         // передача перестала быть настройкой и стала ключом режима без окна.
-        Assert.Equal(24, StartModes.Known.Length);
+        // 25-й — `--engine-install-selftest` (этап E3.1): установка движка по замку настоящим npm
+        // и проба на поставленном движке — без него ключ отвергался бы как опечатка.
+        // 26-й — `--engine-update-selftest` (этап E3.2): ЦЕПОЧКА обновления настоящими дверями —
+        // гашение своего движка, предохранительная копия профиля, установка по замку, живая проба
+        // и подъём сервера заново; с доводом «beda» — отказ и возврат прежнего движка.
+        // 27-й — `--engine-rollback-selftest` (этап E3.3): ЦЕПОЧКА отката настоящими дверями —
+        // проба прежней версии живьём, гашение своего движка, запись и подъём сервера заново
+        // уже на прежней версии; с доводом «beda» — отказ на пробе ДО всякой подмены.
+        // 28-й — `--phone-selftest` (этап F1.e): самотест КАЛИТКИ ТЕЛЕФОНА в изоляции — слушатель
+        // на своём свободном порту, сопряжение по коду, белый список, рубильник и ЖИВОЕ рукопожатие
+        // мультиплексора (кадр `ready` с настоящим `clientId`). Без изоляции отказывается сам.
+        Assert.Equal(28, StartModes.Known.Length);
 
         foreach (var key in new[]
                  {
@@ -76,6 +87,21 @@ public class ModeTests
                      // Проба обновления: решения, разбор ответа GitHub, суточный гейт и следы
                      // в настройках — без сети и без файлов владельца.
                      "--update-selftest",
+
+                     // Проба установки движка по замку (этап E3.1): настоящий npm, свой каталог
+                     // под корнем прогона и полная проба сервера на поставленном движке.
+                     "--engine-install-selftest",
+
+                     // Проба ОБНОВЛЕНИЯ движка (этап E3.2): вся цепочка подмены версии настоящими
+                     // дверями, включая предохранительную копию профиля и живую пробу поставленного.
+                     "--engine-update-selftest",
+
+                     // Проба ОТКАТА движка (этап E3.3): цепочка возврата к прежней версии.
+                     "--engine-rollback-selftest",
+
+                     // Самотест КАЛИТКИ ТЕЛЕФОНА (этап F1.e): слушатель, сопряжение, белый список,
+                     // рубильник и живое рукопожатие мультиплексора — только в изоляции.
+                     "--phone-selftest",
 
                      // Два режима замены файлов без окна: проверка выпуска и подготовка замены.
                      // Замена файлов у человека ими не запускается — запускает её update.cmd,
@@ -151,14 +177,166 @@ public class ModeTests
 
         var source = File.ReadAllText(Path.Combine(root, "src", "DshPanel", "Program.cs"));
 
+        // ⚠️ **Ищем ИМЯ ОКНА, а не всякое слово.** Строка `"settings"` встречается в разборе ещё
+        // и как ИМЯ ОБРАЗЦОВОЙ ДВЕРИ (`doors.Add("settings")` в `ShotWindowWithDoors`), и это
+        // не копия списка имён: дверь называется по своему месту в сборке кадра. Поэтому литерал
+        // имени окна обязан стоять РЯДОМ С ВЫБОРОМ (`kind ==`, `kind is`, `KnowsShotWindow`) —
+        // там, где он и был бы копией списка. Так проверка не падает на слове, а ловит именно
+        // заведённый заново перечень имён.
         var literals = StartModes.ShotWindows
-            .Where(window => source.Contains($"\"{window}\"", StringComparison.Ordinal))
+            .Where(window => System.Text.RegularExpressions.Regex.IsMatch(
+                source,
+                @"kind\s*(==|is)[^\r\n]*\""" + System.Text.RegularExpressions.Regex.Escape(window) + @"\"""))
             .ToList();
 
         Assert.True(
             literals.Count == 0,
             "в разборе съёмки снова завелись свои имена окон (должны браться из StartModes.ShotWindows): " +
             string.Join(", ", literals));
+    }
+
+    /// <summary>
+    /// У КАЖДОГО ИМЕНИ КАДРА ЕСТЬ СВОЯ ВЕТВЬ — И ВЕТВЬ ЭТОГО ИМЕНИ, А НЕ СОСЕДА.
+    ///
+    /// **От какого случая (фаза 3, 12.10.2026).** Имя <c>settings</c> обещало «настройки»,
+    /// а снимало раздел «Резервное копирование», и **«Общего» кадра не было вовсе**: имя одно,
+    /// а разделов шесть. Владелец назвал это прямо: «кадр показывает не то, что обещает имя».
+    ///
+    /// ⚠️ **Почему это проверяется отдельно от «имя есть в списке».** Прежняя проверка
+    /// (`Описание_ключа_съёмки…`) видит только СПИСОК: имя, оставшееся без ветви, она пропускает —
+    /// и кадр не снимается вовсе (громкий отказ кодом 2 уже на съёмке). А имя, чья ветвь снимает
+    /// СОСЕДА, не ловится ничем: кадр есть, он непустой — и он не про то, что обещано.
+    ///
+    /// Здесь на каждое имя назван признак его ветви, и признак обязан быть в разборе съёмки
+    /// **ровно один раз**: у диалогов это имя класса окна, у разделов настроек — константа раздела.
+    /// Признаки — не «слова в комментарии»: каждый из них — то, чем ветвь ДЕЙСТВИТЕЛЬНО снимает.
+    ///
+    /// Мутации, которые обязаны упасть здесь: «имя без ветви» · «ветвь снимает соседний раздел» ·
+    /// «два имени ведут в одну ветвь».
+    /// </summary>
+    [Fact]
+    public void У_каждого_имени_кадра_есть_своя_ветвь()
+    {
+        // Имя кадра → чем его ветвь снимает. ⚠️ `settings` и `settings-backup` — ОДНА ветвь
+        // нарочно: первое имя старое и обещало не то, что снимало, второе названо тем, что видно.
+        // Раздел «Резервное копирование» в разборе стоит УМОЛЧАНИЕМ (`_ =>`), поэтому признак
+        // у него — имя самого раздела, а не строка ветви.
+        var marks = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [StartModes.ShotSettings] = "SettingsWindow.BackupSection",
+            [StartModes.ShotSettingsBackup] = "SettingsWindow.BackupSection",
+            [StartModes.ShotSettingsGeneral] = "SettingsWindow.GeneralSection",
+            [StartModes.ShotSettingsBalance] = "SettingsWindow.BalanceSection",
+            [StartModes.ShotSettingsUpdate] = "SettingsWindow.UpdateSection",
+            [StartModes.ShotSettingsServer] = "SettingsWindow.ServerSection",
+            [StartModes.ShotSettingsPhone] = "SettingsWindow.PhoneSection",
+            [StartModes.ShotBackup] = "new BackupWindow()",
+            [StartModes.ShotAbout] = "new AboutWindow()",
+            [StartModes.ShotPeaks] = "new PeakWindow()",
+            [StartModes.ShotPricingHistory] = "new PricingHistoryWindow()",
+            [StartModes.ShotIssue] = "new IssueWindow()",
+            [StartModes.ShotMainTwoServers] = "probe: kind == StartModes.ShotMainTwoServers",
+            [StartModes.ShotConfirmStop] = "new ConfirmStopWindow()",
+            [StartModes.ShotConfirmEngine] = "new ConfirmEngineWindow()",
+            [StartModes.ShotBackupStop] = "new BackupStopWindow()",
+            [StartModes.ShotUnsavedChanges] = "new UnsavedChangesWindow()",
+            [StartModes.ShotFirstRun] = "new FirstRunWindow()",
+        };
+
+        // КАЖДОЕ имя списка названо — и наоборот: лишнего имени в разборе нет.
+        var listed = StartModes.ShotWindows.ToList();
+        var named = marks.Keys.ToList();
+
+        listed.Sort(StringComparer.Ordinal);
+        named.Sort(StringComparer.Ordinal);
+
+        Assert.Equal(listed, named);
+
+        var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
+        Assert.False(string.IsNullOrEmpty(root), "не нашёл корень репозитория");
+
+        var source = File.ReadAllText(Path.Combine(root, "src", "DshPanel", "Program.cs"));
+
+        // ПРИЗНАК КАЖДОЙ ВЕТВИ — РОВНО ОДИН РАЗ. Два имени с одним признаком (см. выше) дают
+        // одну проверку, а не две: признак у них общий, и второго такого места в разборе быть
+        // не должно — иначе одна из ветвей снимает не то, что обещано.
+        foreach (var branch in marks
+                     .GroupBy(pair => pair.Value, StringComparer.Ordinal)
+                     .Select(group => (Mark: group.Key, Names: group.Select(pair => pair.Key).ToList())))
+        {
+            var count = Occurrences(source, branch.Mark);
+
+            Assert.True(count == 1, $"признак ветви «{branch.Mark}» встречается в разборе {count} раз — "
+                + "ветвь либо пропала, либо снимает не то, что обещано именами: "
+                + string.Join(", ", branch.Names));
+        }
+
+        // ⚠️ И ВЕТВЬ ОБЯЗАНА БЫТЬ ЖИВОЙ, А НЕ ОТКЛЮЧЁННОЙ (урок мутации AJ1, `docs\HISTORY.md`).
+        // Прежняя редакция этой проверки искала признак **строкой** и на «`if (false && kind == …)`»
+        // молчала: строка-то на месте, а ветвь не работает — кадр не снимается вовсе либо снимается
+        // соседний. Поэтому у КАЖДОГО имени сверяется САМА ОХРАНА: константа имени обязана стоять
+        // в разборе как выбор (`kind == …`, `kind is …`, `=>`), и ни разу — под «`false &&`».
+        foreach (var name in StartModes.ShotWindows)
+        {
+            var constant = ShotConstant(name);
+
+            if (constant is null) continue;
+
+            Assert.True(
+                Occurrences(source, "StartModes." + constant) >= 1,
+                $"у кадра «{name}» нет ветви: в разборе съёмки не нашлось «StartModes.{constant}»");
+
+            Assert.DoesNotContain(
+                "false && " + "StartModes." + constant,
+                source,
+                StringComparison.Ordinal);
+        }
+
+        // И НИ ОДНОЙ ОТКЛЮЧЁННОЙ ВЕТВИ ВООБЩЕ: «false &&» перед выбором имени окна — это ветвь,
+        // которая выглядит живой, а не работает. Такую однажды и завели (AJ1).
+        Assert.DoesNotContain("false && kind", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("false && (kind", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Имя константы <see cref="StartModes"/>, которой названо это имя кадра. <c>null</c> —
+    /// имя, у которого своей ветви-охранника нет по устройству: у <c>settings</c> ветвь общая
+    /// с <c>settings-backup</c> (умолчание разбора), и охранник у неё один — на второе имя.
+    /// </summary>
+    private static string? ShotConstant(string name) => name switch
+    {
+        "settings" => null,
+        "settings-general" => nameof(StartModes.ShotSettingsGeneral),
+        "settings-backup" => nameof(StartModes.ShotSettingsBackup),
+        "settings-balance" => nameof(StartModes.ShotSettingsBalance),
+        "settings-update" => nameof(StartModes.ShotSettingsUpdate),
+        "settings-server" => nameof(StartModes.ShotSettingsServer),
+        "settings-phone" => nameof(StartModes.ShotSettingsPhone),
+        "backup" => nameof(StartModes.ShotBackup),
+        "about" => nameof(StartModes.ShotAbout),
+        "peaks" => nameof(StartModes.ShotPeaks),
+        "pricing-history" => nameof(StartModes.ShotPricingHistory),
+        "issue" => nameof(StartModes.ShotIssue),
+        "main-two-servers" => nameof(StartModes.ShotMainTwoServers),
+        "confirm-stop" => nameof(StartModes.ShotConfirmStop),
+        "confirm-engine" => nameof(StartModes.ShotConfirmEngine),
+        "backup-stop" => nameof(StartModes.ShotBackupStop),
+        "unsaved-changes" => nameof(StartModes.ShotUnsavedChanges),
+        "first-run" => nameof(StartModes.ShotFirstRun),
+        _ => null,
+    };
+
+    private static int Occurrences(string text, string needle)
+    {
+        var count = 0;
+
+        for (var at = text.IndexOf(needle, StringComparison.Ordinal); at >= 0;
+             at = text.IndexOf(needle, at + needle.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
     }
 
     /// <summary>

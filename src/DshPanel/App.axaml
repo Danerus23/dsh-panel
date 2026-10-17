@@ -111,7 +111,7 @@
       то есть выбранная строка исчезла бы вовсе.
     -->
     <Style Selector="ListBoxItem">
-      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="CornerRadius" Value="4" />
       <Setter Property="Padding" Value="12,8" />
     </Style>
 
@@ -120,7 +120,7 @@
          применяются по порядку объявления. -->
     <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
       <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}" />
-      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="CornerRadius" Value="4" />
     </Style>
 
     <!--
@@ -133,7 +133,7 @@
       от фона окна: этим карточка и читается как карточка, а не как рамка на пустом месте.
     -->
     <Style Selector="Border.card">
-      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="CornerRadius" Value="4" />
       <Setter Property="Padding" Value="24" />
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}" />
@@ -209,13 +209,22 @@
 
     <!--
       ЗАГОЛОВОК РАЗДЕЛА заметнее (решение владельца 27.09.2026, шаг 2 вида): крупнее, полужирный
-      и цветом акцента темы. Один класс на все окна — «заметный заголовок» обязан выглядеть
+      и цветом из ПАЛИТРЫ ВИДА. Один класс на все окна — «заметный заголовок» обязан выглядеть
       одинаково и в панели, и в настройках, и в копиях.
+
+      ⚠️ ЦВЕТ ЗДЕСЬ НЕ АКЦЕНТ КАРКАСА, и это ИСПРАВЛЕННЫЙ ДЕФЕКТ (находка E-01 приёмки C1,
+      17.10.2026). Было `AccentButtonBackground` КАК ЦВЕТ ТЕКСТА: `#0078D7` на карточке `#F2F2F2`
+      давал **4,02:1**, на тёмной — **3,15:1** при поле 4,5:1 (WCAG 1.4.3). Акцент — краска
+      ГЛАВНОГО ДЕЙСТВИЯ (подложка кнопки), а не чернила: на светлой теме он для текста бледен,
+      на тёмной тёмен. Теперь кисть берётся по имени у палитры (`PanelLook.SectionTitle`), где
+      числа ЗАМЕРЕНЫ: `#006ABD` — 4,94:1 (светлая), `#4CA0E3` — 5,02:1 (тёмная). Проверка
+      `PanelLookTests.Заголовки_разделов_проходят_пол_контраста` берёт те же числа у палитры
+      и падает, если цвет вернуть к акценту.
     -->
     <Style Selector="TextBlock.sectionTitle">
       <Setter Property="FontSize" Value="20" />
       <Setter Property="FontWeight" Value="SemiBold" />
-      <Setter Property="Foreground" Value="{DynamicResource AccentButtonBackground}" />
+      <Setter Property="Foreground" Value="{DynamicResource PanelSectionTitle}" />
     </Style>
 
     <!--
@@ -226,7 +235,7 @@
     <Style Selector="Border.dot">
       <Setter Property="Width" Value="12" />
       <Setter Property="Height" Value="12" />
-      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="CornerRadius" Value="4" />
       <Setter Property="VerticalAlignment" Value="Center" />
       <Setter Property="Margin" Value="0,0,8,0" />
     </Style>
@@ -261,6 +270,97 @@
     <Style Selector="Border.tone-neutral">
       <Setter Property="Background" Value="{DynamicResource PanelToneNeutral}" />
     </Style>
+
+    <!--
+      ПЛОТНАЯ МЕТКА СОСТОЯНИЯ (раздел «Сервер», решение владельца 14.10.2026 по рендеру).
+
+      Форма взята у GOV.UK Tag: «Use the Tag component to show users the status of something»;
+      заливка, скругление 3, слово ВНУТРИ метки. Цвет приходит кистью из темы
+      (`Shell\PanelLook.Tag`), а не подбирается здесь: подобранный один раз оттенок на другой
+      теме перестаёт читаться, и это в панели уже случалось.
+
+      ⚠️ Метка НЕ интерактивна — ни ссылка, ни кнопка (требование GOV.UK Tag): состояние
+      не нажимают, его читают. Поэтому здесь только вид.
+    -->
+    <Style Selector="Border.stateTag">
+      <Setter Property="CornerRadius" Value="3" />
+      <Setter Property="Padding" Value="10,3" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.stateTagText">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Border.tagOk">
+      <Setter Property="Background" Value="{DynamicResource PanelTagGood}" />
+    </Style>
+    <Style Selector="Border.tagWarning">
+      <Setter Property="Background" Value="{DynamicResource PanelTagWarning}" />
+    </Style>
+    <Style Selector="Border.tagBad">
+      <Setter Property="Background" Value="{DynamicResource PanelTagBad}" />
+    </Style>
+    <Style Selector="TextBlock.tagOkText">
+      <Setter Property="Foreground" Value="{DynamicResource PanelTagGoodText}" />
+    </Style>
+    <Style Selector="TextBlock.tagWarningText">
+      <Setter Property="Foreground" Value="{DynamicResource PanelTagWarningText}" />
+    </Style>
+    <Style Selector="TextBlock.tagBadText">
+      <Setter Property="Foreground" Value="{DynamicResource PanelTagBadText}" />
+    </Style>
+
+    <!-- СЕРОЕ СОСТОЯНИЕ — ПРОСТО СЕРЫЙ ТЕКСТ, БЕЗ ПЛАШКИ (решение владельца 14.10.2026;
+         образец GOV.UK «complete multiple tasks»: «grey text with no background colour»). -->
+    <Style Selector="TextBlock.stateGrey">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="Foreground" Value="{DynamicResource PanelGreyText}" />
+    </Style>
+
+    <!-- ПОДРОБНОСТЬ СТРОКИ — короткая фраза рядом с меткой: тем же серым, но мельче. -->
+    <Style Selector="TextBlock.rowHint">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="Foreground" Value="{DynamicResource PanelGreyText}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- ДЕЙСТВИЕ СТРОКИ СПИСКА («Открыть папку»): тихая кнопка — она не главное действие окна
+         и не должна спорить с ним акцентом. -->
+    <Style Selector="Button.rowAction">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+    </Style>
+
+    <!-- РАЗДЕЛИТЕЛЬ СТРОК СПИСКА РАЗДЕЛА «СЕРВЕР» — ТОЙ ЖЕ линией, что отделяет строки таблиц
+         пиков и копий: «таблица» в панели обязана выглядеть одинаково везде. У последней строки
+         линии нет — иначе карточка кончалась бы чертой под пустым местом. -->
+    <Style Selector="Border.envRow">
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseLowBrush}" />
+    </Style>
+    <Style Selector="Border.envRowLast">
+      <Setter Property="BorderThickness" Value="0" />
+    </Style>
+
+    <!--
+      ФОКУС СТРОКИ ТАБЛИЦЫ КОПИЙ — ВИДИМЫЙ И НЕ ДВИГАЮЩИЙ РАСКЛАДКУ (пачка долгов 14.10.2026, §2).
+
+      Строку копии можно было выбрать только мышью: с клавиатуры — никак, и фокуса не было видно
+      вовсе. Норма банка (`50-lists-navigation.md` §2/§8): WCAG 2.2 SC 2.1.1 (Keyboard) и
+      SC 2.4.7 (Focus Visible).
+
+      ⚠️ Кольцо — ТЕНЬЮ ВНУТРЬ (толщина 2, цвет — акцент темы), а не толщиной рамки: толщина
+      рамки участвует в раскладке и фокус менял бы РАЗМЕР строки, а это запрещено правилом
+      «состояние не меняет размер» (`PanelRhythmTests`). Тень раскладку не двигает.
+
+      ⚠️ Отбор по `:focus-visible`, а не по `:focus`: кольцо показывается тогда, когда фокус
+      пришёл С КЛАВИАТУРЫ, а не по щелчку мышью — щёлкнувший и так видит подсветку выбора.
+    -->
+    <Style Selector="Border.backupRow:focus-visible">
+      <Setter Property="BoxShadow" Value="{DynamicResource PanelRowFocusRing}" />
+    </Style>
+
 
     <!--
       ГЛАВНОЕ ДЕЙСТВИЕ ОКНА — акцентным цветом темы (решение владельца 27.09.2026: «акцентный

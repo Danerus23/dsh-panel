@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
+using DshPanel.Files;
 using DshPanel.Shell;
 using System.Globalization;
 
@@ -260,14 +261,9 @@ public static class ZipWriter
         }
         finally
         {
-            try
-            {
-                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
-            }
-            catch
-            {
-                // Временный каталог в %TEMP% — если не убрался, это не провал копии.
-            }
+            // Временный каталог в %TEMP% убирается ОДНИМ местом (`Files\TreeDeletion.cs`):
+            // оно само снимает ссылки, не заходя внутрь, и проверяет, что дерева не осталось.
+            TreeDeletion.Remove(folder);
         }
     }
 

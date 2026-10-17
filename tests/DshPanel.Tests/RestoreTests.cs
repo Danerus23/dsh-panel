@@ -262,9 +262,9 @@ public class RestoreTests
             // но расхождение с нынешней настройкой названо и объяснено (находка В3).
             var work = plan.Groups.Single(group => group.Prefix == "Harness");
             Assert.Equal(@"C:\Harness", work.Target);
-            Assert.Contains("сессии движка привязаны к пути", work.Note);
+            Assert.Contains("сессии сервера DSH привязаны к пути", work.Note, StringComparison.Ordinal);
             Assert.Contains("C:\\Projects", work.Note);
-            Assert.Contains("рабочую папку в настройках надо указать", work.Note);
+            Assert.Contains("укажите в настройках ту же рабочую папку", work.Note);
         }
         finally
         {
@@ -303,7 +303,7 @@ public class RestoreTests
             Assert.False(without.Groups.Single(group => group.Prefix == "DshPanel2").Selected);
             Assert.False(without.Groups.Single(group => group.Prefix == "npm").Selected);
             Assert.False(without.Groups.Single(group => group.Prefix == "nodejs").Selected);
-            Assert.Contains(without.Notes, note => note.Contains("движок и Node в копии есть"));
+            Assert.Contains(without.Notes, note => note.Contains("Сервер DSH и Node в копии есть", StringComparison.Ordinal));
             Assert.Contains("отдельное согласие", without.Summary());
 
             var with = RestoreEngine.Plan(archive, paths, @"C:\Harness",
@@ -357,7 +357,7 @@ public class RestoreTests
             Assert.True(noEngine.Ok, noEngine.Error);
             Assert.False(noEngine.Groups.Single(group => group.Prefix == "npm").Selected);
             Assert.False(noEngine.Groups.Single(group => group.Prefix == "nodejs").Selected);
-            Assert.Contains("ВНЕ корня", noEngine.Groups.Single(group => group.Prefix == "npm").Note);
+            Assert.Contains("вне корня", noEngine.Groups.Single(group => group.Prefix == "npm").Note, StringComparison.OrdinalIgnoreCase);
 
             // Данные движка при этом ложатся: изоляция не запрещает накат, она держит его под корнем.
             Assert.True(noEngine.Groups.Single(group => group.Prefix == ".dsh").Selected);
@@ -368,7 +368,7 @@ public class RestoreTests
                 "не раскладывается",
                 noEngine.Groups.Single(group => group.Prefix == "npm").Describe());
             Assert.Contains(
-                "ВНЕ корня",
+                "вне корня",
                 noEngine.Groups.Single(group => group.Prefix == "npm").Describe());
 
             // Ветка вторая: движок на машине ЕСТЬ — и он тоже вне корня (второй временный каталог
@@ -386,7 +386,7 @@ public class RestoreTests
 
             Assert.False(found.Groups.Single(group => group.Prefix == "npm").Selected);
             Assert.False(found.Groups.Single(group => group.Prefix == "nodejs").Selected);
-            Assert.Contains("ВНЕ корня", found.Groups.Single(group => group.Prefix == "nodejs").Note);
+            Assert.Contains("вне корня", found.Groups.Single(group => group.Prefix == "nodejs").Note, StringComparison.OrdinalIgnoreCase);
 
             // А ЧЕЛОВЕКУ — как было: без правила изоляции те же группы раскладываются по своему месту.
             var human = RestoreEngine.Plan(
@@ -458,7 +458,7 @@ public class RestoreTests
 
             var noManifest = Path.Combine(root, "plain.zip");
             using (var zip = ZipFile.Open(noManifest, ZipArchiveMode.Create)) AddText(zip, "a.txt", "A");
-            Assert.Contains("без нашей описи", RestoreEngine.Plan(noManifest, paths, null).Error);
+            Assert.Contains("без списка содержимого копии панели", RestoreEngine.Plan(noManifest, paths, null).Error, StringComparison.Ordinal);
 
             Assert.Contains("путь к архиву не задан", RestoreEngine.Plan("", paths, null).Error);
 

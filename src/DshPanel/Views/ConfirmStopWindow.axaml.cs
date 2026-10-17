@@ -53,4 +53,26 @@ public partial class ConfirmStopWindow : Window
         CancelButton.Content = PanelStrings.ConfirmStopNo;
         ConfirmButton.Content = PanelStrings.ConfirmStopYes;
     }
+
+    /// <summary>
+    /// ТО ЖЕ ОКНО, НО С ЧУЖИМ ВОПРОСОМ. Заведено для действия «поднять свой сервер заново»
+    /// (решение владельца 13.10.2026, ответ 2): гасится сервер, которым панель НЕ управляет,
+    /// и вопрос у него СВОЙ — «остановит найденный и поднимет свой», а не «остановить сервер?».
+    ///
+    /// ⚠️ Отдельным членом, а не «допиши текст снаружи»: вопрос и подписи кнопок — одно решение
+    /// о том, что человек подтверждает, и разойтись им нельзя. Окно при этом ОДНО на оба случая
+    /// намеренно: человеку это один и тот же вопрос «точно?», и второе такое же окно завело бы
+    /// вторую реализацию безопасного действия (безопасное — справа, решение владельца).
+    /// </summary>
+    public void AttachQuestion(string title, string question)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        ArgumentException.ThrowIfNullOrWhiteSpace(question);
+
+        Title = title;
+        QuestionText.Text = question;
+
+        CancelButton.Content = PanelStrings.ConfirmStopNo;
+        ConfirmButton.Content = PanelStrings.SrvRecoverButtonYes;
+    }
 }

@@ -83,11 +83,27 @@ internal static class Program
 
         rest = LanguageDecisions.WithoutSwitch(rest);
 
+        // КЛЮЧИ СЪЁМКИ СНИМАЮТСЯ ДО РАЗБОРА РЕЖИМОВ: `--theme dark` и `--state focus:SaveButton`.
+        // Иначе разбор счёл бы их опечаткой и отказал бы кодом 2 (незнакомый ключ — громкий отказ).
+        // ⚠️ Значение снимается только у не-ключа: «--theme --shot кадр.png» не должно съесть съёмку
+        // и открыть окно владельцу — это то же правило, что у языка (см. `ShotDecisions`).
+        var shotTheme = ShotDecisions.Value(rest, ShotDecisions.ThemeSwitch);
+        var shotState = ShotDecisions.Value(rest, ShotDecisions.StateSwitch);
+
+        rest = ShotDecisions.WithoutSwitches(rest);
+
         // Съёмка интерфейса без показа окна — для README и для глазной проверки вёрстки.
         // Третий аргумент выбирает окно: нет — главное, «settings» — настройки, «backup» — копии.
         // Неизвестное имя окна — громкий отказ, а не «снимем главное»: опечатка в скрипте съёмки
         // иначе положила бы в README не тот кадр, и заметить это было бы некому.
-        if (rest.Length >= 2 && rest[0] == "--shot") return Shot(rest[1], rest.Length >= 3 ? rest[2] : string.Empty);
+        if (rest.Length >= 2 && rest[0] == "--shot")
+        {
+            return Shot(
+                rest[1],
+                rest.Length >= 3 ? rest[2] : string.Empty,
+                shotTheme ?? string.Empty,
+                shotState ?? string.Empty);
+        }
 
         // Проверка трея без участия человека: значок, насос сообщений, уведомление.
         if (rest.Length >= 1 && rest[0] == "--tray-selftest")
@@ -175,6 +191,29 @@ internal static class Program
             return ServerSelfTest.Run(TimeSpan.FromSeconds(Math.Clamp(seconds, 5, 1800)));
         }
 
+        // САМОТЕСТ КАЛИТКИ ТЕЛЕФОНА (этап F1.e): поднимает НАСТОЯЩИЙ слушатель на своём свободном
+        // порту, сопрягает устройство настоящим файлом пропуска, поднимает НАСТОЯЩИЙ движок под
+        // корнем прогона и проходит ЖИВОЕ рукопожатие мультиплексора (кадр `ready` с `clientId`).
+        // Без изоляции отказывается сам (PhoneSelfTest): это и данные владельца, и его движок.
+        // Порт 43127 не занимается — порт берётся свободным.
+        if (rest.Length >= 1 && rest[0] == "--phone-selftest")
+        {
+            var seconds = (int)PhoneSelfTest.DefaultTimeout.TotalSeconds;
+            if (rest.Length >= 2 && !int.TryParse(rest[1], out seconds))
+            {
+                Console.WriteLine($"КАЛИТКА ПРОВАЛ: длительность «{rest[1]}» — не число");
+                return 2;
+            }
+
+            var phone = PhoneSelfTest.Run(TimeSpan.FromSeconds(Math.Clamp(seconds, 5, 1800)));
+
+            foreach (var line in phone.Report) Console.WriteLine("КАЛИТКА| " + line);
+
+            Console.WriteLine(phone.Title);
+
+            return phone.Code;
+        }
+
         // Самотест копий и наката: снимает НАСТОЯЩУЮ копию своей площадкой под корнем прогона,
         // портит данные, раскладывает копию обратно и поднимает настоящий движок на
         // восстановленном профиле — критерий этапа «копия → развернул → продолжил».
@@ -203,6 +242,48 @@ internal static class Program
 
         // Проба самой изоляции: единственный режим, который проверяет её на собранном exe.
         if (rest.Length >= 1 && rest[0] == "--isolation-selftest") return IsolationSelfTest();
+
+        // ПРОБА УСТАНОВКИ ДВИЖКА ПО ЗАМКУ (этап E3.1): ставит НАСТОЯЩИЙ движок своим каталогом под
+        // корнем прогона — настоящим npm и по встроенному замку, — и прогоняет на нём полную пробу
+        // сервера (84 имени, 8 умений). Это единственный путь, которым проверяется, что по нашему
+        // замку собирается ТО дерево, которое мерили: замер 10.10.2026 показал, что дайджест первой
+        // редакции давал 1 пакет вместо 588. Без изоляции отказывается сама.
+        if (rest.Length >= 1 && rest[0] == "--engine-install-selftest")
+        {
+            // Второй довод «beda» подкладывает беду: установка зовётся заведомо отказывающей
+            // дверью, и проверяется ОТКАТ с предупреждением про сессии (шаг 3 плана владельца).
+            var planted = rest.Length >= 2
+                && string.Equals(rest[1], "beda", StringComparison.OrdinalIgnoreCase);
+
+            return EngineInstallSelfTest.Run(EngineInstallSelfTest.DefaultTimeout, planted);
+        }
+
+        // ПРОБА ОБНОВЛЕНИЯ ДВИЖКА НАСТОЯЩИМИ ДВЕРЯМИ (этап E3.2, приёмка): ставит движок по замку,
+        // заводит профиль с работой, поднимает свой сервер, проходит ЦЕПОЧКУ обновления (гашение →
+        // предохранительная копия дверью 7-Zip → установка по замку → живая проба 84/84 → запись →
+        // подъём сервера заново) и проверяет, что осталось на диске. Второй довод «beda» подкладывает
+        // беду в место копий: панель обязана отказать, НЕ начинать установку и поднять прежний движок.
+        // Без изоляции отказывается сама.
+        if (rest.Length >= 1 && rest[0] == "--engine-update-selftest")
+        {
+            var plantedUpdate = rest.Length >= 2
+                && string.Equals(rest[1], "beda", StringComparison.OrdinalIgnoreCase);
+
+            return EngineUpdateSelfTest.Run(EngineUpdateSelfTest.DefaultTimeout, plantedUpdate);
+        }
+
+        // ПРОБА ОТКАТА ПО КНОПКЕ НАСТОЯЩИМИ ДВЕРЯМИ (этап E3.3, приёмка): панель держит прежнюю
+        // версию на диске, переводит запись на «новую», поднимает на ней сервер — и возвращается
+        // НАСТОЯЩИМ путём: проба прежней версии живьём → гашение своего сервера → запись → подъём
+        // заново уже на прежней. Второй довод «beda» ломает прежний движок: проба обязана отказать
+        // ДО всякой подмены. Без изоляции отказывается сама.
+        if (rest.Length >= 1 && rest[0] == "--engine-rollback-selftest")
+        {
+            var plantedRollback = rest.Length >= 2
+                && string.Equals(rest[1], "beda", StringComparison.OrdinalIgnoreCase);
+
+            return EngineRollbackSelfTest.Run(EngineRollbackSelfTest.DefaultTimeout, plantedRollback);
+        }
 
         // Сверка трёх словарей НА СОБРАННОЙ СБОРКЕ: сколько всего ключей, чего нет или что пусто
         // в каждом языке, где разошлись подстановки и какие ключи не принадлежат панели.
@@ -520,12 +601,309 @@ internal static class Program
             .UseHarfBuzz()
             .WithInterFont();
 
-    private static int Shot(string path, string kind)
+    /// <summary>
+    /// ПОДСТАВНАЯ ПРОБА ДЛЯ КАДРА С ДВУМЯ НАЙДЕННЫМИ СЕРВЕРАМИ: она отвечает ЗАРАНЕЕ ЗАПИСАННЫМ
+    /// и не спрашивает ни одного настоящего процесса.
+    ///
+    /// Зачем: решение владельца 10.10.2026 — кадр с двумя серверами в приёмке. Настоящая съёмка
+    /// живых серверов владельца не показывает вовсе (в кадр не попадает ни его сервер, ни его
+    /// процессы), поэтому два сервера здесь **выдуманы**: порты 3080 и 3099, номера процессов
+    /// 19804 и 22222. «Наш движок» при этом берётся из **настоящей** папки движка этого прогона
+    /// и проверенной версии — так пометка на кадре та же, что человек увидит в жизни.
+    /// </summary>
+    private static ServerProbe TwoServersProbe(AppPaths paths)
     {
+        const int OwnPort = 3080;
+        const int ForeignPort = 3099;
+        const int OwnPid = 19804;
+        const int ForeignPid = 22222;
+
+        var ownBin = OwnEngine.BinPath(paths.EngineDir, EngineRpcSurface.MeasuredOnVersion);
+
+        return new ServerProbe(
+            ListenerPid: port => port == OwnPort ? OwnPid : port == ForeignPort ? ForeignPid : 0,
+            Listeners: () => new[]
+            {
+                new PortTable.Listener(OwnPort, OwnPid),
+                new PortTable.Listener(ForeignPort, ForeignPid),
+            },
+            CommandLine: pid => pid == OwnPid
+                ? $"\"node.exe\" {ownBin} web --no-open --port {OwnPort}"
+                : "\"node.exe\" C:\\Users\\Public\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js web --no-open --port " + ForeignPort,
+            ProcessName: _ => "node",
+            StartTicks: _ => 63_000_000_000_000_000,
+            AnswersFingerprint: _ => true);
+    }
+
+    /// <summary>
+    /// АДРЕС С ЗАМАСКИРОВАННЫМ ПОСЛЕДНИМ ЧИСЛОМ — <c>192.168.0.7</c> → <c>192.168.0.х</c>.
+    ///
+    /// ⚠️ **Зачем маска, а не настоящий адрес.** Кадр `--shot` уезжает в README, а номер адреса
+    /// своей машины — её примета; решение владельца 11.10.2026 дословно: «номера не пишем либо
+    /// заменяем последнее число на `х`» (так же маскируются адреса в `docs\PHONE-F0.md`).
+    /// Сторож личных данных адреса не видит вовсе, и надеяться на него здесь не на что.
+    ///
+    /// ⚠️ **И зачем маска, а не пустота.** Пустой список означал бы «подходящего адреса нет»,
+    /// и кадр показывал бы раздел в состоянии, которого у владельца, скорее всего, не бывает:
+    /// он прочитал бы «телефону показывать нечего» и решил бы, что раздел не работает.
+    /// Маска оставляет форму адреса и признак «подсеть on-link» — то есть ровно то, что кадр
+    /// и должен показать, — а номера машины в нём нет.
+    ///
+    /// Не разобрался (чужой вид адреса) — отдаётся маска целиком, а не сам адрес: показать
+    /// незнакомое как есть значило бы оставить в кадре то, ради чего маска и заведена.
+    /// </summary>
+    private static string MaskAddress(string address)
+    {
+        var parts = (address ?? string.Empty).Trim().Split('.');
+
+        return parts.Length == 4
+            ? parts[0] + "." + parts[1] + "." + parts[2] + ".х"
+            : "х.х.х.х";
+    }
+
+    /// <summary>
+    /// ЦЕНЫ ДЛЯ КАДРОВ — та же дверь, что у баланса, и по той же причине: съёмка идёт
+    /// ПРОГОНОМ ПРОВЕРКИ (`allowed: false`), поэтому в кадр не может попасть ничего, что
+    /// панель прочитала бы из сети, а сама съёмка в сеть не ходит вовсе. Таблица «Стоимость»
+    /// на кадре показывает, что панель говорит человеку, когда цен нет, — и говорит словами.
+    ///
+    /// ⚠️ Отдельным членом, а не местной функцией `Shot`: тем же контроллером пользуется
+    /// окно настроек на кадре (<see cref="BuildShotSettingsWindow"/>), и вторая такая же
+    /// сборка разошлась бы с первой.
+    /// </summary>
+    private static PricingController ShotPricing(AppPaths paths) => new(
+        new HttpPricingClient(),
+        () => PanelSettings.Default,
+        () => Loc.Language,
+        allowed: false,
+        clock: () => DateTimeOffset.Now,
+        dispatch: action => action(),
+        log: _ => { },
+        rememberCheckedAt: _ => { },
+        rememberWindows: _ => { },
+        rememberLast: _ => { },
+
+        // Истории цен в кадре нет и быть не может: это прогон проверки, и файл состояния
+        // ему не выдан вовсе (`PricingHistoryFiles.None`) — окно истории покажет пустой список.
+        historyFiles: PricingHistoryFiles.None,
+        notify: (_, _, _) => { });
+
+    /// <summary>
+    /// ЦЕНЫ ДЛЯ КАДРА С ОБРАЗЦОВОЙ ИСТОРИЕЙ — та же дверь, что <see cref="ShotPricing"/>, но
+    /// история цен приходит ЛИТЕРАЛОМ (<see cref="ShotSamples.PricingHistoryText"/>), а не пустотой.
+    ///
+    /// **Зачем.** До 12.10.2026 кадр «История цен» показывал одни прочерки: файла истории прогону
+    /// проверки не выдают вовсе, и сравнивать было не с чем. По такому кадру нельзя судить
+    /// ни о списке, ни о таблице изменений — а он уезжает в публичную витрину.
+    ///
+    /// ⚠️ **Файл владельца не читается:** двери истории — чтение из переменной прогона и запись
+    /// в неё же. Ни одного пути, ни одного файла: `Persists: true` здесь значит «запись удалась
+    /// в память», и для кадра этого довольно — кадр живёт один прогон.
+    ///
+    /// ⚠️ **`allowed: true` здесь и НЕ значит «пойти в сеть».** Право у контроллера открывает
+    /// ДВЕ вещи: читать память (`SeededHistory` — из-под неё и берётся образцовая история) и ходить
+    /// в сеть ПО РАСПИСАНИЮ или по просьбе человека. Ни часов, ни нажатия у кадра нет: контроллер
+    /// собирается и его `History` читается сразу — запроса не делает никто. Сеть кадра не касается.
+    /// </summary>
+    private static PricingController ShotPricingWithHistory()
+    {
+        var store = ShotSamples.PricingHistoryText();
+
+        return new PricingController(
+            new HttpPricingClient(),
+            () => PanelSettings.Default,
+            () => Loc.Language,
+            allowed: true,
+            clock: () => DateTimeOffset.Now,
+            dispatch: action => action(),
+            log: _ => { },
+            rememberCheckedAt: _ => { },
+            rememberWindows: _ => { },
+            rememberLast: _ => { },
+            historyFiles: new PricingHistoryFiles(Read: () => store, Write: text => store = text),
+            notify: (_, _, _) => { });
+    }
+
+    /// <summary>
+    /// ОКНО НАСТРОЕК ДЛЯ КАДРА — СБОРКА СЪЁМКИ, НАЗВАННАЯ ОТДЕЛЬНО, ЧТОБЫ ЕЁ МОЖНО БЫЛО ПРОВЕРИТЬ
+    /// ЦЕЛИКОМ (этап F1, хвост 3).
+    ///
+    /// **Зачем вынесено.** Прежде эта сборка жила прямо в <see cref="Shot"/>, и проверка не могла
+    /// до неё дотянуться: она собирала окно САМА, со своей подставной дверью, — и **дефект обвязки
+    /// съёмки был ей не виден вовсе**. Так и вышло: раздел «Телефон» на кадре получал `phone: null`
+    /// (двери у прогона проверки не было), окно честно молчало про код, а кадр уезжал в README
+    /// с подписью «код здесь образец», которого в нём не было. Нашёл это владелец, а не проверка
+    /// (разбор — `docs\HISTORY.md`, «третий хвост»). Теперь сборка кадра — ОДИН член, и проверка
+    /// (<c>PhoneShotFrameTests</c>) зовёт ровно его: пропадёт дверь здесь — проверка упадёт.
+    ///
+    /// ⚠️ **Настройки на кадре — с ВЫКЛЮЧЕННЫМ чтением** (`allowed: false`): кадр уезжает в README,
+    /// и рабочая папка владельца в нём была бы личными данными. Проверка собирает такой же
+    /// контроллер — тем же правом, каким идёт съёмка.
+    /// </summary>
+    internal static SettingsWindow BuildShotSettingsWindow(
+        string kind,
+        AppPaths paths,
+        ServerController server,
+        IAutostartControl? autostart,
+        ISettingsControl? samples = null,
+        IPhoneSection? samplePhone = null,
+        IServerControl? sampleServer = null)
+    {
+        // ОБРАЗЦОВЫЕ НАСТРОЙКИ (фаза 3): на кадре видно РАБОЧУЮ панель — рабочую папку, порт,
+        // расписание копий, порог баланса, — а не умолчания с серыми органами. Дверь при этом
+        // НИЧЕГО не пишет и ничего с машины не читает (`Shell\ShotDrawers.cs`).
+        var settingsControl = samples ?? new SettingsController(
+            new SettingsStore(paths.SettingsFile),
+            paths,
+            allowed: false,
+            canReadOwnerEnvironment: false,
+            locateEngine: () => DshEngine.Locate(),
+            server: () => sampleServer ?? server,
+            applyTheme: _ => { },
+            log: _ => { });
+
+        var settingsWindow = new SettingsWindow();
+
+        // РАЗДЕЛ «ТЕЛЕФОН» (F1.d) НА КАДРЕ — ДВЕРЬ ТОЛЬКО НА РИСОВАНИЕ (этап F1, хвост 3).
+        //
+        // ⚠️ **Почему дверь, хотя прежде её здесь не было вовсе.** Требование владельца дословно:
+        // **«кадр `settings-phone` обязан показать код»**. Рисует код ДВЕРЬ (`IPhoneSection.QrPng`),
+        // а не окно: без двери окно не может нарисовать ничего и говорит словами, что телефоном
+        // в этом прогоне не управляют, — то есть кадр молчал о коде, о котором сам же и заявлял.
+        //
+        // ⚠️ **И почему эта дверь НЕ ИМЕЕТ НИ ОДНОГО ПРАВА КАЛИТКИ.** Ей дана **пустая калитка**
+        // (`gate: () => null`): сопряжения нет (код выпустить некому — и выдумывать его панель
+        // не станет), устройств нет (список пуст, отвязывать некого), порт не занимается вовсе
+        // (поднимать нечего). Настоящая калитка в прогоне проверки не поднимается и по праву
+        // (`RunRights.MayOpenPhoneGate`), а `43127` прогон не занимает никогда.
+        //
+        // ⚠️ **Строку для кода окно берёт из ПОКАЗА, а не из решения**: маска показывается
+        // (<see cref="MaskAddress"/>) — и в код уезжает ровно показанное `192.168.0.х`, обычный
+        // текст без номера машины (решение владельца 11.10.2026). Настоящего номера адреса
+        // в кадре быть не должно, и это стережёт `PhoneShotFrameTests`.
+        var phone = samplePhone ?? (kind == StartModes.ShotSettingsPhone
+            ? new PhoneSection(settingsControl, gate: () => null, log: _ => { })
+            : null);
+
+        // КАДР РАЗДЕЛА «ТЕЛЕФОН» ПОКАЗЫВАЕТ АДРЕС ПОД МАСКОЙ: кадр уезжает в README,
+        // а номер адреса своей машины — её примета (решение владельца 11.10.2026 дословно:
+        // «номера не пишем либо заменяем последнее число на `х`»). Дверь адресов при этом
+        // НАСТОЯЩАЯ — та же, что у человека: подменять её значило бы снимать не тот раздел,
+        // какой он видит. Маска ложится на ПОКАЗ, а не на решение: замаскированный адрес
+        // перестал бы быть адресом, и правило выбора отбросило бы его как негодный.
+        settingsWindow.Attach(
+            settingsControl,
+            autostart,
+            balance: samples is null ? null : ShotDrawers.All().Balance,
+            pricing: samples is null ? ShotPricing(paths) : ShotPricingWithHistory(),
+
+            // ⚠️ ДВЕРЬ ОБНОВЛЕНИЯ — ОБРАЗЦОВАЯ (фаза 3): без неё кадр раздела «Обновление» говорил
+            // «обновления ещё не проверялись», показывал выключенные кнопки и «на GitHub данных нет» —
+            // то есть ровно то, на что владелец смотрел в публичной витрине и называл кривым фото.
+            // Значения выдуманы и личными быть не могут: это вымышленный выпуск вымышленной версии.
+            update: samples is null ? null : ShotUpdateControl.For(Loc.Language),
+            install: samples is null ? null : ShotDrawers.Install(),
+
+            phone: phone,
+            phoneAddressMask: kind == StartModes.ShotSettingsPhone ? MaskAddress : null);
+
+        // ПОСТРОЕНИЕ КАДРА ГОТОВО — и блок движка получает ОБРАЗЦОВУЮ дверь: без неё он говорил
+        // «обновлять некуда: проверенной версии нет» и «заметок нет: подсказки не прочитаны» —
+        // две серые строки о том, чего панель НЕ СМОГЛА, а не о том, что человек видит в жизни.
+        if (samples is not null) settingsWindow.AttachEngineUpdate(ShotDrawers.Engine());
+
+        // Кадр `settings` снимает САМЫЙ ДЛИННЫЙ раздел («Резервное копирование»), а не первый:
+        // только на нём видно полосу прокрутки и то, что она не наезжает на поля
+        // (жалоба владельца 27.09.2026), и что подпись раздела влезает в колонку.
+        // `settings-balance` — раздел «Баланс и тариф», `settings-update` — раздел
+        // «Обновление» (он появился 28.09.2026, и кадр нужен и проверяющему, и README),
+        // `settings-phone` — раздел «Телефон» (F1.d).
+        settingsWindow.ShowSection(kind switch
+        {
+            StartModes.ShotSettingsGeneral => SettingsWindow.GeneralSection,
+            StartModes.ShotSettingsBalance => SettingsWindow.BalanceSection,
+            StartModes.ShotSettingsUpdate => SettingsWindow.UpdateSection,
+            StartModes.ShotSettingsServer => SettingsWindow.ServerSection,
+            StartModes.ShotSettingsPhone => SettingsWindow.PhoneSection,
+            _ => SettingsWindow.BackupSection,
+        });
+
+        return settingsWindow;
+    }
+
+    /// <summary>
+    /// ОТКУДА ДАННЫЕ НА КАДРЕ — ЧИСТОЕ РЕШЕНИЕ, КОТОРОЕ МОЖНО ПРОВЕРИТЬ.
+    ///
+    /// **Зачем отдельный член, когда есть условие в одну строку.** Условие было —
+    /// `kind != StartModes.ShotMainTwoServers`, — и жило только внутри `Shot`, куда проверке
+    /// не дотянуться: съёмка поднимает платформу. Мутация «подставную дверь заменили настоящей»
+    /// **не роняла ничего** (`AJ4` в `docs\HISTORY.md`): кадр оставался непустым за счёт других
+    /// дверей, а проверки смотрели каталог значений, а не то, доехали ли значения до окна.
+    /// Теперь решение названо здесь, и его спрашивают и съёмка, и проверка.
+    /// </summary>
+    internal static StartModes.ShotDoors ShotDoorSource(string kind) =>
+        kind == StartModes.ShotMainTwoServers ? StartModes.ShotDoors.Real : StartModes.ShotDoors.Sample;
+
+    /// <summary>
+    /// КАДР ИНТЕРФЕЙСА — БЕЗ ПОКАЗА ОКНА ЧЕЛОВЕКУ.
+    ///
+    /// <paramref name="themeValue"/> — значение ключа <c>--theme dark|light</c> (пусто — тема
+    /// панели, как было). <paramref name="stateValue"/> — значение ключа
+    /// <c>--state hover:ИмяОргана|focus:ИмяОргана</c> (пусто — без состояния).
+    ///
+    /// ⚠️ **Незнакомое значение ЛЮБОГО из этих ключей — громкий отказ кодом 2**, а не «снимем как
+    /// получится»: кадр уезжает в README, и кадр по опечатке заметить было бы некому (то же правило,
+    /// что у незнакомого имени окна).
+    /// </summary>
+    private static int Shot(string path, string kind, string themeValue = "", string stateValue = "")
+    {
+        // НЕЗНАКОМОЕ ИМЯ ОКНА — ОТКАЗ КОДОМ 2, И ЭТО ПЕРВАЯ ПРОВЕРКА ЗДЕСЬ (находка приёмки
+        // 13.10.2026). Прежде имя проверялось внутри сборки окна и там **бросало исключение**:
+        // прогон возвращал необработанное `-532462766` вместо обещанного `AGENTS.md` кода 2,
+        // а строка «случай проверен прогоном» была неправдой. Теперь отказ стоит ДО подъёма
+        // платформы — и раньше темы, чтобы опечатка в имени не тратила время на сборку окна.
+        if (kind.Length > 0 && !StartModes.KnowsShotWindow(kind))
+        {
+            Console.WriteLine(
+                $"SHOT ПРОВАЛ: неизвестное окно «{kind}». Известные: {string.Join(", ", StartModes.ShotWindows)}.");
+            return 2;
+        }
+
+        // ТЕМА — ДО ПОДЪЁМА ПЛАТФОРМЫ И ДО ПОСТРОЙКИ ОКНА: тема это свойство ПРИЛОЖЕНИЯ, и окно,
+        // построенное раньше неё, осталось бы в прежней. Значение разбирает чистое решение
+        // (`ShotDecisions`), а отказ — здесь, до всякой работы.
+        if (!string.IsNullOrWhiteSpace(themeValue) && !ShotDecisions.KnowsTheme(themeValue))
+        {
+            Console.WriteLine(
+                $"SHOT ПРОВАЛ: незнакомая тема «{themeValue}». Годятся: {string.Join(", ", ShotDecisions.Themes)}.");
+            return 2;
+        }
+
+        if (!string.IsNullOrWhiteSpace(stateValue) && !ShotDecisions.KnowsState(stateValue))
+        {
+            Console.WriteLine(
+                $"SHOT ПРОВАЛ: незнакомое состояние «{stateValue}». Годятся: "
+                + $"{ShotDecisions.StateFocus}:ИмяОргана или {ShotDecisions.StateHover}:ИмяОргана.");
+            return 2;
+        }
+
+        var theme = ShotDecisions.Theme(themeValue);
+        var state = ShotDecisions.State(stateValue);
+
         AppBuilder.Configure<App>()
             .UseSkia()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
             .SetupWithoutStarting();
+
+        // ⚠️ ТЁМНАЯ ТЕМА КАДРА: `SetupWithoutStarting` поднял приложение, и свойство темы у него
+        // уже есть. Ставим ДО постройки окна — иначе окно построилось бы в прежней теме.
+        // `--theme light` тоже ставится явно: кадр обязан быть снят ИМЕННО в названной теме,
+        // а не «в той, что оказалась» (иначе тёмный и светлый кадры могли случайно совпасть).
+        //
+        // ⚠️ **Перевод «значение ключа → тема панели» живёт ОДНИМ решением** (`ShotDecisions.Palette`),
+        // а не здесь: живя здесь, он был бы непроверяем (съёмка поднимает платформу) — ровно так
+        // и появилась непокрытая мутация AJ3 «тёмная тема не применяется».
+        if (ShotDecisions.Palette(theme) is { } palette) App.ApplyTheme(palette);
 
         // Снимаем ТО ЖЕ окно, которое видит человек, вместе с настоящим контроллером сервера:
         // он ещё ничего не запускал, поэтому кадр показывает исходное состояние панели.
@@ -537,200 +915,67 @@ internal static class Program
         // (`mayOccupyOwnerPort: false`), и это не формальность: с настоящим правом кадр снимался бы
         // на 3080, то есть на канале сессии агента. Файлы состояния сервера не передаются вовсе —
         // источники по умолчанию молчат, и в кадр не может попасть ни ссылка входа, ни чужой сервер.
+        //
+        // ⚠️ ОДНО ИСКЛЮЧЕНИЕ — кадр «два найденных сервера» (`StartModes.ShotMainTwoServers`):
+        // там факты о процессах ПОДСТАВЛЕНЫ (порты 3080 и 3099 выдуманы), потому что живой сервер
+        // владельца в кадр попадать не должен, а кадр с двумя находками нужен приёмке (решение
+        // владельца 10.10.2026). Окно, модель и кнопки при этом настоящие.
         var server = new ServerController(
-            paths.DshHome, () => paths.DataDir, _ => { }, mayOccupyOwnerPort: false);
+            paths.DshHome,
+            () => paths.DataDir,
+            _ => { },
+            mayOccupyOwnerPort: false,
+            probe: kind == StartModes.ShotMainTwoServers ? TwoServersProbe(paths) : ServerProbe.System(),
+            ownEngineDir: () => paths.EngineDir);
 
-        // Автозапуск на кадре — настоящий, но хранилище «только на чтение»: снимок показывает
-        // ту запись, которую видит человек, и не меняет её ни при каких обстоятельствах.
-        // В изолированном прогоне это файл под его корнем, до реестра пути нет вовсе.
-        var autostart = new AutostartController(
-            AutostartStores.For(RunContext.Current, humanLaunch: false),
-            AutostartStores.SelfExe(),
-            _ => { });
-
-        Window window;
-
-        // БАЛАНС ДЛЯ КАДРОВ — одна дверь на два окна (главное и «Пики и тарифы»): оба показывают
-        // окна пика и состояние тарифа, и вторая такая же сборка контроллера разошлась бы с первой.
+        // АВТОЗАПУСК НА КАДРЕ — ОБРАЗЦОВЫЙ, А НЕ МАШИННЫЙ (находка C1, пачка A).
         //
-        // Съёмка идёт ПРОГОНОМ ПРОВЕРКИ: права читать ключ у неё нет (`allowed: false`), поэтому
-        // в кадр не может попасть баланс владельца, а сама съёмка не ходит в сеть с его ключом;
-        // окна пика при этом видны целиком — они считаются из профиля агента и ключа не требуют.
-        // Ни одного файла состояния сервера сюда не передаётся: ссылке входа в кадре места нет.
-        BalanceController ShotBalance() => new(
-            new HttpBalanceClient(),
-            paths.CredentialsPath,
-            () => PanelSettings.Default,
-            allowed: false,
-            clock: () => DateTimeOffset.Now,
-            dispatch: action => action(),
-            log: _ => { },
-            notify: (_, _, _) => { });
-
-        // ЦЕНЫ ДЛЯ КАДРОВ — та же дверь, что у баланса, и по той же причине: съёмка идёт
-        // ПРОГОНОМ ПРОВЕРКИ (`allowed: false`), поэтому в кадр не может попасть ничего, что
-        // панель прочитала бы из сети, а сама съёмка в сеть не ходит вовсе. Таблица «Стоимость»
-        // на кадре показывает, что панель говорит человеку, когда цен нет, — и говорит словами.
-        PricingController ShotPricing() => new(
-            new HttpPricingClient(),
-            () => PanelSettings.Default,
-            () => Loc.Language,
-            allowed: false,
-            clock: () => DateTimeOffset.Now,
-            dispatch: action => action(),
-            log: _ => { },
-            rememberCheckedAt: _ => { },
-            rememberWindows: _ => { },
-            rememberLast: _ => { },
-
-            // Истории цен в кадре нет и быть не может: это прогон проверки, и файл состояния
-            // ему не выдан вовсе (`PricingHistoryFiles.None`) — окно истории покажет пустой список.
-            historyFiles: PricingHistoryFiles.None,
-            notify: (_, _, _) => { });
-
-        // Неизвестное имя окна — отказ, а не «снимем главное»: в скриптах съёмки опечатка иначе
-        // положила бы в README не тот кадр, и заметить это было бы некому.
+        // ⚠️ **Прежде здесь читалась НАСТОЯЩАЯ запись `HKCU\...\Run`** (только на чтение), и кадр
+        // зависел от машины: у владельца он показывал «автозапуск включён» с его путём, а на чистой
+        // машине — «выключен». Один и тот же кадр выходил разным, то есть не воспроизводимым,
+        // и в него попадал путь пользователя. Теперь дверь — литерал (файл образцовых дверей),
+        // и разбор съёмки не спрашивает хранилище автозапуска ни разу.
         //
-        // ⚠️ `settings-balance` — ВТОРОЙ кадр окна настроек, и он появился 27.09.2026 вместе
-        // с двумя таблицами пиков: раздел «Баланс и тариф» показывает их ОБЕ, а `settings` снимает
-        // «Резервное копирование» (там видна полоса прокрутки и ширина колонки разделов).
-        // Одним кадром два разных обещания не показать, а имена окон — не ключи запуска:
-        // поведение панели они не меняют.
-        //
-        // ⚠️ Имена берутся из ОДНОГО места — `StartModes.ShotWindows`, — и оттуда же их берёт
-        // строка «известные ключи». Прежде здесь стоял свой список из пяти имён, а в описании
-        // ключа — свой из трёх: они разошлись, и описание молчало про два рабочих окна
-        // (нашёл разведчик 28.09.2026). Сам отказ остаётся громким, кодом 2.
-        if (kind.Length > 0 && !StartModes.KnowsShotWindow(kind))
-        {
-            Console.WriteLine(
-                $"SHOT ПРОВАЛ: неизвестное окно «{kind}». Известные: {string.Join(", ", StartModes.ShotWindows)}.");
-            return 2;
-        }
+        // ⚠️ Это правка ТОЛЬКО ветви съёмки: обычный запуск человека получает настоящий контроллер
+        // автозапуска в `App.StartPanel`, и там ничего не меняется.
+        var autostart = ShotDrawers.Autostart();
 
-        if (kind is StartModes.ShotSettings or StartModes.ShotSettingsBalance or StartModes.ShotSettingsUpdate or StartModes.ShotSettingsServer)
-        {
-            // Настройки на кадре — с ВЫКЛЮЧЕННЫМ чтением: `allowed: false` значит «показаны
-            // умолчания». Снимок уезжает в README, и рабочая папка владельца в нём была бы
-            // личными данными. Тема при этом НЕ применяется: съёмка не меняет вид приложения.
-            var settingsControl = new SettingsController(
-                new SettingsStore(paths.SettingsFile),
-                paths,
-                allowed: false,
-                canReadOwnerEnvironment: false,
-                locateEngine: () => DshEngine.Locate(),
-                server: () => server,
-                applyTheme: _ => { },
-                log: _ => { });
-
-            var settingsWindow = new SettingsWindow();
-            settingsWindow.Attach(settingsControl, autostart, balance: null, pricing: ShotPricing());
-
-            // Кадр `settings` снимает САМЫЙ ДЛИННЫЙ раздел («Резервное копирование»), а не первый:
-            // только на нём видно полосу прокрутки и то, что она не наезжает на поля
-            // (жалоба владельца 27.09.2026), и что подпись раздела влезает в колонку.
-            // `settings-balance` — раздел «Баланс и тариф», `settings-update` — раздел
-            // «Обновление» (он появился 28.09.2026, и кадр нужен и проверяющему, и README).
-            settingsWindow.ShowSection(kind switch
-            {
-                StartModes.ShotSettingsBalance => SettingsWindow.BalanceSection,
-                StartModes.ShotSettingsUpdate => SettingsWindow.UpdateSection,
-                StartModes.ShotSettingsServer => SettingsWindow.ServerSection,
-                _ => SettingsWindow.BackupSection,
-            });
-
-            window = settingsWindow;
-        }
-        else if (kind == StartModes.ShotBackup)
-        {
-            // Окно копий на кадре — как прогон проверки: БЕЗ права снимать копии. Поэтому список
-            // пуст и папка владельца не читается вовсе (`BackupController.Refresh` про это знает):
-            // кадр уезжает в README, и настоящие копии человека были бы в нём личными данными.
-            // Панель наката на кадре не видна намеренно — она появляется только после выбора копии,
-            // а в прогоне проверки выбирать нечего; её проверяет тест окна, а не кадр.
-            var backupControl = new BackupController(
-                paths,
-                () => PanelSettings.Default,
-                allowed: false,
-                locateEngine: () => DshEngine.Locate(),
-                clock: () => DateTimeOffset.Now,
-                log: _ => { });
-
-            var backupWindow = new BackupWindow();
-            backupWindow.Attach(backupControl);
-            window = backupWindow;
-        }
-        else if (kind == StartModes.ShotAbout)
-        {
-            // Окно «О программе» на кадре — как его видит человек: строки текущего языка
-            // (язык задан ключом `--lang` или переменной), ссылки продукта и версия панели.
-            // Ни ключа владельца, ни его путей этому окну не нужно вовсе, поэтому в кадр
-            // личное попасть не может — и это проверяется не словами, а чтением кадра.
-            //
-            // Ссылки на кадре НЕ нажимаются: съёмка ничего не открывает (браузер владельца —
-            // это окно на его рабочем столе).
-            //
-            // ⚠️ А дверь в отчёт о проблеме кадру ДАЁТСЯ, и это не противоречие: без двери блок
-            // в окне скрыт (ShowIssueBlock), и кадр показывал бы окно БЕДНЕЕ того, какое видит
-            // человек, — из него пропало бы то, ради чего окно менялось 29.09.2026. Дверь пустая:
-            // нажатие в кадре ничего не открывает, и открывать нечего — прогон проверки владельцу
-            // не показывает ничего (красная линия 8).
-            var about = new AboutWindow();
-            about.AttachIssueDoor(() => { });
-            window = about;
-        }
-        else if (kind == StartModes.ShotPeaks)
-        {
-            // Окно «Пики и тарифы» на кадре — то же окно, что открывает человек кнопкой
-            // в карточке баланса, и связано оно с балансом ТАК ЖЕ, как в прогоне проверки:
-            // без права читать ключ. Окна пика считаются из профиля агента и ключа не требуют,
-            // поэтому в кадре видна вся таблица — а баланса владельца в нём нет.
-            var peaks = new PeakWindow();
-            peaks.Attach(ShotBalance(), ShotPricing());
-            window = peaks;
-        }
-        else if (kind == StartModes.ShotIssue)
-        {
-            // ОКНО «СООБЩИТЬ О ПРОБЛЕМЕ» на кадре. Отчёт собирается из ПУСТЫХ фактов: съёмка —
-            // прогон проверки, и ни журнала владельца, ни состояния его сервера она не читает.
-            // Кадр показывает то, ради чего окно и делалось: человек видит РОВНО тот текст,
-            // который уйдёт, и рядом — строку о том, чего в нём нет.
-            window = new IssueWindow();
-        }
-        else if (kind == StartModes.ShotPricingHistory)
-        {
-            // ОКНО «ИСТОРИЯ ЦЕН» на кадре. Список записей будет ПУСТ, и это честно: съёмка —
-            // прогон проверки, файл истории ему не выдан вовсе (`PricingHistoryFiles.None`
-            // в `ShotPricing`), а читать файл состояния владельца съёмке запрещено — кадр уезжает
-            // в README.
-            //
-            // ⚠️ Список записей на кадре собрать НЕЛЬЗЯ, и это названо, а не спрятано: пустая
-            // история — не «окно не работает», а «показывать нечего». Зато кадр показывает всё
-            // остальное: заголовок, колонки таблицы, их ширину и слова о том, с чем идёт сравнение.
-            // Вид СПИСКА записей в кадр не попадает — его проверяет безэкранная проверка окна,
-            // а глазами увидит владелец, когда история у него появится.
-            var pricingHistory = new PricingHistoryWindow();
-            pricingHistory.Attach(ShotPricing());
-            window = pricingHistory;
-        }
-        else
-        {
-            var main = new MainWindow();
-            main.Attach(server);
-
-            // Баланс на кадре — как в прогоне проверки: БЕЗ права читать ключ. Иначе снимок
-            // показывал бы баланс владельца (он уезжает в README), а съёмка ещё и ходила бы
-            // в сеть с его ключом. Так кадр честно говорит «прогон проверки», зато окна пика
-            // видны целиком: они считаются из профиля агента и ключа не требуют.
-            main.AttachBalance(ShotBalance());
-
-            window = main;
-        }
-
+        var (window, _) = ShotWindowWithDoors(kind, paths, server, autostart);
         window.Show();
         UiThread.RunJobs();
         AvaloniaHeadlessPlatform.ForceRenderTimerTick();
         UiThread.RunJobs();
+
+        // СОСТОЯНИЕ ОРГАНА — ПОСЛЕ ПОКАЗА ОКНА И ДО СЪЁМКИ: псевдокласс ставится на ЖИВОЕ дерево,
+        // а до `Show()` элементов ещё нет. Фокус и наведение — это то, что чек-лист вида требует
+        // в кадрах, а снять их иначе нечем: у безголовой съёмки нет ни мыши, ни клавиатуры.
+        if (state is not null)
+        {
+            var marked = ShotState(window, state.Value.State, state.Value.Control);
+
+            if (!marked)
+            {
+                Console.WriteLine(
+                    $"SHOT ПРОВАЛ: в окне «{kind}» нет органа «{state.Value.Control}» — состояние "
+                    + $"{state.Value.State} показать нечем.");
+                return 2;
+            }
+
+            UiThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            UiThread.RunJobs();
+        }
+
+        // Кадру с двумя находками нужен ЕЩЁ один осмотр: разведка приходит в модель отдельным
+        // ходом (в жизни — раз в секунду), и без этого кадр показал бы состояние ДО неё. Только
+        // для этого имени: остальные кадры снимают то, что видно сразу.
+        if (kind == StartModes.ShotMainTwoServers && window is MainWindow shotMain)
+        {
+            shotMain.RefreshNow();
+            UiThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            UiThread.RunJobs();
+        }
 
         var w = (int)Math.Ceiling(window.ClientSize.Width);
         var h = (int)Math.Ceiling(window.ClientSize.Height);
@@ -767,6 +1012,326 @@ internal static class Program
         // и означает ровно одно — проверка не уложилась в отведённое время. Прежде здесь стояло 3,
         // и один код значил две разные вещи. Нашёл независимый аудит документов 24.09.2026.
         return opaque > 0 && colors.Count > 1 ? 0 : 1;
+    }
+
+    /// <summary>
+    /// ПОСТРОИТЬ ОКНО КАДРА — ОДНИМ МЕСТОМ, И ЭТОТ ЖЕ ЧЛЕН ЗОВЁТ ПРОВЕРКА ОБВЯЗКИ.
+    ///
+    /// ⚠️ **Почему отдельный член, а не строки внутри `Shot`.** Мутации **AJ4** и **AJ9**
+    /// (`docs\HISTORY.md`) подменяют ИСПОЛЬЗОВАНИЕ решения о данных: снимают образцовую дверь
+    /// из одного места сборки либо переворачивают выбор двери. Пока сборка жила внутри `Shot`,
+    /// проверке до неё было не дотянуться (съёмка поднимает платформу), и обе мутации выжили.
+    /// Теперь окно собирается ЗДЕСЬ, и проверка строит ЕГО ЖЕ и ищет в нём образцовое значение.
+    ///
+    /// ⚠️ **Пути и владелец автозапуска приходят доводами**, а не берутся из `RunContext`:
+    /// у проверки свой контекст, и поднимать его ради кадра она не должна.
+    ///
+    /// **Возвращается и СЛОВАРЬ ДВЕРЕЙ, которые доехали до окна** — по имени, для проверки
+    /// обвязки. **От какого случая (мутация AJ4, `docs\HISTORY.md`).** Проверка «в кадре есть
+    /// образцовое значение» пропускала пропажу ОДНОЙ двери: кадр оставался непустым за счёт
+    /// соседних. Имена добавляются ровно там, где дверь ПЕРЕДАНА окну (`sample ? drawers.X : …`),
+    /// поэтому «образцовый сервер снят, баланс остался» видно по имени, а не по «кадр всё ещё
+    /// непустой»; снять дверь и оставить имя нельзя, не тронув эту же строку.
+    /// </summary>
+    internal static (Window Window, IReadOnlyList<string> Doors) ShotWindowWithDoors(
+        string kind,
+        AppPaths paths,
+        ServerController server,
+        IAutostartControl? autostart = null)
+    {
+        // ОБРАЗЦОВЫЕ ДАННЫЕ ДЛЯ КАДРА — ПОДСТАВНЫЕ ДВЕРИ (фаза 3, `Shell\ShotDrawers.cs`).
+        //
+        // ⚠️ **Только для ветви съёмки.** Обычный запуск и прогон проверки получают настоящие
+        // контроллеры — правило изоляции не ослаблено ни на шаг: двери ниже ничего не читают
+        // с машины, ничего не пишут и в сеть не ходят, а значения в них — ЛИТЕРАЛЫ.
+        //
+        // ⚠️ **Зачем это вообще.** Прогон проверки не читает данные владельца по устройству,
+        // поэтому до 12.10.2026 кадры выходили ПУСТЫМИ: ни списков, ни чисел, ни таблиц, а в
+        // публичную витрину уезжали кадры со словами «прогон проверки» и «баланс не читается».
+        // Такой кадр не показывает вид продукта — на это и жаловался владелец 12.10.2026.
+        var drawers = ShotDrawers.All();
+
+        Window window;
+
+        // Кадру «два найденных сервера» нужна НАСТОЯЩАЯ модель окна с подставленной пробой
+        // процессов: его кадр — про пометки «наш движок (версия)» и «чужой», и образцовые данные
+        // там не заменяют дело, а мешают ему. Поэтому подставные двери его не касаются.
+        var sample = ShotDoorSource(kind) == StartModes.ShotDoors.Sample;
+
+        // КАКИЕ ОБРАЗЦОВЫЕ ДВЕРИ ДОЕХАЛИ ДО ЭТОГО ОКНА — по ИМЕНИ, и спрашивается это
+        // у собранного окна, а не у исходника.
+        //
+        // ⚠️ **Зачем счёт, когда проверка и так читает собранное окно.** Мутация AJ4 сняла
+        // образцовый СЕРВЕР из одного места сборки, и кадр остался непустым за счёт соседних
+        // дверей: «в кадре есть образцовое» зеленело, а двери в нём не было. Поэтому здесь
+        // называется КАЖДАЯ дверь, которую окно получило, и проверка обвязки сверяет список
+        // с обещанным для этого имени — пропажа любой одной видна по имени, а не по «пусто/непусто».
+        var doors = new List<string>();
+
+        // БАЛАНС ДЛЯ КАДРА «ДВЕ НАХОДКИ» И ДЛЯ ПРОВЕРОК ДВЕРИ — как прогон проверки: БЕЗ права
+        // читать ключ. Иначе снимок показывал бы баланс владельца (он уезжает в README), а съёмка
+        // ещё и ходила бы в сеть с его ключом. Образцовые кадры берут ЧИСЛО из `ShotDrawers`,
+        // а этот контроллер остаётся для того кадра, где показываются не деньги, а находки.
+        //
+        // ⚠️ Имя с `Real` — чтобы не спутать с дверью `ShotBalance` (класс в `Shell\ShotDrawers.cs`):
+        // две разные вещи с похожими именами однажды разошлись бы молча.
+        BalanceController RealShotBalance() => new(
+            new HttpBalanceClient(),
+            paths.CredentialsPath,
+            () => PanelSettings.Default,
+            allowed: false,
+            clock: () => DateTimeOffset.Now,
+            dispatch: action => action(),
+            log: _ => { },
+            notify: (_, _, _) => { });
+
+        // Неизвестное имя окна — отказ, а не «снимем главное»: в скриптах съёмки опечатка иначе
+        // положила бы в README не тот кадр, и заметить это было бы некому.
+        //
+        // ⚠️ `settings-balance` — ВТОРОЙ кадр окна настроек, и он появился 27.09.2026 вместе
+        // с двумя таблицами пиков: раздел «Баланс и тариф» показывает их ОБЕ, а `settings` снимает
+        // «Резервное копирование» (там видна полоса прокрутки и ширина колонки разделов).
+        // Одним кадром два разных обещания не показать, а имена окон — не ключи запуска:
+        // поведение панели они не меняют.
+        //
+        // ⚠️ Имена берутся из ОДНОГО места — `StartModes.ShotWindows`, — и оттуда же их берёт
+        // строка «известные ключи». Прежде здесь стоял свой список из пяти имён, а в описании
+        // ключа — свой из трёх: они разошлись, и описание молчало про два рабочих окна
+        // (нашёл разведчик 28.09.2026). Сам отказ остаётся громким, кодом 2.
+        // ⚠️ Отказ здесь — НЕ «вернуть 2»: имя окна уже проверено `Shot` до вызова, и сюда
+        // незнакомое имя дойти не может. Если дойдёт, это дефект вызова, и молча снять главное
+        // окно нельзя — кадр по опечатке уехал бы в README. Поэтому исключение, а не код возврата.
+        if (kind.Length > 0 && !StartModes.KnowsShotWindow(kind))
+        {
+            throw new ArgumentException($"неизвестное имя окна съёмки: «{kind}»", nameof(kind));
+        }
+
+        if (kind is StartModes.ShotSettings or StartModes.ShotSettingsGeneral or StartModes.ShotSettingsBackup
+            or StartModes.ShotSettingsBalance or StartModes.ShotSettingsUpdate
+            or StartModes.ShotSettingsServer or StartModes.ShotSettingsPhone)
+        {
+            // Сборка окна настроек для кадра — ОДНИМ членом (`BuildShotSettingsWindow`), а не здесь:
+            // иначе проверке до неё не дотянуться, и дефект обвязки съёмки (раздел «Телефон» на кадре
+            // получал `phone: null`, то есть молчал о коде, о котором сам же и заявлял) снова прошёл
+            // бы мимо всех проверок. Разбор — `docs\HISTORY.md`, «третий хвост после F1».
+            if (sample)
+            {
+                doors.Add("settings");
+                doors.Add("phone");
+                doors.Add("server");
+            }
+
+            window = BuildShotSettingsWindow(
+                kind,
+                paths,
+                server,
+                autostart,
+                sample ? drawers.Settings : null,
+                sample ? drawers.Phone : null,
+                sample ? drawers.Server : null);
+
+            // ⚠️ И ДВЕ ДВЕРИ, КОТОРЫЕ СТАВЯТСЯ ПОСЛЕ ВЯЗКИ (`BuildShotSettingsWindow`): баланс
+            // и обновление. Они не доводы того члена, поэтому названы здесь — иначе проверка
+            // обвязки не увидела бы их пропажу.
+            if (sample)
+            {
+                doors.Add("balance");
+                doors.Add("update");
+            }
+        }
+        else if (kind == StartModes.ShotBackup)
+        {
+            // Окно копий на кадре: список — ОБРАЗЦОВЫЙ (три копии с датами, размерами и числом
+            // файлов), папка владельца НЕ читается вовсе. Прежде список был пуст «как в прогоне
+            // проверки» — и кадр показывал окно без единой строки, то есть не показывал ничего.
+            //
+            // ⚠️ Ни копия, ни накат на кадре не делаются: у подставной двери нет ни путей
+            // владельца, ни права, и она отвечает отказом СЛОВАМИ. Нажимать в кадре некому.
+            var backupWindow = new BackupWindow();
+            backupWindow.Attach(ShotDrawers.Backup());
+            doors.Add("backup");
+            window = backupWindow;
+        }
+        else if (kind == StartModes.ShotAbout)
+        {
+            // Окно «О программе» на кадре — как его видит человек: строки текущего языка
+            // (язык задан ключом `--lang` или переменной), ссылки продукта и версия панели.
+            // Ни ключа владельца, ни его путей этому окну не нужно вовсе, поэтому в кадр
+            // личное попасть не может — и это проверяется не словами, а чтением кадра.
+            //
+            // Ссылки на кадре НЕ нажимаются: съёмка ничего не открывает (браузер владельца —
+            // это окно на его рабочем столе).
+            //
+            // ⚠️ А дверь в отчёт о проблеме кадру ДАЁТСЯ, и это не противоречие: без двери блок
+            // в окне скрыт (ShowIssueBlock), и кадр показывал бы окно БЕДНЕЕ того, какое видит
+            // человек, — из него пропало бы то, ради чего окно менялось 29.09.2026. Дверь пустая:
+            // нажатие в кадре ничего не открывает, и открывать нечего — прогон проверки владельцу
+            // не показывает ничего (красная линия 8).
+            var about = new AboutWindow();
+            about.AttachIssueDoor(() => { });
+            window = about;
+        }
+        else if (kind == StartModes.ShotPeaks)
+        {
+            // Окно «Пики и тарифы» на кадре — то же окно, что открывает человек кнопкой
+            // в карточке баланса. С образцовыми дверями в нём видны и таблица дней, и строки цен:
+            // без них кадр показывал бы «баланс не читается» — то, на что владелец и жаловался.
+            var peaks = new PeakWindow();
+            peaks.Attach(sample ? drawers.Balance : RealShotBalance(), ShotPricing(paths));
+            if (sample) doors.Add("balance");
+            window = peaks;
+        }
+        else if (kind == StartModes.ShotIssue)
+        {
+            // ОКНО «СООБЩИТЬ О ПРОБЛЕМЕ» на кадре. Отчёт собирается из ПУСТЫХ фактов: съёмка —
+            // прогон проверки, и ни журнала владельца, ни состояния его сервера она не читает.
+            // Кадр показывает то, ради чего окно и делалось: человек видит РОВНО тот текст,
+            // который уйдёт, и рядом — строку о том, чего в нём нет.
+            window = new IssueWindow();
+        }
+        else if (kind == StartModes.ShotPricingHistory)
+        {
+            // ОКНО «ИСТОРИЯ ЦЕН» на кадре. Список записей будет ПУСТ, и это честно: съёмка —
+            // прогон проверки, файл истории ему не выдан вовсе (`PricingHistoryFiles.None`
+            // в `ShotPricing`), а читать файл состояния владельца съёмке запрещено — кадр уезжает
+            // в README.
+            //
+            // ⚠️ Список записей на кадре собрать НЕЛЬЗЯ, и это названо, а не спрятано: пустая
+            // история — не «окно не работает», а «показывать нечего». Зато кадр показывает всё
+            // остальное: заголовок, колонки таблицы, их ширину и слова о том, с чем идёт сравнение.
+            // Вид СПИСКА записей в кадр не попадает — его проверяет безэкранная проверка окна,
+            // а глазами увидит владелец, когда история у него появится.
+            var pricingHistory = new PricingHistoryWindow();
+            pricingHistory.Attach(ShotPricingWithHistory());
+            window = pricingHistory;
+        }
+        else if (kind == StartModes.ShotConfirmStop)
+        {
+            // ПОДТВЕРЖДЕНИЕ ОСТАНОВКИ ВСТРОЕННОГО СЕРВЕРА. Порт, номер процесса и имя процесса —
+            // ОБРАЗЦОВЫЕ: подтверждать «остановку сервера вообще» человек не должен, он видит,
+            // что именно остановится, — и на кадре это видно теми же словами.
+            var confirmStop = new ConfirmStopWindow();
+            confirmStop.Attach(ShotSamples.Port, ShotSamples.Pid, ShotSamples.Process);
+            window = confirmStop;
+        }
+        else if (kind == StartModes.ShotConfirmEngine)
+        {
+            // ПОДТВЕРЖДЕНИЕ ОБНОВЛЕНИЯ ДВИЖКА: те же СЛОВА, что увидит человек, — их собирает
+            // отдельная запись (`PanelQuestion`), а не эта ветвь. Поэтому кадр не может разойтись
+            // с жизнью: он показывает ровно тот вопрос, какой задаётся.
+            var confirmEngine = new ConfirmEngineWindow();
+            confirmEngine.Attach(new PanelQuestion(
+                PanelStrings.EngineUpdateAskTitle,
+                string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.EngineUpdateAskFormat,
+                    ShotSamples.EngineVersion),
+                PanelStrings.EngineUpdateAskYes,
+                PanelStrings.EngineUpdateAskNo,
+                PanelStrings.TipEngineUpdateAskYes,
+                PanelStrings.TipEngineUpdateAskNo));
+            window = confirmEngine;
+        }
+        else if (kind == StartModes.ShotBackupStop)
+        {
+            // «ПОГАСИТЬ СЕРВЕР ПЕРЕД КОПИЕЙ?» — вопрос, который панель задаёт человеку перед копией
+            // и накатом. Порт образцовый; слова — из словаря, те же, что в жизни.
+            var backupStop = new BackupStopWindow();
+            backupStop.Attach(ShotSamples.Port);
+            window = backupStop;
+        }
+        else if (kind == StartModes.ShotUnsavedChanges)
+        {
+            // «СОХРАНИТЬ ИЗМЕНЕНИЯ?» — вопрос при закрытии настроек с несохранённой правкой.
+            // Подписи и подсказки ставит сам конструктор: окно, построенное без наполнения,
+            // не должно выглядеть пустым — и на кадре это видно.
+            window = new UnsavedChangesWindow();
+        }
+        else if (kind == StartModes.ShotFirstRun)
+        {
+            // ОКНО ПЕРВОГО ЗАПУСКА на кадре — ХУДШИЙ случай: ни сервера DSH, ни ключа модели.
+            // ⚠️ Факты — ОБРАЗЦОВЫЕ (`Shell\ShotDrawers.cs`): настоящие сделали бы кадр зависимым
+            // от машины, а он уезжает и в README, и в приёмку. У окна нет ни путей, ни значения
+            // ключа — только «есть / нет», поэтому личному здесь взяться неоткуда.
+            var firstRun = new FirstRunWindow();
+            firstRun.Attach(ShotDrawers.FirstRun());
+
+            // Двери окна на кадре НЕ нажимаются (нажимать некому): кадр показывает вид и слова.
+            doors.Add("first-run");
+            window = firstRun;
+        }
+        else
+        {
+            var main = new MainWindow();
+
+            // ОБРАЗЦОВЫЕ ДАННЫЕ вместо пустого прогона проверки. Для кадра «два найденных
+            // сервера» остаётся НАСТОЯЩАЯ модель с подставленной пробой процессов — там дело
+            // именно в пометках «наш движок (версия)» и «чужой», и образцовые двери его заменяют
+            // не делом, а помехой.
+            main.Attach(sample ? drawers.Server : server);
+            if (sample) doors.Add("server");
+
+            // Баланс на кадре: с образцовыми дверями — число и подробность; на кадре двух
+            // находок — прежнее «без права читать ключ» (там показывается не баланс, а находки).
+            main.AttachBalance(sample ? drawers.Balance : RealShotBalance());
+            if (sample) doors.Add("balance");
+
+            // Смена активного агента — тем же владельцем настроек, что и в жизни: без него список
+            // ЧЕСТНО недоступен, и кадр показывал бы серый список с подписью «настройки не читаются».
+            if (sample)
+            {
+                main.AttachAgentChoice(drawers.Settings);
+                doors.Add("settings");
+            }
+
+            window = main;
+        }
+
+        return (window, doors);
+    }
+
+    /// <summary>
+    /// ПОСТАВИТЬ СОСТОЯНИЕ НА ОРГАН ПО ИМЕНИ ИЗ РАЗМЕТКИ (<c>x:Name</c>).
+    ///
+    /// **Зачем.** Чек-лист вида требует в кадрах **наведение** и **фокус**, а у безголовой съёмки
+    /// нет ни мыши, ни клавиатуры: состояние ставится программно, псевдоклассом. Приём взят
+    /// из проверок вида — там он уже работает.
+    ///
+    /// **Фокус важнее наведения** (доступность: видимый фокус — норма WCAG 2.2 SC 2.4.7/2.4.13),
+    /// и он снимется даже там, где наведение не рисуется вовсе.
+    ///
+    /// Возвращает <c>false</c>, если органа с таким именем в окне нет: вызывающий обязан отказать
+    /// **громко** — кадр «с состоянием», в котором состояния нет, уехал бы в витрину молча.
+    ///
+    /// ⚠️ **Виден проверке** (`ShotStateTests`) нарочно: кадры состояний снимаются ЭТИМ членом,
+    /// и проверка обязана звать его же, а не расставлять псевдоклассы по-своему — иначе она мерила
+    /// бы свою копию, а кадр уезжал бы в витрину по другой.
+    /// </summary>
+    internal static bool ShotState(Window window, string state, string controlName)
+    {
+        try
+        {
+            var found = window.FindControl<Control>(controlName);
+
+            if (found is null) return false;
+
+            // КАКОЙ ПСЕВДОКЛАСС СТАВИТЬ — решает ЧИСТОЕ решение (`ShotDecisions.PseudoClasses`),
+            // а не эта ветвь: живя здесь, перевод «фокус → :focus» был бы непроверяем, и мутация
+            // «ветвь наведения ничего не делает» выжила бы.
+            foreach (var name in ShotDecisions.PseudoClasses(state))
+            {
+                ((IPseudoClasses)found.Classes).Set(name, true);
+            }
+
+            return ShotDecisions.PseudoClasses(state).Count > 0;
+        }
+        catch (Exception ex)
+        {
+            // Имя органа есть в разметке, но состояние поставить не вышло — это отказ словами,
+            // а не молчаливый кадр без состояния.
+            Console.WriteLine($"SHOT ПРОВАЛ: состояние «{state}» на органе «{controlName}» не поставилось: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -1055,7 +1620,12 @@ internal static class Program
 
         private ShotUpdateControl(string language, DateTimeOffset at)
         {
-            Current = "2.0.0";
+            // ⚠️ УСТАНОВЛЕННАЯ ВЕРСИЯ НА КАДРЕ — ПО РЕШЕНИЮ ВЛАДЕЛЬЦА 13.10.2026: **2.0.3**,
+            // то есть та, что ВЫПУЩЕНА. Выдуманная 2.0.0 стояла здесь для того, чтобы кадр
+            // показывал состояние «есть новое»; но витрина выпуска не должна называть числом
+            // версию, которой у людей нет: читатель витрины сверил бы её со своей панелью
+            // и решил, что отстал. «Есть новое» при этом видно и так: предложенный выпуск — v2.1.0.
+            Current = "2.0.3";
 
             Result = new UpdateRelease(
                 true,
@@ -1098,6 +1668,10 @@ internal static class Program
             System.Globalization.CultureInfo.CurrentCulture,
             PanelStrings.UpdateAvailableFormat,
             Result.Latest);
+
+        /// <summary>Попытки на кадре не показываем: кадр снимает УДАЧНУЮ проверку, а у удачной
+        /// этой строки нет вовсе (про время говорит «проверено {дата}»).</summary>
+        public string AttemptText => string.Empty;
 
         public TrayStatusLine TrayLine => new(
             string.Format(

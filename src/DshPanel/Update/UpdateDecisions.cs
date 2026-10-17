@@ -140,6 +140,57 @@ public static class UpdateDecisions
     }
 
     /// <summary>
+    /// ОТСТУП ПОСЛЕ ОТКАЗА ПО ЧИСЛУ ЗАПРОСОВ (403/429): **несколько часов**. GitHub даёт
+    /// 60 запросов в час с адреса, и продолжать стучаться в выеденный лимит — своими руками
+    /// удлинять его для человека.
+    /// </summary>
+    public static readonly TimeSpan RateLimitBackoff = TimeSpan.FromHours(6);
+
+    /// <summary>
+    /// ОТСТУП ПОСЛЕ ПРОЧЕЙ НЕУДАЧИ: час. Сеть могла пропасть на минуту, и молчать сутки
+    /// (как если бы проверка удалась) панель не имеет права; но и долбить отказ каждую минуту
+    /// незачем. Час — наша мера, названная здесь прямо, а не спрятанная в коде часов.
+    /// </summary>
+    public static readonly TimeSpan FailureBackoff = TimeSpan.FromHours(1);
+
+    /// <summary>Сколько ждать после этой попытки. Удавшаяся попытка не ждёт ничего.</summary>
+    public static TimeSpan Backoff(UpdateAttempt? attempt) =>
+        attempt is { Failed: true }
+            ? attempt.RateLimited ? RateLimitBackoff : FailureBackoff
+            : TimeSpan.Zero;
+
+    /// <summary>
+    /// ЖДЁМ ЛИ ПОСЛЕ НЕУДАЧНОЙ ПОПЫТКИ. Часы, переведённые назад, тоже считаются ожиданием:
+    /// иначе отступ обходится переводом часов — та же беда, что у суточного гейта.
+    /// </summary>
+    public static bool Waiting(DateTimeOffset nowLocal, UpdateAttempt? attempt)
+    {
+        if (attempt is not { Failed: true }) return false;
+
+        return nowLocal - attempt.At < Backoff(attempt);
+    }
+
+    /// <summary>
+    /// КОГДА МОЖНО ПОПРОБОВАТЬ СНОВА — этой датой панель и говорит человеку про отступ.
+    /// Считается от ВРЕМЕНИ ПОПЫТКИ, а не от «сейчас»: иначе перевод часов вперёд сокращал бы
+    /// отступ, а он для того и заведён, чтобы панель не сыпала запросами в выеденный лимит.
+    /// </summary>
+    public static DateTimeOffset NextAttempt(UpdateAttempt attempt) =>
+        attempt.At + Backoff(attempt);
+
+    /// <summary>
+    /// СУТОЧНЫЙ ГЕЙТ ВМЕСТЕ С ОТСТУПОМ ПОСЛЕ НЕУДАЧИ: «пора по расписанию» И «прошлая попытка
+    /// не запрещает». Оба условия обязательны — иначе неудачная попытка либо запирала бы проверку
+    /// на сутки (как удачная), либо не мешала бы стучаться в выеденный лимит.
+    /// </summary>
+    public static bool ShouldCheck(
+        DateTimeOffset nowLocal,
+        string? lastChecked,
+        UpdateAttempt? attempt,
+        bool isolatedRun) =>
+        ShouldCheck(nowLocal, lastChecked, isolatedRun) && !Waiting(nowLocal, attempt);
+
+    /// <summary>
     /// ГОВОРИТЬ ЛИ ЧЕЛОВЕКУ ШАРИКОМ о новом выпуске.
     ///
     /// Три правила, и каждое выросло из случая:

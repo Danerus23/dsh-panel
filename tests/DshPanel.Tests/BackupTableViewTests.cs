@@ -202,7 +202,7 @@ public class BackupTableViewTests
         var broken = new List<BackupEntry>
         {
             Copy("dsh2-backup-2026-09-26-013500-full.zip", new DateTime(2026, 9, 26, 1, 35, 0), 0, 0,
-                readable: false, error: "описи нет"),
+                readable: false, error: PanelStrings.ZipManifestMissing),
         };
 
         var (window, table, _) = Stand(broken);
@@ -211,7 +211,7 @@ public class BackupTableViewTests
         {
             var cells = Cells(BackupTableView.Rows(table)[0]);
 
-            Assert.Contains("описи нет", cells[4], StringComparison.Ordinal);
+            Assert.Contains("списка содержимого копии", cells[4], StringComparison.Ordinal);
             Assert.Equal(string.Empty, cells[2]);
             Assert.Equal(string.Empty, cells[3]);
         }
@@ -294,6 +294,137 @@ public class BackupTableViewTests
             // а не что-то ещё, что менялось само по себе.
             BackupTableView.Select(table, -1);
             Assert.Equal(plain, PanelTestStand.FrameHash(window));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
+    /// ЧИСЛОВЫЕ КОЛОНКИ КОПИЙ ВЫРОВНЕНЫ ВПРАВО — И У ШАПКИ, И У ЗНАЧЕНИЙ.
+    ///
+    /// **От какого случая (пачка долгов 14.10.2026, §3).** «Размер» и «Файлов» стояли влево
+    /// (`BackupTableView`), тогда как у плана наката то же сделано правильно (`RestoreTableView`) —
+    /// и колонки чисел не читались столбиком. Норма — **GOV.UK Table**: «When comparing columns of
+    /// numbers, align the numbers to the right»; у `TableGrid.Header`/`Cell` для этого есть довод
+    /// `right`.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«снять `right: true` у шапки»** ·
+    /// **«снять `right: true` у значений»**.
+    /// </summary>
+    [AvaloniaFact]
+    public void Числовые_колонки_копий_выровнены_вправо()
+    {
+        var entries = Three();
+        var (window, table, _) = Stand(entries);
+
+        try
+        {
+            var lines = table.Children.OfType<Border>().ToList();
+
+            // Шапка — тоже строка таблицы, поэтому строк ровно на одну больше числа копий.
+            Assert.Equal(entries.Count + 1, lines.Count);
+
+            // КОЛОНКИ ЧИСЕЛ НАЗВАНЫ НОМЕРАМИ — теми же, что в `Columns` таблицы: 4 — размер,
+            // 6 — файлов. Список один на шапку и на значения, иначе «шапка вправо, а числа влево»
+            // прошло бы проверку.
+            foreach (var numeric in new[] { 4, 6 })
+            {
+                Assert.Equal(TextAlignment.Right, Line(lines[0], numeric).TextAlignment);
+
+                for (var index = 1; index < lines.Count; index++)
+                {
+                    Assert.Equal(TextAlignment.Right, Line(lines[index], numeric).TextAlignment);
+                }
+            }
+
+            // И ЭТО ИМЕННО ЧИСЛА, А НЕ ПУСТЫЕ ЯЧЕЙКИ: в четвёртой колонке первой копии — размер,
+            // в шестой — число файлов, ровно теми словами, какими их показывает таблица.
+            Assert.Equal(BackupTableView.Size(entries[0]), Line(lines[1], 4).Text);
+            Assert.Equal(BackupTableView.Files(entries[0]), Line(lines[1], 6).Text);
+
+            // А СОСЕДИ ОСТАЛИСЬ СЛЕВА: выравнивание — свойство ЧИСЛОВОЙ колонки, а не всей таблицы.
+            Assert.Equal(TextAlignment.Left, Line(lines[1], 0).TextAlignment);
+            Assert.Equal(TextAlignment.Left, Line(lines[1], 2).TextAlignment);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>Ячейка строки таблицы в названной колонке сетки — по НОМЕРУ колонки, а не по счёту.</summary>
+    private static TextBlock Line(Border line, int column)
+    {
+        var grid = Assert.IsType<Grid>(line.Child);
+
+        return grid.Children.OfType<TextBlock>().Single(block => Grid.GetColumn(block) == column);
+    }
+
+    // ---- 5. клавиатура (пачка долгов 14.10.2026, §2) -----------------------------------------
+
+    /// <summary>
+    /// СТРОКУ КОПИИ МОЖНО ВЫБРАТЬ С КЛАВИАТУРЫ, ФОКУС ВИДЕН, И ВЫБОР НЕ МЕНЯЕТ РАЗМЕР СТРОКИ.
+    ///
+    /// **От какого случая (пачка долгов 14.10.2026, §2).** Выбор строки жил ТОЛЬКО на
+    /// `PointerPressed`: с клавиатуры выбрать было нельзя, и фокуса не было видно вовсе. Норма
+    /// банка (`50-lists-navigation.md` §2/§8): **WCAG 2.2 SC 2.1.1 (Keyboard)** и
+    /// **SC 2.4.7 (Focus Visible)**; провал F59 — орган управления, сделанный из `div` без роли.
+    ///
+    /// ⚠️ **Клавиша нажимается НАСТОЯЩИМ вводом** (`window.KeyPressQwerty`, как мышь —
+    /// `MouseMove`): подними `KeyDown` событием «в воздух» — и проверка доказала бы, что обработчик
+    /// лежит на строке, а не что клавиатура до неё доехала.
+    ///
+    /// ⚠️ И кольцо фокуса меряется ТЕМ ЖЕ способом, что наведение и выбор выше: свойство можно
+    /// выставить и не увидеть ничего — в этом проекте так уже ломался невидимый фокус кнопки.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«снять обработку клавиш»** · **«снять правило
+    /// фокуса»** · «фокус не едет за выбором».
+    /// </summary>
+    [AvaloniaFact]
+    public void Строку_копии_можно_выбрать_с_клавиатуры_и_фокус_виден()
+    {
+        var (window, table, chosen) = Stand(Three());
+
+        try
+        {
+            var rows = BackupTableView.Rows(table);
+
+            Assert.Equal(3, rows.Count);
+
+            var height = rows[0].Bounds.Height;
+            var plain = PanelTestStand.FrameHash(window);
+
+            // (1) СТРОКА — ОРГАН: её можно взять фокусом, и фокус приходит С КЛАВИАТУРЫ.
+            Assert.True(rows[0].Focusable, "строка не берёт фокус — с клавиатуры её не выбрать");
+            Assert.True(rows[0].Focus(NavigationMethod.Directional), "строка не взяла фокус");
+
+            PanelTestStand.Settle();
+
+            Assert.True(rows[0].IsFocused, "фокус не встал на строку");
+            Assert.True(rows[0].BoxShadow.Count > 0, "фокуса НЕ ВИДНО: у строки нет кольца фокуса");
+            Assert.NotEqual(plain, PanelTestStand.FrameHash(window));
+
+            // (2) СТРЕЛКА ВНИЗ ВЫБИРАЕТ СЛЕДУЮЩУЮ — настоящим нажатием, по настоящему окну.
+            window.KeyPressQwerty(PhysicalKey.ArrowDown, RawInputModifiers.None);
+            PanelTestStand.Settle();
+
+            Assert.Equal(new[] { 1 }, chosen);
+
+            var after = BackupTableView.Rows(table);
+
+            Assert.True(after[1].IsFocused, "фокус не поехал за выбором — вторая стрелка не сработает");
+
+            // (3) РАЗМЕР СТРОКИ НЕ ИЗМЕНИЛСЯ: кольцо фокуса — тень, а не толщина рамки
+            // (правило «состояние не меняет размер» выросло из «дрожания кнопок»).
+            Assert.Equal(height, after[0].Bounds.Height);
+
+            // И ВВЕРХ — ОБРАТНО: выбор не «залипает» в конце списка.
+            window.KeyPressQwerty(PhysicalKey.ArrowUp, RawInputModifiers.None);
+            PanelTestStand.Settle();
+
+            Assert.Equal(new[] { 1, 0 }, chosen);
         }
         finally
         {

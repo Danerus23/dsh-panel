@@ -36,6 +36,20 @@ public partial class App : Application
     private UpdateController? _update;
 
     /// <summary>
+    /// Раздел «Обновление движка» (этап E3.2). Строится в СТОРОНЕ от нитки окна: его двери читают
+    /// сеть (подсказки и реестр npm), а окно настроек не имеет права открываться через минуту
+    /// ожидания. Нет дверей (прогон проверки, изоляция) — поле остаётся пустым или «пустым» сервисом,
+    /// и раздел говорит это словами.
+    /// </summary>
+    private Shell.IEngineUpdateSection? _engineUpdate;
+
+    /// <summary>
+    /// Про какую версию движка панель уже сказала шариком ЗА ЭТОТ ЗАПУСК: второй раз о том же
+    /// не пристаём (правило «один раз на версию» — как у обновления самой панели).
+    /// </summary>
+    private string _engineAnnounced = string.Empty;
+
+    /// <summary>
     /// ДВИЖОК УСТАНОВКИ обновления — то, чем окно готовит замену файлов и запускает сценарий.
     /// Живёт рядом с проверкой и строится тем же запуском: у обоих один предмет (выпуск панели),
     /// и разводить их по разным местам значило бы искать право готовить замену в двух местах.
@@ -45,6 +59,32 @@ public partial class App : Application
     private BackupController? _backups;
     private TrayIconHost? _tray;
     private InstanceSignal? _signal;
+
+    /// <summary>
+    /// КАЛИТКА ТЕЛЕФОНА (этап F1, кусок «слушатель»). Заводится ЗДЕСЬ и только по праву
+    /// <see cref="RunRights.MayOpenPhoneGate"/> — обычным запуском панели человеком, который сам
+    /// включил телефон. Прогон проверки и изолированный прогон калитку НЕ ПОДНИМАЮТ: это следствие
+    /// права, а не отдельная проверка «а не прогон ли это». Право спрашивается дважды — здесь и
+    /// внутри <see cref="PhoneGate.Start"/>, — потому что цена ошибки здесь выше обычной: открытый
+    /// в сеть порт на машине владельца.
+    /// </summary>
+    private PhoneGate? _phoneGate;
+
+    /// <summary>
+    /// ДВЕРЬ БРАНДМАУЭРА (этап F4, кусок 1). Заводится ЗДЕСЬ и только по праву
+    /// <see cref="RunRights.MayChangeFirewall"/> — обычным запуском панели человеком.
+    ///
+    /// ⚠️ **Это ЕДИНСТВЕННОЕ место, где создаётся настоящая дверь** (`ElevatedFirewallDoor`),
+    /// и это стережёт проверка по исходникам: у прогона проверки двери нет вовсе, поэтому правило
+    /// брандмауэра не может ни появиться, ни исчезнуть от прогона. Право спрашивается дважды —
+    /// здесь и внутри изменения (<see cref="ElevatedFirewallDoor"/>), — потому что цена ошибки
+    /// здесь выше обычной: разрешение, которое получает входящее соединение из сети.
+    ///
+    /// ⚠️ **Ничего не делается при старте.** Дверь — это только возможность: правило ставится
+    /// и снимается ЩЕЛЧКОМ человека в разделе «Телефон», и ни при открытии калитки, ни при запуске
+    /// панели панель к брандмауэру не лезет.
+    /// </summary>
+    private IFirewallDoor? _firewall;
 
     /// <summary>Журнал панели. Подменяется самотестом связки на список в памяти.</summary>
     private Action<string> _log = _ => { };
@@ -165,10 +205,142 @@ public partial class App : Application
             paths,
             SettingsController.For(RunContext.Current, human),
             canReadOwnerEnvironment: human && !isolated,
-            locateEngine: () => DshEngine.Locate(),
+            locateEngine: () => OwnEngine.Locate(paths),
             () => _server,
             ApplyThemeFromAnyThread,
             log);
+
+        // ЖИВАЯ ПРОБА УМЕНИЙ ДЛЯ ОТЧЁТА ОБ ОКРУЖЕНИИ (задание владельца 14.10.2026, §2) — только
+        // у обычного запуска человеком: прогон проверки сети не трогает вовсе, и дверь остаётся
+        // умолчанием «пробы не было».
+        //
+        // ⚠️ Проба ходит в сеть и зовёт движок по 84 именам, поэтому она ИДЁТ В ФОНЕ и не чаще,
+        // чем один раз на свой сервер (`LiveSkillProbe` помнит пару «порт + процесс»). Отчёт
+        // читает последние ГОТОВЫЕ факты и называет их момент — так «проверено здесь и сейчас»
+        // не превращается в «панель замерла на секунды».
+        if (human && !isolated)
+        {
+            var settings = _settings;
+
+            if (settings is not null)
+            {
+                var skillProbe = new LiveSkillProbe(
+                    paths,
+                    () => settings.SkillTargetNow(),
+                    () => OwnEngine.Locate(paths)?.BinPath,
+                    log);
+
+                settings.SkillProbe = skillProbe.Door;
+            }
+        }
+
+        // ПОДСКАЗКИ О ВЕРСИЯХ ДВИЖКА (этап E2) — ОДИН раз в фоне и только у обычного запуска
+        // человеком. Файл публичный и читается без входа; неудача — «не проверялась», и панель
+        // работает: подсказка не имеет права ничего ронять. В прогоне проверки сети нет вовсе.
+        if (human && !isolated)
+        {
+            Task.Run(() =>
+            {
+                var fetch = new HttpEngineHintsClient(ProductLinks.EngineHintsUrl).Read();
+
+                if (!fetch.Ok)
+                {
+                    log(string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        PanelStrings.EngineHintsUnavailableLog, fetch.Detail));
+                    return;
+                }
+
+                var hints = EngineHints.Parse(fetch.Json);
+                _settings.Hints = hints;
+
+                log(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.EngineHintsLoadedLog, hints.Versions.Count));
+            });
+        }
+
+        // РАЗДЕЛ «ОБНОВЛЕНИЕ ДВИЖКА» (этап E3.2) — дверями панели: контроллер сервера, пути
+        // и подсказки. Строится В СТОРОНЕ от нитки окна: двери читают сеть (подсказки и реестр npm).
+        // Право на это — `LocalData` (свои данные панели): у прогона проверки его нет, и раздел
+        // честно говорит словами, что обновление здесь недоступно, а в сеть не ходит вовсе.
+        var engineUpdateHints = () => _settings?.Hints ?? EngineHints.Empty;
+
+        Func<EngineHints> readEngineHints = () =>
+        {
+            // Подсказки уже прочитаны при старте — второй раз в сеть не идём. Читаем только если
+            // их нет вовсе (старт не успел или прогон без сети): тогда это честная попытка.
+            if (engineUpdateHints().Versions.Count > 0) return engineUpdateHints();
+
+            var fetch = new HttpEngineHintsClient(ProductLinks.EngineHintsUrl).Read();
+
+            if (!fetch.Ok)
+            {
+                log(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.EngineHintsUnavailableLog, fetch.Detail));
+                return EngineHints.Empty;
+            }
+
+            var hints = EngineHints.Parse(fetch.Json);
+            if (_settings is not null) _settings.Hints = hints;
+
+            return hints;
+        };
+
+        Task.Run(() =>
+        {
+            _engineUpdate = RunRights.LocalData(RunContext.Current, human)
+                ? new EngineUpdateService(
+                    new EngineUpdateSectionDoors(
+                        ReadHints: readEngineHints,
+                        ReadFresh: () => new HttpEngineRegistryClient().Latest().Version,
+                        OwnPort: () => _server?.Port ?? 0,
+                        Run: EngineUpdateRealDoors.Update(paths, () => _server, engineUpdateHints, log))
+                    {
+                        // ЗАМОК — ВСТРОЕННЫЙ РЕСУРС СБОРКИ, и он один решает, какую версию панель
+                        // вообще умеет поставить: свежая без замка не ставится, и окно говорит это
+                        // словами ДО нажатия, а не подменяет её проверенной.
+                        HasLockFor = version => EngineInstallDecisions.HasLockFor(EngineTreeLock.Load(), version),
+
+                        // ОТКАТ ПО КНОПКЕ (E3.3): что стоит сейчас, какие папки версий есть и чем
+                        // вернуться. Папки читает уборка версий — она же держит текущую и прежнюю.
+                        ReadRecord = () => EngineInstallRecord.Read(paths.EngineStateFile),
+                        ReadFolders = () => EngineRetention.Installed(paths.EngineDir),
+
+                        // ЧТО СТОИТ СЕЙЧАС — своя версия сервера DSH, из ТОЙ ЖЕ двери, что у шарика
+                        // о новой версии (`EngineUpdateNotice.Installed`): второго способа узнать
+                        // свою версию в панели быть не должно, иначе карточка и шарик однажды
+                        // показали бы разные номера.
+                        ReadInstalled = () => EngineUpdateNotice.Installed(paths),
+
+                        // СЕРВЕР DSH ЕСТЬ НА МАШИНЕ ВООБЩЕ — ОТДЕЛЬНЫЙ ФАКТ (A5 §7). Именно он,
+                        // а не пустая строка версии, отвечает на «движка нет вовсе»: пустая версия
+                        // значит и «нет», и «не прочитали», и на чистой машине карточка раньше
+                        // не показывала ни одной кнопки — дорога к установке была тупиком.
+                        ReadPresent = () => OwnEngine.Locate(paths) is not null,
+                        RollbackDoors = EngineUpdateRealDoors.Rollback(paths, () => _server, log),
+                    },
+                    log)
+                : new EngineUpdateService(EngineUpdateSectionDoors.None, log);
+
+            // ШАРИК О НОВОЙ ВЕРСИИ ДВИЖКА — «авто-проверка как у панели» (пункт 7 плана E3.2).
+            // Решение чистое (`EngineUpdateNotice`: рекомендованная новее поставленной и про неё
+            // ещё не говорили), а показывает ОБЩАЯ дверь панели — она же молчит в прогоне проверки.
+            if (_engineUpdate is null) return;
+
+            var installed = EngineUpdateNotice.Installed(paths);
+            var recommended = _engineUpdate.Recommended;
+
+            if (!EngineUpdateNotice.ShouldAnnounce(installed, recommended, _engineAnnounced)) return;
+
+            _engineAnnounced = recommended;
+
+            Notify(
+                NoticeKind.UpdateAvailable,
+                PanelStrings.NotifyEngineUpdateTitle,
+                EngineUpdateNotice.Message(recommended));
+        });
 
         var window = new MainWindow();
         desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -204,6 +376,13 @@ public partial class App : Application
         // (`RunFallbackPort`). Право тоже приходит открытым текстом и без умолчания.
         var mayOccupyOwnerPort = RunRights.MayOccupyOwnerPort(RunContext.Current, human);
 
+        // УБОРКА МЁРТВЫХ ЗАМКОВ ДВИЖКА — тоже право, и то же, что у файлов состояния панели:
+        // это УДАЛЕНИЕ ЧУЖОГО ФАЙЛА в доме движка. Убитый владелец оставляет замок навсегда,
+        // и поднятый движок упрётся в него первой же записью (замер 10.10.2026), поэтому обычный
+        // запуск человеком и изолированный прогон убирают мёртвые замки, а прогон проверки
+        // на машине владельца не трогает ничего. Живой замок не трогается НИКАКИМ правом.
+        var mayClearEngineLocks = RunRights.MayClearEngineLocks(RunContext.Current, human);
+
         // ФАЙЛЫ СОСТОЯНИЯ СЕРВЕРА (ссылка входа и запись «этот сервер наш») — тоже по праву.
         // Прогон проверки идёт ОБЫЧНЫМ путём панели, и, знай контроллер пути сам, он прочитал бы
         // настоящие файлы владельца: подсмотрел бы его состояние и мог бы признать ЕГО сервер своим.
@@ -230,16 +409,121 @@ public partial class App : Application
             allowParallelStart: isolated,
             files: stateFiles,
 
+            // ПРЕДУПРЕЖДЕНИЕ ПЕРЕД ГАШЕНИЕМ (решение владельца 10.10.2026): панель называет,
+            // какой сервер останавливает и что прервётся. Показ идёт общей дверью `Notify`,
+            // поэтому изолированный прогон об этом молчит, как и о любом своём сообщении.
+            notify: Notify,
+
+            // Своя папка движка — НЕ право на файлы состояния, а факт машины: путь к своей папке
+            // движка не секрет и не чужие данные (этап E3). Поэтому он приходит отдельным доводом.
+            ownEngineDir: () => paths.EngineDir,
+
+            // КАКОЙ ДВИЖОК ПОДНИМАТЬ (пункт 7 плана E3.2): сначала СВОЙ поставленный (из записи
+            // `state\engine.json`), и только потом общая установка человека. Без этого обновление
+            // ставило бы версию, которую панель тут же перестала бы использовать.
+            locateEngine: () => OwnEngine.Locate(paths),
+
             // Запасной источник ссылки входа — файл панели 1.x, ТОЛЬКО ЧТЕНИЕ. Своей ссылки
             // у найденного сервера нет, а человеку, взявшему его под управление, кнопка нужна.
             // Чужой каталог читает только обычный запуск панели человеком: право то же, что
             // у машинного окружения, и в прогоне проверки источник молчит.
             foundServerEntryLink: RunRights.MachineData(RunContext.Current, human)
                 ? () => ServerStateFiles.ReadText(AppPaths.V1.EntryLinkFile)
-                : null);
+                : null,
+            mayClearEngineLocks: mayClearEngineLocks);
 
         window.Attach(_server);
         window.SettingsRequested += () => _shell?.OpenSettings();
+
+        // ДВЕРЬ БРАНДМАУЭРА (F4). Заводится ПЕРВОЙ, и это не порядок ради порядка: узкое правило
+        // решает, МОЖНО ли поднимать калитку (уточнение владельца 11.10.2026 — «правило ДО двери»:
+        // без него Windows задаёт свой вопрос и открывает ШИРОКИЕ правила, что владелец и увидел
+        // живьём). Сама дверь ничего не делает: она только даёт разделу «Телефон» поставить или
+        // снять своё узкое правило по щелчку человека. Прогон проверки её не получает вовсе —
+        // и тогда раздел честно говорит, что брандмауэром тут не управляют.
+        //
+        // ⚠️ Путь к самой панели берётся у процесса (`Environment.ProcessPath`) — правило называет
+        // ИМЕННО ЭТУ программу, а не «любую». Пустого пути не бывает у запущенного exe; если бы
+        // случился, дверь отказала бы словами, а не поставила правило «всем».
+        if (RunRights.MayChangeFirewall(RunContext.Current, human))
+        {
+            _firewall = new ElevatedFirewallDoor(
+                Environment.ProcessPath ?? string.Empty,
+                human,
+                RunContext.Current,
+                log);
+        }
+        else
+        {
+            log(Localization.Loc.T(PanelStrings.FirewallNoRightLog));
+        }
+
+        // КАЛИТКА ТЕЛЕФОНА (этап F1; уточнено 11.10.2026 после живого прогона). Двери у неё
+        // НАСТОЯЩИЕ и собраны в одном месте (`PhoneGateRealDoors`): движок по ссылке входа, его
+        // поток событий, файл пропуска с правами владельца, часы и журнал. Порт — из настроек
+        // (умолчание `43127`), адрес — ТОТ ЖЕ, что показывает раздел: считается одним решением
+        // (`PhoneDecisions.GateAddress`) в момент запуска, а не при сборке дверей.
+        //
+        // ⚠️ ВЛАДЕНИЕ И СЛУШАНИЕ РАЗВЕДЕНЫ. Калитка заводится по праву владения
+        // (`MayOwnPhoneGate`) — то есть И ПРИ ВЫКЛЮЧЕННОМ ТЕЛЕФОНЕ: иначе щелчок рубильника не мог
+        // бы её поднять, а код сопряжения — выпуститься. Слушает она только по `Start()`, и здесь
+        // он зовётся лишь тогда, когда телефон включён И узкое правило брандмауэра уже стоит.
+        // Прогон проверки не владеет ею НИКОГДА, и в журнал уходит строка отказа. Ключ
+        // `--phone-selftest` (F1.e) соберёт свою калитку на своём свободном порту.
+        var phoneEnabled = _settings!.Settings.PhoneEnabled;
+
+        if (RunRights.MayOwnPhoneGate(RunContext.Current, human))
+        {
+            _phoneGate = CreatePhoneGate(
+                RunContext.Current,
+                human,
+                PhoneGateRealDoors.Build(
+                    paths,
+                    () => _server?.EntryLink ?? string.Empty,
+                    () => PhoneDecisions.GateAddress(
+                        NetworkAddresses.Collect(RealNetworkAddresses.Read()),
+                        _settings!.Settings.PhoneChosenAddress),
+                    _settings!.Settings.PhonePort,
+                    address => RememberPhoneAddress(_settings!, address),
+                    log,
+
+                    // ДВЕРЬ СЕРВЕРА — ЧТОБЫ КАЛИТКА ЗНАЛА, ПРОЧИТАНО ЛИ ЕГО СОСТОЯНИЕ, И СПРОСИЛА
+                    // ПОДПИСКУ ЗАНОВО, КОГДА ОНО СТАНЕТ ИЗВЕСТНО (задание владельца 14.10.2026, §1).
+                    // Калитка спрашивает подписку при запуске — раньше, чем панель прочитает
+                    // состояние, — и прежняя редакция писала в журнал «связи с сервером DSH нет»
+                    // про работающий СВОЙ сервер, а следующая попытка шла через пять секунд.
+                    server: () => _server),
+                () => _settings!.Settings.PhoneEnabled,
+                log);
+
+            if (_phoneGate is not null && phoneEnabled && FirewallLetsGateOpen())
+            {
+                var gateStart = _phoneGate.Start();
+
+                // УДАЧА сказана самой калиткой (одной строкой в журнал). Здесь говорится только
+                // НЕУДАЧА: «дверь не открылась» человек обязан увидеть, иначе выключенный телефон
+                // выглядел бы работающим.
+                if (!gateStart.Opened)
+                {
+                    log(string.Format(
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        PanelStrings.PhoneGateRefusedLogFormat, gateStart.Text));
+                }
+            }
+            else if (phoneEnabled)
+            {
+                // «Телефон разрешён, а дверь не открыта» — сказано словами И в журнале: причина
+                // у этого состояния одна и она исполнимая (поставить узкое правило щелчком).
+                log(Localization.Loc.T(PanelStrings.PhoneGateBlockedByFirewall));
+            }
+        }
+        else
+        {
+            log(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.PhoneGateRefusedLogFormat,
+                Localization.Loc.T(PanelStrings.PhoneGateNoRightLog)));
+        }
 
         // «Открыть панель» — четвёртая дверь главного окна, и она ведёт туда же, куда пункт меню
         // значка: в связку, а та уже спрашивает предохранитель изоляции. Двух путей к браузеру
@@ -265,6 +549,40 @@ public partial class App : Application
 
         _autostart.Repair();
 
+        // ОПИСЬ ТОГО, ЧТО ПАНЕЛЬ ПОСТАВИЛА НА МАШИНУ (этап D плана, п. 3): каталоги, файлы, ветка
+        // реестра, ярлыки. Нужна будущему удалению панели — чтобы снималось ПОСТАВЛЕННОЕ, а не
+        // «как помнится». Пишется только по праву на свои данные: прогон проверки файла владельца
+        // не трогает, изолированный пишет свою опись под своим корнем. Неудача описи запуск
+        // не роняет — она называет себя строкой в журнале (причина — ТИП ошибки, без пути).
+        if (fileRights)
+        {
+            // Движок и свой Node попадают в опись из ЗАПИСИ «что стоит сейчас», а не из имён папок:
+            // папку мог завести человек, а системный Node — не наш и в описи появляться не должен.
+            if (InstalledInventory.Write(
+                    paths, AutostartStores.SelfExe(), _autostart.State.Enabled, out var inventoryReason,
+                    out var inventoryEntries, exists: null, engine: EngineInstallRecord.Read(paths.EngineStateFile)))
+            {
+                log(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.InstalledInventoryWrittenLog, inventoryEntries));
+            }
+            else
+            {
+                log(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.InstalledInventoryFailedFormat, inventoryReason));
+            }
+        }
+
+        // УМЕНИЯ ДЛЯ ГЕЙТА ПО УМЕНИЯМ (этап E2). Здесь берутся ТОЛЬКО ФАЙЛОВЫЕ умения (ключ модели,
+        // раскладка профиля) и только по праву на свои данные: живой пробы тут нет намеренно —
+        // её зовут телефон и обновление движка, которым нужны вызовы, а не значок и кнопки.
+        // Проверка идёт в момент, когда человек зовёт функцию, а не при старте панели.
+        var skillFacts = fileRights ? EngineSkillProbe.None(paths) : new SkillFacts();
+
+        string SkillBlock(PanelFunction function) =>
+            SkillGate.Decide(function, EngineSkills.Measure(skillFacts)).Text();
+
         // Баланс и окна пика АКТИВНОГО агента. Ключ читается в момент запроса из файла ключей
         // движка, и только если прогон имеет на это право: в прогоне проверки контроллер
         // не тронет ни файла, ни сети (`RunRights.LocalData`).
@@ -277,7 +595,8 @@ public partial class App : Application
             dispatch: action => UiThread.Post(action),
             log: log,
             notify: Notify,
-            isolatedRun: isolated);
+            isolatedRun: isolated,
+            skillsBlock: () => SkillBlock(PanelFunction.Balance));
 
         window.AttachBalance(_balance);
 
@@ -339,7 +658,12 @@ public partial class App : Application
             log: log,
             remember: traces => _settings!.SetUpdateChecked(traces),
             rememberCheckedAt: stamp => _settings!.SetUpdateCheckedAt(stamp),
-            isolatedRun: isolated);
+            isolatedRun: isolated,
+            // ⚠️ ПОПЫТКА ПИШЕТСЯ В ФАЙЛ, А НЕ ТОЛЬКО В ПАМЯТЬ: отметка удачной проверки при отказе
+            // не ставится (иначе панель соврала бы «проверено» и заперла проверку на сутки), поэтому
+            // память о попытке — единственное, на чём держится отступ после отказа по лимиту GitHub.
+            // Жила бы она в памяти — следующий запуск панели снова пошёл бы в сеть.
+            rememberAttempt: attempt => _settings!.SetUpdateAttempt(attempt));
 
         _update.Start();
 
@@ -390,7 +714,14 @@ public partial class App : Application
             paths,
             () => _settings!.Settings,
             allowed: BackupController.For(RunContext.Current, human),
-            locateEngine: () => DshEngine.Locate(),
+
+            // ФАЙЛЫ МАШИННОЙ УСТАНОВКИ ДВИЖКА — только по праву (находка C1 CH-08): у человека
+            // право есть (его копия должна быть самодостаточной — критерий этапа 4), у прогона
+            // проверки и у изолированного прогона нет, и их копия собирается без машинного движка
+            // с НАЗВАННЫМ отказом.
+            mayTakeMachineEngineData: RunRights.MachineEngineData(RunContext.Current, human),
+
+            locateEngine: () => OwnEngine.Locate(paths),
             clock: () => DateTimeOffset.Now,
             log: log,
             settingsOwner: _settings,
@@ -469,6 +800,12 @@ public partial class App : Application
             // панели обрывало бы человеку работу. Освобождаем только дескриптор.
             if (_signal is not null && _shell is not null) _signal.ShowPanelRequested -= _shell.ShowFromSignal;
             _signal = null;
+
+            // КАЛИТКА ГАСНЕТ ВМЕСТЕ С ПАНЕЛЬЮ: слушатель, переживший приложение, держал бы порт
+            // 43127 и пускал бы телефон в дверь, за которой уже никого нет.
+            _phoneGate?.Dispose();
+            _phoneGate = null;
+
             _server?.Dispose();
             _server = null;
             _autostart = null;
@@ -581,10 +918,99 @@ public partial class App : Application
         _signal = ProgramOptions.InstanceSignal;
         if (_signal is not null) _signal.ShowPanelRequested += _shell.ShowFromSignal;
 
+        // ОКНО ПЕРВОГО ЗАПУСКА — ОДИН РАЗ (A5, вариант «а», находка C1 N-01).
+        //
+        // ⚠️ Порядок назван и проверяется: окно показывается ДО шарика «панель запущена» — если
+        // человек увидел окно, шарик о том же запуске молчит (два сообщения об одном — шум).
+        // Решение «показывать ли» — чистая функция (`FirstRunDecisions.ShouldShow`), поэтому
+        // проверка перебирает его без окна, а не смотрит глазами.
+        var firstRunShown = ShowFirstRunOnce(paths, log, human, isolated);
+
         // ПАРОВОЗ ПОСЛЕДНИМ: «панель запущена — я в трее». Требование владельца 29.09.2026:
         // обычный запуск окна не показывает, и человек не понимает, работает панель или нет.
         // Решение — чистый предикат, а шарик идёт общей дверью изоляции (см. NotifyPanelStarted).
-        NotifyPanelStarted(windowShown);
+        NotifyPanelStarted(windowShown || firstRunShown);
+    }
+
+    /// <summary>
+    /// ПОКАЗАТЬ ОКНО ПЕРВОГО ЗАПУСКА — ЕСЛИ ЕМУ ЕСТЬ ЧТО СКАЗАТЬ И ЧЕЛОВЕК ЕГО ЕЩЁ НЕ ВИДЕЛ (A5).
+    ///
+    /// **Что здесь решается и что нет.** Чистое решение — в <see cref="FirstRunDecisions"/>:
+    /// «человек × изолированность × отметка × есть ли строки». Здесь только показ, двери окна
+    /// и ОТМЕТКА — и она пишется ПРАВОМ <c>RunRights.LocalData</c> (тем же, каким панель пишет
+    /// свои настройки), ТОЛЬКО когда окно действительно показано.
+    ///
+    /// ⚠️ **Сбой записи не ломает запуск:** прогон уже показал окно, и «панель не запустилась
+    /// из-за отметки» было бы хуже, чем «окно покажется в следующий раз». Строка об этом уходит
+    /// в журнал самим сохранением (`SettingsController.Save`).
+    ///
+    /// ⚠️ **Факты — только «есть / нет»:** значения ключа, путей и имени пользователя здесь нет
+    /// ни одного, поэтому окно (и его кадр) личных данных не содержит по построению.
+    /// </summary>
+    private bool ShowFirstRunOnce(AppPaths paths, Action<string> log, bool human, bool isolated)
+    {
+        if (!human || isolated) return false;
+
+        var shownAt = _settings?.Settings.WelcomeShownAt ?? string.Empty;
+        var door = new FirstRunFactsDoor(() => FirstRunFactsNow(paths));
+
+        if (!FirstRunDecisions.ShouldShow(human, isolated, shownAt, FirstRunDecisions.Rows(door.Read())))
+            return false;
+
+        var window = new FirstRunWindow();
+        window.Attach(door);
+
+        // ДВЕРИ ОКНА — существующие: раздел «Обновление» у уже открытого окна настроек
+        // (`PanelShell.OpenUpdateSection` — второго окна настроек не бывает) и окно панели.
+        window.UpdateSectionRequested += () => _shell?.OpenUpdateSection();
+        window.PanelRequested += () => _shell?.ShowPanel();
+
+        window.Show();
+
+        // Строку журнала собирает САМО окно из названий показанных строк: путей и значения ключа
+        // в ней быть не может (в `{0}` уходят только слова словаря).
+        log(window.ShownLogLine);
+
+        // ОТМЕТКА — ПО ФАКТУ ПОКАЗА, и только теперь.
+        if (_settings is not null)
+        {
+            _settings.Settings.WelcomeShownAt = FirstRunDecisions.Stamp(DateTimeOffset.Now);
+            _settings.Save(_settings.Settings);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// ФАКТЫ ДЛЯ ОКНА ПЕРВОГО ЗАПУСКА — ТРЕМЯ ОТДЕЛЬНЫМИ ВОПРОСАМИ, как велит спецификация.
+    ///
+    /// 1. **Сервер DSH есть?** — у поиска СВОЕГО движка (<see cref="OwnEngine.Locate"/>), а не
+    ///    у строки версии: строка пуста и когда сервера нет, и когда версию не прочитали.
+    ///    Слова окна при этом говорят «не найден», а не «не установлен»: поиск пуст и когда
+    ///    пакет есть, а Node нет.
+    /// 2. **Сервер поднялся?** — только УСТОЙЧИВЫЙ факт: «порт занят чужой программой» или
+    ///    «сервер был наш и его нет». «Не отвечает прямо сейчас» в окно не попадает: в первые
+    ///    секунды после старта панель и так пишет «связи нет», хотя связь есть.
+    /// 3. **Ключ модели найден и читается?** — файл ключей и его читаемость; САМО ЗНАЧЕНИЕ
+    ///    не читается вовсе, и в окно уходит только «есть / нет / не прочитан».
+    /// </summary>
+    private FirstRunFacts FirstRunFactsNow(AppPaths paths)
+    {
+        var enginePresent = OwnEngine.Locate(paths) is not null;
+        var state = _server?.Refresh() ?? ServerState.Stopped(0);
+
+        // Причина считается ЧИСТЫМ решением: «не отвечает прямо сейчас» причиной не является,
+        // и окно не имеет права выдать одно за другое.
+        var problem = FirstRunDecisions.Reason(
+            enginePresent, state.IsRunning, state.Presence, _server?.Owner ?? ServerOwner.None, state.Detail);
+
+        var agent = Agents.AgentCatalog.Find(_settings?.Settings.ActiveAgent ?? string.Empty);
+
+        return new FirstRunFacts(
+            EnginePresent: enginePresent,
+            ServerProblem: problem,
+            KeyFound: CredentialsKey.Read(paths.CredentialsPath, agent.KeyName).Found,
+            KeyReadable: CredentialsKey.Readable(paths.CredentialsPath));
     }
 
     /// <summary>
@@ -655,7 +1081,7 @@ public partial class App : Application
             log(string.Format(
                 System.Globalization.CultureInfo.CurrentCulture,
                 PanelStrings.AutoStartRefusedLogFormat,
-                isolated ? PanelStrings.AutoStartRefusedIsolated : PanelStrings.AutoStartRefusedCheckRun));
+                isolated ? PanelStrings.AutoStartRefusedIsolatedLog : PanelStrings.AutoStartRefusedCheckRun));
 
             return;
         }
@@ -793,6 +1219,90 @@ public partial class App : Application
     }
 
     /// <summary>
+    /// СОБРАТЬ КАЛИТКУ ТЕЛЕФОНА — ОТДЕЛЬНЫМ ЧЛЕНОМ, ЧТОБЫ ЭТО МОЖНО БЫЛО ПРОВЕРИТЬ
+    /// (уточнение владельца 11.10.2026 после живого прогона).
+    ///
+    /// ⚠️ **Владение, а не слушание.** Калитка заводится по праву ВЛАДЕНИЯ
+    /// (<see cref="RunRights.MayOwnPhoneGate"/>) — то есть **и при выключенном телефоне**: иначе
+    /// щелчок рубильника не мог бы её поднять (калитки нет вовсе), а код сопряжения — выпуститься.
+    /// Слушает она только после <see cref="PhoneGate.Start"/>, и тот спрашивает право ОТКРЫТИЯ
+    /// и рубильник заново. Прежде право было одно, и выключенный телефон означал «калитки нет» —
+    /// ровно оттуда и взялся дефект живого прогона.
+    ///
+    /// Прогону проверки и изолированному прогону не даётся НИ владения, НИ слушания: <c>null</c>.
+    /// </summary>
+    internal static PhoneGate? CreatePhoneGate(
+        RunContext context,
+        bool humanLaunch,
+        PhoneGateDoors doors,
+        Func<bool> enabled,
+        Action<string> log)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(doors);
+        ArgumentNullException.ThrowIfNull(enabled);
+        ArgumentNullException.ThrowIfNull(log);
+
+        return RunRights.MayOwnPhoneGate(context, humanLaunch)
+            ? new PhoneGate(doors, enabled, humanLaunch, context)
+            : null;
+    }
+
+    /// <summary>
+    /// МОЖНО ЛИ ПОДНИМАТЬ КАЛИТКУ ПО БРАНДМАУЭРУ (уточнение владельца 11.10.2026: «узкое правило
+    /// ДО открытия калитки»). Три ответа, и все три названы:
+    ///
+    /// * двери брандмауэра нет (прогон проверки, панель не у человека) — требовать правило не
+    ///   с кого, и калитка встаёт;
+    /// * правило прочитано как «наше и такое, как надо» (<see cref="FirewallPresence.Ready"/>) —
+    ///   встаёт;
+    /// * во всех прочих случаях (правила нет · оно не такое · их несколько · прочитать не удалось) —
+    ///   НЕ встаёт: «не прочиталось» никогда не значит «правила нет», и открывать дверь в надежде
+    ///   значило бы получить тот самый вопрос Windows и широкие правила.
+    /// </summary>
+    private bool FirewallLetsGateOpen()
+    {
+        if (_firewall is null) return true;
+
+        var port = PanelSettings.NormalizePhonePort(_settings!.Settings.PhonePort);
+
+        return _firewall.Read(port).Presence == FirewallPresence.Ready;
+    }
+
+    /// <summary>
+    /// СЛЕД АДРЕСА, НА КОТОРОМ ВСТАЛА КАЛИТКА. Пишется ОБРАТНОЙ дверью калитки
+    /// (<see cref="PhoneGateDoors.Bound"/>), а не догадкой окна: «по какому адресу телефон найдёт
+    /// панель» — то, что калитка действительно сделала, и это единственный честный источник.
+    ///
+    /// Копия настроек берётся у действующих и сохраняется целиком — тем же приёмом, что у раздела
+    /// «Телефон»: собери её здесь заново, и решение, принятое в другом окне, потерялось бы.
+    ///
+    /// ⚠️ **Не записалось — строки в журнале не будет, и это названо, а не спрятано.** Запись эта —
+    /// след, а не решение: раздел показывает адрес, посчитанный тем же правилом заново
+    /// (<see cref="Shell.PhoneSectionInfo.LastAddress"/> — только предподстановка в списке), а сама
+    /// калитка стоит на своём адресе независимо от файла. Отдельного слова в словаре под этот
+    /// случай владелец не просил, а выдумывать строку молча — хуже, чем её не иметь.
+    ///
+    /// ⚠️ **Член СТАТИЧЕСКИЙ и принимает владельца настроек доводом** — ровно затем, чтобы этот
+    /// шов можно было проверить живым путём (<c>PhoneWiringTests</c>): «после Start() в файле
+    /// настроек стоит тот адрес, на котором калитка встала» — утверждение о ПРОДУКТЕ, и собирать
+    /// его в проверке заново значило бы мерить свою выдумку.
+    /// </summary>
+    internal static void RememberPhoneAddress(ISettingsControl settings, string address)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var text = (address ?? string.Empty).Trim();
+
+        if (text.Length == 0) return;
+
+        var next = SettingsStore.Clean(settings.Settings);
+        next.PhoneLastAddress = text;
+
+        settings.Save(next);
+    }
+
+    /// <summary>
     /// Построить окно настроек. Оно же подключается к домену: настройки, автозапуск.
     /// Строится по просьбе (пункт меню или кнопка), а не при старте: панель живёт в трее
     /// месяцами, и держать окно, которое человек откроет раз в месяц, незачем.
@@ -818,7 +1328,24 @@ public partial class App : Application
             _update,
             _updateInstall,
             skipUpdate: version => _settings?.SetUpdateSkippedVersion(version) ?? false,
-            exitForUpdate: () => _shell?.Exit());
+            exitForUpdate: () => _shell?.Exit(),
+
+            // РАЗДЕЛ «ТЕЛЕФОН» (F1.d): дверь к решениям о телефоне и дверь к адресам машины.
+            // Обе — доводами, а не полями окна: проверка подставляет свои ответы, а продукт
+            // идёт ровно этим путём (см. `SettingsWindow.Attach`).
+            phone: new PhoneSection(
+                _settings!,
+                () => _phoneGate,
+                message => _log(message),
+                () => DateTimeOffset.Now),
+            phoneAddresses: RealNetworkAddresses.Read,
+
+            // ПРАВИЛО БРАНДМАУЭРА (F4) — СВОЯ дверь, и у прогона проверки её нет вовсе
+            // (`_firewall` остаётся пустым): раздел скажет словами, что тут им не управляют.
+            firewall: _firewall);
+
+        // БЛОК ДВИЖКА: дверь даёт `App` (в прогоне проверки её нет вовсе) — окно только показывает.
+        if (_engineUpdate is not null) window.AttachEngineUpdate(_engineUpdate);
 
         window.AboutRequested += () => _shell?.OpenAbout();
         return window;
@@ -1101,7 +1628,16 @@ public partial class App : Application
             inPeak: _balance?.Peak.InPeak ?? false,
             update: update is not null
                 ? update.TrayLine
-                : new TrayStatusLine(PanelStrings.UpdateNeverChecked, TrayTone.Neutral));
+                : new TrayStatusLine(PanelStrings.UpdateNeverChecked, TrayTone.Neutral),
+
+            // СТРОКА ТЕЛЕФОНА (F1.d). Решение о ней — ЧИСТОЕ и живёт в `PhoneDecisions.TrayLine`:
+            // не разрешён — пустой текст, и меню не покажет строки ВОСЕМЬ («ждёт» или «подключён»
+            // тоже решаются там). Здесь только два факта: разрешён ли телефон (настройки)
+            // и подключён ли (калитка). Второе спросить больше негде: движок не знает, кто к нему
+            // подключён вовсе (замер `docs\PHONE-F0.md` §5.4).
+            phone: PhoneDecisions.TrayLine(
+                _settings?.Settings.PhoneEnabled ?? false,
+                _phoneGate?.Connected == true));
     }
 
     /// <summary>

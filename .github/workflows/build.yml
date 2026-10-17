@@ -63,9 +63,25 @@ jobs:
       # Паритет истории версий: раздел новой версии есть ВО ВСЕХ ТРЁХ CHANGELOG, непустой и стоит
       # первым. 30.09.2026 выпускная часть конвейера упала ровно на этом (искался раздел `## main`),
       # и узнали об этом только на теге. Теперь вопрос задаётся до тега — словами и кодом 1.
-      - name: Паритет истории версий (три CHANGELOG)
+      #
+      # ⚠️ ПРАВИЛО ТЕГА (ADR-001 §5.3; в C1 значилось как V-02): тег `vX.Y.Z` обязан совпадать с
+      # `<Version>` проекта, а до 17.10.2026 конвейер звал сторожа БЕЗ `-Tag` — правило держалось
+      # на памяти сессии и не проверялось вовсе. Тег берётся ИЗ GIT, а не из `github.ref_name`:
+      # ручной прогон (workflow_dispatch) идёт с ветки, и `ref_name` там — `main`, то есть сторож
+      # сравнил бы версию с именем ветки и покраснел бы на исправном дереве. Прогон без тега
+      # (ветка, pull request) идёт как раньше: сверять номер не с чем.
+      - name: Паритет истории версий (три CHANGELOG) и тег против <Version>
         shell: pwsh
-        run: ./tools/check-changelogs.ps1
+        run: |
+          $releaseTag = @(git tag --points-at HEAD 2>$null | Where-Object { $_ -match '^v\d+\.\d+\.\d+$' }) | Select-Object -First 1
+          if ($releaseTag) {
+            Write-Host ('тег на этом коммите: ' + $releaseTag + ' — сверяется с <Version> проекта')
+            ./tools/check-changelogs.ps1 -Tag $releaseTag
+          } else {
+            Write-Host 'тега vX.Y.Z на этом коммите нет (ветка или pull request) — сверка тега с <Version> не выполняется'
+            ./tools/check-changelogs.ps1
+          }
+          exit $LASTEXITCODE
 
       - name: Восстановить пакеты по замкам
         shell: pwsh

@@ -14,6 +14,13 @@
 #   * .json, .csproj, .props, .targets, .slnx, .config — UTF-8 **без** BOM и без ведущего U+FEFF
 #     (их читают .NET и System.Text.Json: «The JSON value could not be converted» из-за
 #     невидимых трёх байт — ровно та поломка, которую ищет эта проверка).
+#   * ⚠️ **.json — ЕЩЁ И CRLF** (правило введено 12.10.2026 вместе с `*.json text eol=crlf`
+#     в `.gitattributes`). От какого случая: три словаря жили с LF, а `.gitattributes` их
+#     переводы строк не закреплял, поэтому правка ШЕСТИ строк в них показала коммит
+#     в 2446 строк — `git diff --ignore-cr-at-eol` давал +424/−191 против +4084/−3851.
+#     Переводы строк файла данных — такая же часть формата, как отсутствие BOM: пока их
+#     не закрепляет никто, их меняет любой инструмент правки, и дифф перестаёт что-либо
+#     доказывать. **Сторож этого не видел вовсе** — поэтому .json и попал в список CRLF.
 #
 # ⚠️ ЧЕСТНО О ГРАНИЦАХ, и это не оговорка, а измеренный факт:
 #   * запись через [IO.File]::WriteAllText(путь, текст) **БЕЗ** явной кодировки пишет UTF-8
@@ -41,13 +48,19 @@ $ErrorActionPreference = 'Stop'
 if (-not $Root) {
     $Root = Split-Path -Parent $PSScriptRoot
 }
+# ⚠️ ПРОПАВШИЙ ВХОД = ОТКАЗ, А НЕ АВАРИЯ (t15, 17.10.2026). Было: `-Root <нет такого>` роняло
+# Resolve-Path — исключение и код 1 вместо названного отказа. Замер до правки это подтвердил.
+if (-not (Test-Path -LiteralPath $Root)) {
+    Write-Host ('неприменимо: под корнем «' + $Root + '» нет каталога — проверять нечего')
+    exit 2
+}
 $root = (Resolve-Path -LiteralPath $Root).Path
 
 # Папки сборки и лаборатории: там лежат копии исходников, и вердикт по ним ничего не значит.
 $excluded = '\\(bin|obj|dist|upd-build|_lab[^\\]*|\.git|\.vs|\.nuget)\\'
 $withBom = @('.ps1', '.iss')
 $withoutBom = @('.json', '.csproj', '.props', '.targets', '.slnx', '.config')
-$crlfOnly = @('.ps1', '.iss', '.cmd', '.bat')
+$crlfOnly = @('.ps1', '.iss', '.cmd', '.bat', '.json')
 
 $candidates = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -notmatch $excluded })
@@ -62,6 +75,29 @@ if ($files.Count -eq 0) {
     Write-Host ('нечего проверять: под корнем «' + $root + '» нет ни одного файла из списка' +
         ' (.ps1/.iss/.json/.csproj/.props/.targets/.slnx/.config/.cmd/.bat)')
     exit 2
+}
+
+# ⚠️ ПРОПАВШИЙ ВХОД: ОБХОД ПАПКИ ВИДИТ ТОЛЬКО ТО, ЧТО ЛЕЖИТ (t15, 17.10.2026). Файл, который есть
+# в git, но исчез с диска, для обхода не существует — и сторож молчал: замер до правки — убран
+# `tools\check-personal.ps1`, код 0, «кодировка в порядке: 27 файлов» вместо 28. Перечень входа
+# знает git, поэтому сверяемся и с ним; без git (или в собранном дереве) остаётся обход.
+$checkedExtensions = @($withBom + $withoutBom + $crlfOnly | Select-Object -Unique)
+$missingTracked = @()
+if ((Get-Command git -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath (Join-Path $root '.git'))) {
+    $trackedFiles = @(& git -C $root ls-files --cached 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        foreach ($rel in $trackedFiles) {
+            if ($checkedExtensions -notcontains [IO.Path]::GetExtension($rel).ToLowerInvariant()) { continue }
+            if (-not (Test-Path -LiteralPath (Join-Path $root ($rel -replace '/', '\')))) { $missingTracked += $rel }
+        }
+    }
+}
+
+if ($missingTracked.Count -gt 0) {
+    Write-Host ('ПРОПАВШИЙ ВХОД: в git файл есть, на диске нет — ' + $missingTracked.Count)
+    foreach ($item in $missingTracked) { Write-Host ('  ' + $item) }
+    Write-Host 'эти файлы сторож обязан был проверить, а обход папки их не видит вовсе'
+    exit 1
 }
 
 $utf8Bom = New-Object Text.UTF8Encoding($true)

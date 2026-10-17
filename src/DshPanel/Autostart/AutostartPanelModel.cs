@@ -74,14 +74,19 @@ public sealed class AutostartPanelModel
             // и ему нужен ответ на «что не вышло», а не описание прежнего состояния.
             if (_changeFailed) return PanelStrings.AutostartFailed;
 
+            // ПУТЬ ЗАПИСИ — МАСКОЙ (находка C1, пачка A). Запись хранит абсолютный путь к exe,
+            // то есть каталог пользователя; текст этой строки уезжает в кадр `--shot` и в README,
+            // а имя пользователя в кадре — личные данные (красная линия 7).
+            var where = DisplayMask.Path(State.Path);
+
             var text = State.Where switch
             {
                 AutostartWhere.Self => string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture, PanelStrings.AutostartSelfFormat, State.Path),
+                    System.Globalization.CultureInfo.CurrentCulture, PanelStrings.AutostartSelfFormat, where),
                 AutostartWhere.Missing => string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture, PanelStrings.AutostartMissingFormat, State.Path),
+                    System.Globalization.CultureInfo.CurrentCulture, PanelStrings.AutostartMissingFormat, where),
                 AutostartWhere.Other => string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture, PanelStrings.AutostartOtherFormat, State.Path),
+                    System.Globalization.CultureInfo.CurrentCulture, PanelStrings.AutostartOtherFormat, where),
                 AutostartWhere.Unknown => PanelStrings.AutostartUnknown,
                 _ => PanelStrings.AutostartOff,
             };

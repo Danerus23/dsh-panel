@@ -410,6 +410,9 @@ public class TrayIconDotTests
         public ServerState Adopt(FoundServer found) => State;
 
         public ServerState Detach() => State;
+        /// <summary>Подставной ответ на «подними свой сервер заново»: ничего не делает.</summary>
+        public ServerState RecoverOwnServer(TimeSpan timeout, bool confirmed) => State;
+
     }
 
     // ------------------------------------------------------------------ служебное

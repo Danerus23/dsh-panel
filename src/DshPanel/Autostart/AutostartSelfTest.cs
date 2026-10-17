@@ -1,3 +1,4 @@
+using DshPanel.Files;
 using DshPanel.Isolation;
 using DshPanel.Platform;
 
@@ -182,17 +183,11 @@ public static class AutostartSelfTest
             // За собой прибираем ВСЕГДА, в том числе после ошибки: своя ветка реестра и временный
             // каталог не должны переживать проверку. Молчаливой уборки мало — она печатается.
             var keyGone = registry.DeleteKey() & RegistryNative.DeleteKey(AutostartDecisions.OwnKeyRoot);
-            var dirGone = true;
+            var dirGone = TreeDeletion.Remove(root).Ok;
 
-            try
-            {
-                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
-
-                // Пустой родительский каталог тоже убираем. Не вышло (значит, им пользуется
-                // другая проба) — это не провал, но и об этом честно пишем.
-                try { if (Directory.Exists(parent)) Directory.Delete(parent); } catch { }
-            }
-            catch { dirGone = false; }
+            // Пустой родительский каталог тоже убираем. Не вышло (значит, им пользуется
+            // другая проба) — это не провал, но и об этом честно пишем.
+            try { if (Directory.Exists(parent)) Directory.Delete(parent); } catch { }
 
             report.Add(
                 $"уборка: ветки реестра нет = {!RegistryNative.Exists(AutostartDecisions.OwnKeyRoot)}, " +

@@ -60,7 +60,7 @@
 
          Подписи ставит код из PanelStrings (правило «ни одного текста в разметке»). -->
     <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
-      <TextBlock x:Name="SettingsHeadingText" Grid.Column="0" FontSize="22" FontWeight="SemiBold"
+      <TextBlock x:Name="SettingsHeadingText" Grid.Column="0" FontSize="28" FontWeight="SemiBold"
                  VerticalAlignment="Center" />
       <Button x:Name="OpenFolderButton" Grid.Column="1" />
     </Grid>
@@ -111,10 +111,16 @@
                 <Button x:Name="SuggestWorkDirButton" IsVisible="False" />
               </StackPanel>
 
+              <!-- ДЛИННОЕ ОБЪЯСНЕНИЕ ПОРТА — НАД ПОЛЕМ, обычным текстом; под полем остаётся ОДНА
+                   короткая фраза без точки (норма GOV.UK: «Keep hint text to a single short
+                   sentence, without any full stops»; `40-forms.md` §3 и §11(б) п. 3). Строка
+                   приходит кодом из словаря — текста здесь нет намеренно. -->
+              <TextBlock x:Name="PortExplainText" TextWrapping="Wrap" />
+
               <TextBlock x:Name="PortLabel" Margin="0,4,0,0" />
               <NumericUpDown x:Name="PortBox" Width="160" HorizontalAlignment="Left"
                              Minimum="1" Maximum="65535" Increment="1" />
-              <TextBlock x:Name="PortHintText" Classes="hint" Text="" />
+              <TextBlock x:Name="PortHintText" Classes="hint" TextWrapping="Wrap" />
 
               <TextBlock x:Name="ThemeLabel" Margin="0,4,0,0" />
               <ComboBox x:Name="ThemeBox" Width="260" HorizontalAlignment="Left" />
@@ -124,7 +130,8 @@
                    словами, а не умолчанием. -->
               <TextBlock x:Name="LanguageLabel" Margin="0,4,0,0" />
               <ComboBox x:Name="LanguageBox" Width="260" HorizontalAlignment="Left" />
-              <TextBlock x:Name="LanguageHintText" Classes="hint" />
+              <TextBlock x:Name="LanguageExplainText" TextWrapping="Wrap" />
+              <TextBlock x:Name="LanguageHintText" Classes="hint" TextWrapping="Wrap" />
 
               <CheckBox x:Name="AutostartCheck" Margin="0,4,0,0" />
               <TextBlock x:Name="AutostartNoteText" Classes="hint" Text="" />
@@ -168,8 +175,8 @@
                 <NumericUpDown x:Name="BackupKeepBox" Grid.Column="2" Width="140"
                                Minimum="1" Maximum="20" Increment="1" />
               </Grid>
-              <TextBlock x:Name="BackupScheduleHintText" Classes="hint" />
-              <TextBlock x:Name="BackupKeepHintText" Classes="hint" />
+              <TextBlock x:Name="BackupScheduleNoteText" Classes="hint" />
+              <TextBlock x:Name="BackupKeepNoteText" Classes="hint" />
 
               <!-- Правда о копии на ходу: сервер и агент ради копии не прерываются (решение владельца
                    26.09.2026), поэтому целостную копию снимают вручную, когда работа не идёт. Сказано
@@ -202,7 +209,7 @@
 
               <TextBlock x:Name="ActiveAgentLabel" />
               <ComboBox x:Name="AgentBox" Width="260" HorizontalAlignment="Left" />
-              <TextBlock x:Name="AgentHintText" Classes="hint" Text="" />
+              <TextBlock x:Name="AgentNoteText" Classes="hint" Text="" />
 
               <CheckBox x:Name="BalanceAutoCheck" Margin="0,4,0,0" />
               <Grid ColumnDefinitions="*,12,Auto">
@@ -226,7 +233,7 @@
                 <NumericUpDown x:Name="PeakNotifyBox" Grid.Column="2" Width="140"
                                Minimum="0" Maximum="1440" Increment="5" />
               </Grid>
-              <TextBlock x:Name="PeakNotifyHintText" Classes="hint" Text="" />
+              <TextBlock x:Name="PeakNotifyNoteText" Classes="hint" Text="" />
 
               <!--
                 ⚠️ ЗДЕСЬ БОЛЬШЕ НЕТ НИ РАСПИСАНИЯ ПИКОВ, НИ ТАБЛИЦЫ ЦЕН — и это не потеря,
@@ -240,21 +247,25 @@
                 Теперь ответ ОДИН и живёт в своём окне; здесь остались только НАСТРОЙКИ — каким
                 агентом панель следит за балансом и когда предупреждать.
               -->
-              <TextBlock x:Name="PeakWhereHintText" Classes="hint" TextWrapping="Wrap" />
+              <TextBlock x:Name="PeakWhereNoteText" Classes="hint" TextWrapping="Wrap" />
             </StackPanel>
 
             <StackPanel x:Name="ServerSectionPanel" Spacing="12" IsVisible="False">
               <TextBlock x:Name="ServerSectionTitle" Classes="sectionTitle" />
-              <TextBlock x:Name="ServerSectionSubtitleText" Classes="hint" />
 
               <!--
-                ОТЧЁТ ОКРУЖЕНИЯ ГРУППАМИ (просьба владельца 28.09.2026, он прислал кадр этого
+                ОТЧЁТ ОКРУЖЕНИЯ КАРТОЧКАМИ (просьба владельца 28.09.2026, он прислал кадр этого
                 раздела): *«я просил как то сделать здесь нормальную группировку с указанием пути;
                 так же нужно указать какая версия сейчас DSH, версия node и так далее»*.
 
+                ⚠️ **ПОДЗАГОЛОВКА РАЗДЕЛА ЗДЕСЬ БОЛЬШЕ НЕТ** (решение владельца 14.10.2026:
+                он спросил *«зачем этот текст?»*). Пояснение переехало ПОД СВОЙ СПИСОК: там оно
+                говорит, о чём список, а над разделом говорило о самом разделе. Форма карточек —
+                GOV.UK summary list: имя блока, одна строка пояснения, строки-находки.
+
                 Прежде здесь стоял ОДИН `TextBlock` с абзацем прозы, и это был п. 33 `DESIGN.md`.
-                Теперь строки строит код (`RenderEnvironment` → `Controls\EnvironmentPanelView`):
-                группа — заголовок, под ним строки «что искали · что нашли · где именно».
+                Теперь карточки строит код (`RenderEnvironment` → `Views\EnvironmentPanelView`):
+                имя блока, метка состояния со словом внутри, подробность и действие строки.
                 В разметке ни одного числа и ни одной подписи: и то и другое приходит из словаря.
               -->
               <StackPanel x:Name="EnvironmentPanel" Spacing="16" />
@@ -303,6 +314,12 @@
                   <TextBlock x:Name="UpdateGithubText" />
                   <TextBlock x:Name="UpdatePublishedText" Classes="hint" TextWrapping="Wrap" />
                   <TextBlock x:Name="UpdateSourceText" Classes="hint" TextWrapping="Wrap" />
+
+                  <!-- СТРОКА О ПОСЛЕДНЕЙ ПОПЫТКЕ: когда стучались и чем кончилось. Показывается,
+                       только когда попытка не удалась — прежний ответ при этом остаётся выше,
+                       с датой (замечание владельца 11.10.2026: раздел не должен терять результат
+                       проверки из-за отказа сети). -->
+                  <TextBlock x:Name="UpdateAttemptText" Classes="hint" TextWrapping="Wrap" IsVisible="False" />
                 </StackPanel>
               </Border>
 
@@ -348,6 +365,226 @@
                 <StackPanel Spacing="8">
                   <TextBlock x:Name="UpdatePreparedText" TextWrapping="Wrap" />
                   <Button x:Name="UpdateReplaceButton" Classes="accent" HorizontalAlignment="Left" />
+                </StackPanel>
+              </Border>
+              <!--
+                ⚠️ БЛОК «СЕРВЕР DSH» — ВТОРАЯ ЧАСТЬ РАЗДЕЛА, И СТОИТ ОН ПОСЛЕ ВСЕГО ПАНЕЛЬНОГО.
+                Это — уточнение решения владельца 10.10.2026 («блок движка — вторым блоком внутри
+                раздела»), сделанное 13.10.2026 по живому просмотру. Его слова: *«changelog о самой
+                панели надо ближе к карточке обновления панели, а про сервер DSH ниже… получается
+                информация сначала о панели, кнопки обновления, потом неожиданно про сервер DSH
+                и потом снова карточка про панель»*. Прежде блок стоял МЕЖДУ карточками панели,
+                и раздел читался вразнобой: панель → сервер DSH → снова панель.
+                Теперь порядок такой: состояние и версия панели · кнопки панели · «что нового
+                у панели» · карточка замены файлов · и только потом весь блок «Сервер DSH» одним
+                куском (его версии, его кнопки, его заметки, «Показать все версии»).
+                «Вторым блоком» — значит после панельного, а не между карточками панели.
+
+                ОБНОВЛЕНИЕ ПАНЕЛИ И ОБНОВЛЕНИЕ СЕРВЕРА DSH — разные вещи, и путать их нельзя.
+                Здесь две строки:
+                «рекомендуемая {версия} — проверена пробой» с ГЛАВНОЙ кнопкой «Обновить» и
+                «свежая {версия} — новее, но нами не проверена» с ОТДЕЛЬНОЙ кнопкой, которая
+                открывает подтверждение. Галочек и «запомнить выбор» здесь нет: непроверенная
+                версия ставится РАЗОВО (решение владельца `f09da5d`).
+              -->
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="EngineBlockTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+
+                  <!-- ПЕРВАЯ СТРОКА — СВОЯ ВЕРСИЯ («У вас: DSH 0.1.5-rc.2»), вторая — ЧТО С НЕЙ
+                       ПРОТИВ РЕКОМЕНДУЕМОЙ (решение владельца 14.10.2026). Прежде своей версии
+                       на карточке не было вовсе, и панель предлагала «обновить» на то же самое. -->
+                  <TextBlock x:Name="EngineRecommendedText" TextWrapping="Wrap" />
+                  <TextBlock x:Name="EngineFreshText" TextWrapping="Wrap" />
+
+                  <!-- СВЕЖАЯ ВЕРСИЯ — тихой строкой под решением: «новее, но панель её не проверяла».
+                       Она молчит, когда сказать нечего (свежая не новее). -->
+                  <TextBlock x:Name="EngineFreshLineText" Classes="hint" TextWrapping="Wrap" />
+
+                  <TextBlock x:Name="EngineHintText" Classes="hint" TextWrapping="Wrap" />
+
+                  <!-- ПОЧЕМУ ОБНОВИТЬ НЕЛЬЗЯ, КОГДА СЕРВЕР ПОДНЯТ НЕ ПАНЕЛЬЮ (решение владельца
+                       13.10.2026, ответ 3): без этой строки блок просто молчал, и человек видел
+                       недоступные кнопки без причины. Путь назад — в разделе «Сервер». -->
+                  <TextBlock x:Name="UpdateEngineNotOwnText" Classes="hint" TextWrapping="Wrap" IsVisible="False" />
+
+                  <!-- РЯД — РОВНО ДВЕ КНОПКИ (решение владельца 11.10.2026): «Обновить» — для
+                       ПРОВЕРЕННОЙ версии, вторая — для непроверенной. Откат в ряд НЕ ставится:
+                       «вперёд» и «назад» рядом — разные по смыслу действия. -->
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="EngineUpdateButton" />
+                    <Button x:Name="EngineInstallFreshButton" />
+                  </StackPanel>
+
+                  <!-- ОТКАТ — ОТДЕЛЬНОЙ ТИХОЙ СТРОКОЙ ПОД рядом (решение владельца 11.10.2026).
+                       Видна только когда прежняя версия, которую ставила панель, лежит на диске. -->
+                  <HyperlinkButton x:Name="EngineRollbackButton" HorizontalAlignment="Left" IsVisible="False" />
+
+                  <TextBlock x:Name="EngineStatusText" TextWrapping="Wrap" />
+
+                  <!-- ВЫЖИМКА ПРО ВЕРСИИ (решение владельца 11.10.2026): заметки из файла подсказок
+                       в СВОЁМ прокручиваемом поле постоянной высоты (как у заметок к выпуску панели —
+                       чтобы длинный текст не выдавливал кнопки) и ссылка на выпуск, открываемая
+                       ТОЛЬКО по щелчку человека. -->
+                  <!--
+                    ВЫЖИМКА ПРО ВЕРСИИ — ЗА ССЫЛКОЙ (решение владельца 13.10.2026 №6:
+                    «движок отдельной карточкой, слова как для незнакомого»). Прежде она лежала
+                    РАСКРЫТОЙ и выдавливала кнопки вниз: на витрине человек видел хвост длинного
+                    текста вместо решения. Теперь видно решение и две кнопки, а подробности — по щелчку.
+                  -->
+                  <HyperlinkButton x:Name="EngineNotesShowAllButton" HorizontalAlignment="Left" />
+                  <TextBlock x:Name="EngineNotesTitleText" FontWeight="SemiBold" TextWrapping="Wrap" IsVisible="False" />
+                  <TextBlock x:Name="EngineNotesEmptyText" Classes="hint" TextWrapping="Wrap" IsVisible="False" />
+                  <ScrollViewer x:Name="EngineNotesScroll"
+                                IsVisible="False"
+                                Height="140"
+                                VerticalScrollBarVisibility="Visible"
+                                HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="EngineNotesPanel" Spacing="4" />
+                  </ScrollViewer>
+                  <HyperlinkButton x:Name="EngineReleasesButton" HorizontalAlignment="Left" IsVisible="False" />
+                </StackPanel>
+              </Border>
+
+            </StackPanel>
+
+            <!--
+              РАЗДЕЛ «ТЕЛЕФОН» (этап F1.d) — состояние, действия и подробности ЧЕТЫРЬМЯ карточками,
+              как у раздела «Обновление». Столько же обещаний, сколько у него: у раздела три разных
+              ответа — «разрешён ли телефон и что делает калитка» · «покажи код и отвяжи» ·
+              «по какому адресу телефон меня найдёт».
+
+              ⚠️ ГЛАВНОЕ ОКНО ЗДЕСЬ НИ ПРИ ЧЁМ (решение владельца 10.10.2026): состояние телефона
+              живёт строкой в меню значка и разделом здесь, и больше нигде. Второе место с тем же
+              ответом разошлось бы с первым.
+
+              ⚠️ НИ ОДНОГО АДРЕСА МАШИНЫ И НИ ОДНОГО ПРОПУСКА в разметке: и то и другое приходит
+              из кода, а на кадр (съёмка `settings-phone`) адрес попадает только в виде, который
+              даёт правило выбора, и он там маскируется проверкой кадра.
+            -->
+            <StackPanel x:Name="PhoneSectionPanel" Spacing="12" IsVisible="False">
+              <TextBlock x:Name="PhoneSectionTitle" Classes="sectionTitle" />
+              <TextBlock x:Name="PhoneSectionSubtitleText" Classes="hint" />
+              <!--
+                СЛОВА-ОГРАНИЧИТЕЛЬ (решение владельца 17.10.2026): своя сеть · вход по QR и ответ
+                на вопрос агента · постановка задачи и управление агентами — в разработке · наружу
+                не выходит. Одна строка из словаря — та же, что на странице телефона.
+              -->
+              <TextBlock x:Name="PhoneLimitsText" Classes="hint" TextWrapping="Wrap" />
+
+              <!-- КАРТОЧКА 1: состояние и рубильник. Решение — первой строкой, как в обновлении. -->
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="PhoneStatusText" TextWrapping="Wrap" />
+                  <TextBlock x:Name="PhoneConsentText" Classes="hint" TextWrapping="Wrap" />
+                  <CheckBox x:Name="PhoneAllowedCheck" />
+                  <TextBlock x:Name="PhoneRightNoteText" Classes="hint" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <!--
+                КАРТОЧКА 2: адрес для телефона и QR. Один подходящий — крупно и словами «этот адрес
+                видит телефон»; несколько — ВСЕ и выбор человеком (гадать нельзя, решение владельца);
+                ни одного — словами. Рядом — QR С ТЕМ ЖЕ АДРЕСОМ, когда адрес есть, и слова о том,
+                что ШЕСТЬ ЦИФР человек вводит руками (решение владельца 10.10.2026: в QR цифр нет —
+                в ссылке они осели бы в истории и буфере телефона).
+
+                ⚠️ QR КОДИРУЕТ РОВНО ТУ СТРОКУ, ЧТО ПОКАЗАНА СТРОКОЙ ВЫШЕ В ЭТОЙ ЖЕ КАРТОЧКЕ,
+                и берётся она из ОДНОЙ переменной. Отсюда и правило маски: в прогоне съёмки
+                (ключ `settings-phone`) адрес замаскирован (`Program.MaskAddress`), и QR кадра
+                рисуется ИЗ ЭТОЙ — замаскированной — строки (`192.168.0.х`: обычный текст без
+                номера машины, утечь из него нечему), а человеку сказано словами, что код здесь
+                образец. Рисует картинку библиотека (QRCoder), окно её только показывает.
+
+                ⚠️ **Рисует код ДВЕРЬ, и кадру она даётся ТОЛЬКО НА РИСОВАНИЕ**
+                (`Program.BuildShotSettingsWindow`: пустая калитка — ни сопряжения, ни устройств,
+                ни порта). Пропадёт она — пропадёт и код, поэтому это стережёт `PhoneShotFrameTests`
+                на живом пути съёмки, а не на своей сборке окна.
+
+                ⚠️ **КАРТОЧКА СТОИТ ВТОРОЙ, А НЕ ТРЕТЬЕЙ, и это найдено кадром, а не на глаз.**
+                Прежде адрес и QR лежали ПОСЛЕ порта, кода и списка устройств — и на кадре
+                `settings-phone` (окно 1080×900, содержимое прокручивается) карточка целиком
+                оставалась НИЖЕ СГИБА: в README уезжала шапка раздела, а главного — «вот адрес,
+                вот код» — не было видно вовсе. Порядок карточек — это порядок ответов, и первый
+                ответ у человека один: по какому адресу и по какому коду он подключит телефон.
+                Порт и список устройств — подробности, они ниже.
+              -->
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="PhoneAddressTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBlock x:Name="PhoneAddressText" FontSize="18" FontWeight="SemiBold"
+                             TextWrapping="Wrap" IsVisible="False" />
+                  <ComboBox x:Name="PhoneAddressCombo" Width="280" HorizontalAlignment="Left"
+                            IsVisible="False" />
+                  <TextBlock x:Name="PhoneAddressNoText" Classes="hint" TextWrapping="Wrap"
+                             IsVisible="False" />
+
+                  <TextBlock x:Name="PhoneQrTitle" FontWeight="SemiBold" TextWrapping="Wrap"
+                             Margin="0,4,0,0" />
+                  <!-- Размер задан, чтобы вёрстка не прыгала между «картинка есть» и «картинки нет».
+                       `Uniform` — а не `None`: настоящий QR при 8 точках на модуль бывает и крупнее,
+                       и мельче 200, и вписать его в квадрат 200×200 — работа вёрстки, а не картинки. -->
+                  <Image x:Name="PhoneQrImage" Width="200" Height="200"
+                         HorizontalAlignment="Left" Stretch="Uniform" />
+                  <TextBlock x:Name="PhoneQrNoText" Classes="hint" TextWrapping="Wrap"
+                             IsVisible="False" />
+                  <TextBlock x:Name="PhoneQrNoteText" Classes="hint" TextWrapping="Wrap" />
+
+                  <TextBlock x:Name="PhoneSeenText" Classes="hint" TextWrapping="Wrap" />
+                  <TextBlock x:Name="PhoneAddressNoteText" Classes="hint" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <!--
+                КАРТОЧКА 3: порт, код сопряжения и список подключённых. Код показывается КРУПНО —
+                его диктуют с экрана на телефон, — и словами: что делать и сколько он живёт.
+              -->
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="PhonePortLabel" />
+                  <NumericUpDown x:Name="PhonePortBox" Width="160" HorizontalAlignment="Left"
+                                 Minimum="1" Maximum="65535" Increment="1" FormatString="0" />
+                  <TextBlock x:Name="PhoneForbiddenPortsText" Classes="hint" TextWrapping="Wrap" />
+                  <TextBlock x:Name="PhonePortNoteText" Classes="hint" TextWrapping="Wrap" />
+
+                  <Button x:Name="PhoneCodeButton" HorizontalAlignment="Left" />
+                  <TextBlock x:Name="PhoneCodeText"
+                             FontSize="34" FontWeight="Bold" IsVisible="False" TextWrapping="Wrap" />
+                  <TextBlock x:Name="PhoneCodeNoteText" Classes="hint" TextWrapping="Wrap"
+                             IsVisible="False" />
+
+                  <TextBlock x:Name="PhoneDevicesTitle" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBlock x:Name="PhoneDevicesCountText" />
+                  <TextBlock x:Name="PhoneDevicesEmptyText" Classes="hint" TextWrapping="Wrap" />
+                  <StackPanel x:Name="PhoneDevicesPanel" Spacing="8" />
+                </StackPanel>
+              </Border>
+
+              <!--
+                КАРТОЧКА 4: ПРАВИЛО БРАНДМАУЭРА (этап F4, кусок 1). Последней — и это порядок
+                ответов, а не остаток: «дотянется ли телефон» решают адрес и код (карточка 2),
+                а пропустит ли Windows входящее — уже подробность того же ответа.
+
+                ⚠️ ЧТО ЗДЕСЬ ГОВОРИТСЯ ЧЕЛОВЕКУ ДО И ПОСЛЕ (решение владельца 11.10.2026:
+                «слова ДО и одна строка ПОСЛЕ»). Слова ДО стоят на экране ПОСТОЯННО, пока действие
+                возможно (`FirewallBeforeText`): что именно изменится на машине и что Windows
+                спросит подтверждение. Строка ПОСЛЕ (`FirewallResultText`) появляется по нажатию
+                и говорит одно: сделано · не сделано · подтверждение не получено.
+
+                ⚠️ НИЧЕГО НЕ ПРОИСХОДИТ БЕЗ ЩЕЛЧКА: ни при открытии калитки, ни при старте панели,
+                и у прогона проверки двери здесь нет вовсе (`FirewallNoDoor`) — правило брандмауэра
+                ставится ТОЛЬКО кнопкой человека.
+              -->
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="FirewallTitleText" FontWeight="SemiBold" TextWrapping="Wrap" />
+                  <TextBlock x:Name="FirewallStateText" TextWrapping="Wrap" />
+                  <TextBlock x:Name="FirewallNoteText" Classes="hint" TextWrapping="Wrap" />
+                  <TextBlock x:Name="FirewallBeforeText" Classes="hint" TextWrapping="Wrap"
+                             IsVisible="False" />
+                  <Button x:Name="FirewallButton" HorizontalAlignment="Left" />
+                  <TextBlock x:Name="FirewallResultText" Classes="hint" TextWrapping="Wrap"
+                             IsVisible="False" />
                 </StackPanel>
               </Border>
             </StackPanel>

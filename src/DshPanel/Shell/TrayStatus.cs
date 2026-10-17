@@ -61,7 +61,24 @@ public sealed record TrayStatusLines(
     TrayStatusLine Server,
     TrayStatusLine Agent,
     TrayStatusLine Peak,
-    TrayStatusLine Update);
+    TrayStatusLine Update)
+{
+    /// <summary>
+    /// СТРОКА ТЕЛЕФОНА — ПЯТАЯ, И ОНА НЕОБЯЗАТЕЛЬНА: <see cref="TrayStatusLine.Text"/> пуст —
+    /// строки в меню НЕТ ВОСЕМЬ (не «серая строка без слов», а ничего). Требование владельца
+    /// 10.10.2026 дословно: пока телефон не разрешён, о нём в меню не сказано ничего.
+    ///
+    /// ⚠️ **Отдельным свойством, а не пятым членом записи, и это не вкусовщина.** Пятый член
+    /// сделал бы строку телефона обязательной ВЕЗДЕ, где собираются строки состояния (включая
+    /// прогоны и кадры, где телефона нет вовсе), и «строки нет» перестало бы выражаться вовсе.
+    /// Решение о том, есть ли строка, живёт в одном месте — <see cref="Server.PhoneDecisions.TrayLine"/>
+    /// и <see cref="Server.PhoneDecisions.TrayLineShown"/>.
+    /// </summary>
+    public TrayStatusLine Phone { get; init; } = new(string.Empty, TrayTone.Neutral);
+
+    /// <summary>Показывать ли строку телефона: у пустой строки в меню места нет.</summary>
+    public bool HasPhone => Phone.Text.Length > 0;
+}
 
 public static class TrayStatus
 {
@@ -84,6 +101,11 @@ public static class TrayStatus
     /// Готовая строка обновления (текст и тон) — от контроллера обновления. Выдумывать её здесь
     /// нельзя: «проверено 28.09.2026» — это факт о проверке, а не о сервере.
     /// </param>
+    /// <param name="phone">
+    /// Готовая строка телефона (F1.d) — из <see cref="Server.PhoneDecisions.TrayLine"/>: пустой
+    /// текст значит «строки в меню нет», и решается это там же, где всё остальное о телефоне.
+    /// Здесь из неё ничего не выводится — иначе решений о телефоне стало бы два.
+    /// </param>
     public static TrayStatusLines Build(
         bool connected,
         ServerPresence presence,
@@ -92,7 +114,8 @@ public static class TrayStatus
         string agentTitle,
         string balanceSummary,
         bool inPeak,
-        TrayStatusLine update)
+        TrayStatusLine update,
+        TrayStatusLine? phone = null)
     {
         ArgumentNullException.ThrowIfNull(update);
 
@@ -126,7 +149,10 @@ public static class TrayStatus
             new TrayStatusLine(server, ServerTone(connected, presence)),
             new TrayStatusLine(agent, AgentTone(agentTitle, balanceSummary)),
             new TrayStatusLine(peak, PeakTone(inPeak)),
-            update);
+            update)
+        {
+            Phone = phone ?? new TrayStatusLine(string.Empty, TrayTone.Neutral),
+        };
     }
 
     /// <summary>

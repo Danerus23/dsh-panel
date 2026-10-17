@@ -77,6 +77,9 @@ public class RestartServerTests
         public ServerState Adopt(FoundServer found) => State;
 
         public ServerState Detach() => State;
+        /// <summary>Подставной ответ на «подними свой сервер заново»: ничего не делает.</summary>
+        public ServerState RecoverOwnServer(TimeSpan timeout, bool confirmed) => State;
+
     }
 
     private static readonly ServerState Running =
@@ -507,6 +510,88 @@ public class RestartServerTests
 
         Assert.Single(rememberedKiller.Calls);
         Assert.Equal(19804, rememberedKiller.Calls[0].Pid);
+    }
+
+    /// <summary>
+    /// «ПОДНЯТЬ СВОЙ СЕРВЕР ЗАНОВО» ГАСИТ НАЙДЕННЫЙ ТОЛЬКО ПО ПОДТВЕРЖДЕНИЮ (решение владельца
+    /// 13.10.2026, ответ 2).
+    ///
+    /// **От какого случая.** На порту панели работает DSH, которого она НЕ поднимала и под
+    /// управление не брала: своей ссылки входа у панели нет, вопросы агента на телефон не придут,
+    /// обновить сервер DSH нельзя. Единственный путь назад — погасить найденный и поднять свой,
+    /// и он спрашивает КАЖДЫЙ раз: через найденный сервер может идти работа человека.
+    ///
+    /// ⚠️ У запомненного согласия на ВСТРОЕННЫЙ сервер здесь нет силы: это другое состояние,
+    /// и второй сервер панель по чужому согласию гасить не имеет права.
+    ///
+    /// Мутации, которые обязаны упасть здесь: «гасить без подтверждения» · «принять запомненное
+    /// согласие за согласие на этот сервер» · «погасить не тот процесс» (номер без времени создания).
+    /// </summary>
+    [Fact]
+    public void Свой_сервер_заново_гасит_найденный_только_по_подтверждению()
+    {
+        var probe = ProbeFor(3080, 19804, DshCommandLine(3080));
+        var killer = new RecordingKiller();
+
+        // ⚠️ Порт панели приходит из НАСТРОЕК (`Settings.ServerPort`), и в стенде его роль играет
+        // `AdoptedServerPort`. Ставить туда 3080 НЕЛЬЗЯ: контроллер примет запомненное согласие
+        // («человек уже ответил») и встроится — то есть проверка попала бы в ДРУГОЕ положение.
+        // Поэтому порт ставится напрямую: положение «панель нашла на своём порту сервер, которого
+        // не поднимала» — это ровно `_port` без владельца и без запомненного согласия.
+        using var controller = Controller(probe, killer);
+
+        typeof(ServerController)
+            .GetField("_port", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(controller, 3080);
+
+        Assert.Equal(ServerOwner.None, controller.Owner);
+        Assert.True(controller.Refresh().IsRunning, "стенд не показывает работающий сервер — мерить нечего");
+
+        // (1) БЕЗ ПОДТВЕРЖДЕНИЯ НЕ ГАСИТСЯ НИЧЕГО, и вопрос назван словами с портом.
+        var refused = controller.RecoverOwnServer(TimeSpan.Zero, confirmed: false);
+
+        Assert.Empty(killer.Calls);
+        Assert.True(refused.IsRunning, "найденный сервер погашен без подтверждения человека");
+        Assert.Equal(ServerOwner.None, controller.Owner);
+        Assert.Contains("3080", refused.Detail, StringComparison.Ordinal);
+
+        // (2) С ПОДТВЕРЖДЕНИЕМ — ГАСИТСЯ РОВНО ТОТ ПРОЦЕСС, ЧТО ЗАНИМАЕТ ПОРТ, вместе со временем
+        // его создания (номер процесса переиспользуется — урок v1).
+        controller.RecoverOwnServer(TimeSpan.Zero, confirmed: true);
+
+        var kill = Assert.Single(killer.Calls);
+        Assert.Equal(19804, kill.Pid);
+        Assert.Equal(63_000_000_000_000_000, kill.StartedAt);
+
+        // Свой сервер НЕ ПОДНЯТ, и причина сказана словами: в стенде порт после гашения остаётся
+        // занятым (проба отвечает тем же номером процесса) — панель обязана сказать это, а не
+        // попытаться занять порт и упасть.
+        Assert.Contains("3080", controller.State.Detail, StringComparison.Ordinal);
+        Assert.Contains(
+            PanelStrings.SrvPortStillBusyFormat.Substring(0, PanelStrings.SrvPortStillBusyFormat.IndexOf('{')),
+            controller.State.Detail,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ВСТРОЕННЫЙ СЕРВЕР ЭТОЙ КНОПКОЙ НЕ ГАСИТСЯ: у него своя дорога («Отвязаться» и «Остановить»).
+    /// Это и есть то различие «взятого чужого» и «поднятого не панелью», которое выбрал владелец.
+    /// </summary>
+    [Fact]
+    public void Свой_сервер_заново_не_трогает_встроенный()
+    {
+        var probe = ProbeFor(3080, 19804, DshCommandLine(3080));
+        var killer = new RecordingKiller();
+
+        using var controller = Controller(probe, killer);
+        controller.Adopt(controller.Scan().Found[0]);
+
+        Assert.Equal(ServerOwner.Adopted, controller.Owner);
+
+        controller.RecoverOwnServer(TimeSpan.Zero, confirmed: true);
+
+        Assert.Empty(killer.Calls);
+        Assert.Equal(ServerOwner.Adopted, controller.Owner);
     }
 
     // ---------------------------------------------------------------- служебное

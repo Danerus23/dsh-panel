@@ -24,8 +24,9 @@ public static class StartModes
     {
         "--shot", "--tray-selftest", "--shell-selftest", "--instance-selftest", "--instance-probe",
         "--autostart-selftest", "--settings-selftest", "--balance-selftest", "--server-selftest",
+        "--phone-selftest",
         "--backup-selftest", "--isolation-selftest", "--lang-selftest", "--update-selftest",
-        "--with-my-key", "--run-root",
+        "--engine-install-selftest", "--engine-update-selftest", "--engine-rollback-selftest", "--with-my-key", "--run-root",
 
         // Модификатор языка: сам по себе он не проверка, но и опечаткой быть не обязан —
         // им снимают окна на трёх языках. Снимается до разбора режимов, как и `--run-root`
@@ -53,6 +54,17 @@ public static class StartModes
     /// <summary>Имя окна съёмки: раздел «Сервер» настроек — отчёт окружения группами.</summary>
     public const string ShotSettingsServer = "settings-server";
 
+    /// <summary>
+    /// Имя окна съёмки: раздел «Телефон» настроек (этап F1.d) — состояние, код сопряжения, список
+    /// подключённых и адрес своей сети.
+    ///
+    /// ⚠️ **Кадр этого раздела обязан быть БЕЗ адреса машины и БЕЗ пропуска** (красная линия 7):
+    /// съёмка идёт прогоном проверки, права занять порт у неё нет, файл пропуска ей не выдан,
+    /// а адрес показывается только тот, что дало правило выбора. Проверяется это чтением кадра,
+    /// а не обещанием.
+    /// </summary>
+    public const string ShotSettingsPhone = "settings-phone";
+
     /// <summary>Имя окна съёмки: копии и восстановление.</summary>
     public const string ShotBackup = "backup";
 
@@ -75,6 +87,59 @@ public static class StartModes
 
     /// <summary>Имя окна съёмки: «Сообщить о проблеме».</summary>
     public const string ShotIssue = "issue";
+
+    /// <summary>
+    /// Имя окна съёмки: раздел «Общее» настроек — ТО, ЧТО ЭТО ИМЯ И ОБЕЩАЕТ.
+    ///
+    /// ⚠️ **От какого случая (фаза 3, решение владельца 12.10.2026).** Имя <c>settings</c> снимало
+    /// раздел «Резервное копирование», а «Общего» кадра не было ВООБЩЕ: имя обещало одно, кадр
+    /// показывал другое. Теперь у каждого раздела своё имя, а у «Общего» — это.
+    /// </summary>
+    public const string ShotSettingsGeneral = "settings-general";
+
+    /// <summary>Имя окна съёмки: раздел «Резервное копирование» настроек — то, что снимало `settings`.</summary>
+    public const string ShotSettingsBackup = "settings-backup";
+
+    /// <summary>
+    /// Имя окна съёмки: подтверждение остановки ВСТРОЕННОГО сервера (`ConfirmStopWindow`).
+    ///
+    /// ⚠️ Диалоги в списке съёмки появились 12.10.2026 вместе с фазой 3: до этого их **нельзя было
+    /// посмотреть вовсе** — ни проверяющему, ни владельцу. А это те окна, где человек принимает
+    /// необратимые решения, и слова в них важны не меньше, чем в главном.
+    /// </summary>
+    public const string ShotConfirmStop = "confirm-stop";
+
+    /// <summary>Имя окна съёмки: подтверждение обновления движка (`ConfirmEngineWindow`).</summary>
+    public const string ShotConfirmEngine = "confirm-engine";
+
+    /// <summary>Имя окна съёмки: предложение погасить сервер перед копией и накатом (`BackupStopWindow`).</summary>
+    public const string ShotBackupStop = "backup-stop";
+
+    /// <summary>Имя окна съёмки: несохранённая правка при закрытии настроек (`UnsavedChangesWindow`).</summary>
+    public const string ShotUnsavedChanges = "unsaved-changes";
+
+    /// <summary>
+    /// Имя окна съёмки: ОКНО ПЕРВОГО ЗАПУСКА (`FirstRunWindow`, A5).
+    ///
+    /// ⚠️ Это единственный способ УВИДЕТЬ это окно, не трогая профиль и не притворяясь незнакомцем:
+    /// у человека окно показывается один раз, и пути «показать снова» в панели нет (решение A5 §3).
+    /// Кадр снимает ХУДШИЙ случай — «ни сервера DSH, ни ключа», — образцовой дверью, а не машиной.
+    /// </summary>
+    public const string ShotFirstRun = "first-run";
+
+    /// <summary>
+    /// Имя кадра: ГЛАВНОЕ ОКНО С ДВУМЯ НАЙДЕННЫМИ СЕРВЕРАМИ.
+    ///
+    /// ⚠️ **Находки на этом кадре ВЫДУМАНЫ, и это написано прямо.** Настоящая съёмка живых серверов
+    /// владельца не показывает вовсе: файлы состояния ей не выданы, права занять порт нет, и в кадр
+    /// не может попасть ни его сервер, ни его процессы (см. `Program.Shot`). А решение владельца
+    /// 10.10.2026 требует **кадр с двумя найденными серверами** в приёмке: два сервера — обычный
+    /// случай для пометок «наш движок (версия)» и «чужой». Поэтому здесь подставлена **проба**
+    /// (факты о процессах), а окно, модель и кнопки — настоящие; «наш движок» берётся из НАСТОЯЩЕЙ
+    /// папки движка этого прогона и проверенной версии, так что пометка на кадре — та же, что
+    /// человек увидит в жизни. Порты 3080 и 3099 и номера процессов — выдуманы.
+    /// </summary>
+    public const string ShotMainTwoServers = "main-two-servers";
     /// <summary>
     /// Имена окон, которые умеет снять <c>--shot</c>: <c>--shot &lt;файл&gt; [имя]</c>.
     /// Пустое имя — главное окно панели, и его в списке нет: это «имя не назвали», а не окно.
@@ -100,9 +165,36 @@ public static class StartModes
     /// </summary>
     public static readonly string[] ShotWindows =
     {
-        ShotSettings, ShotSettingsBalance, ShotSettingsUpdate, ShotSettingsServer, ShotBackup, ShotAbout, ShotPeaks,
-        ShotPricingHistory, ShotIssue,
+        ShotSettings, ShotSettingsGeneral, ShotSettingsBackup, ShotSettingsBalance, ShotSettingsUpdate,
+        ShotSettingsServer, ShotSettingsPhone,
+        ShotBackup, ShotAbout, ShotPeaks,
+        ShotPricingHistory, ShotIssue, ShotMainTwoServers,
+
+        // ДИАЛОГИ (фаза 3, 12.10.2026): у каждого имени обязан быть кадр, и это стережёт прогон.
+        ShotConfirmStop, ShotConfirmEngine, ShotBackupStop, ShotUnsavedChanges,
+
+        // ОКНО ПЕРВОГО ЗАПУСКА (A5): у человека оно показывается один раз, и увидеть его иначе
+        // можно только кадром — поэтому имя живёт в этом же списке, а не в отдельном.
+        ShotFirstRun,
     };
+
+    /// <summary>
+    /// ОТКУДА ДАННЫЕ НА КАДРЕ. Два случая, и оба названы: образцовые (выдуманные и обезличенные)
+    /// — для всех кадров, кроме одного; настоящие (проба процессов) — для кадра «два найденных
+    /// сервера», где дело именно в пометках «наш движок (версия)» и «чужой».
+    ///
+    /// ⚠️ Отдельным перечислением, а не `bool`: у значения два СМЫСЛА, и `true`/`false` на месте
+    /// вызова не читается («sample = false» — это «настоящие» или «не образцовые»?). Решение
+    /// принимает <c>Program.ShotDoorSource</c>, и его проверяет прогон.
+    /// </summary>
+    public enum ShotDoors
+    {
+        /// <summary>Образцовые данные съёмки: выдуманные, обезличенные, ничего не читают.</summary>
+        Sample,
+
+        /// <summary>Настоящая модель окна (с подставленной пробой процессов) — только «две находки».</summary>
+        Real,
+    }
 
     /// <summary>
     /// Знает ли панель такое имя окна съёмки. Спрашивает РАЗБОР (<c>Program.Shot</c>), а список —

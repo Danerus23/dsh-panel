@@ -144,8 +144,8 @@ public static class UpdateLines
         if (!newer) return (false, PanelStrings.UpdateAlreadyLatest);
 
         return ok && assets.HasArchive && assets.HasSums
-            ? (true, PanelStrings.UpdatePrepareHint)
-            : (false, PanelStrings.UpdateNeedCheckHint);
+            ? (true, PanelStrings.UpdatePrepareNote)
+            : (false, PanelStrings.UpdateNeedCheckNote);
     }
 
     /// <summary>
@@ -208,5 +208,41 @@ public static class UpdateLines
         return string.Equals(text, (verdict ?? string.Empty).Trim(), StringComparison.Ordinal)
             ? string.Empty
             : text;
+    }
+
+    /// <summary>
+    /// СТРОКА О ПОПЫТКЕ: «последняя попытка: {когда} — …» — или ПУСТО, когда попытки не было
+    /// либо она удалась.
+    ///
+    /// **Два ответа, и оба нужны человеку:**
+    ///
+    /// * **отказ по числу запросов** (403/429) — названа причина И **когда панель попробует снова**
+    ///   (<paramref name="nextAttempt"/>): без второго человек ждал бы, не зная сколько, и решил бы,
+    ///   что панель сломалась;
+    /// * **прочая неудача** — названа причина как есть.
+    ///
+    /// ⚠️ У удачной попытки строки НЕТ: про неё говорит строка «проверено {дата}», и повторять
+    /// то же самое дважды панель не должна (то же правило, что у <see cref="SourceLine"/>).
+    /// </summary>
+    public static string AttemptLine(UpdateAttempt? attempt, DateTimeOffset? nextAttempt)
+    {
+        if (attempt is not { Failed: true }) return string.Empty;
+
+        var when = PricingDecisions.CheckedText(PricingDecisions.Stamp(attempt.At));
+
+        if (attempt.RateLimited)
+        {
+            var until = nextAttempt is { } moment
+                ? PricingDecisions.CheckedText(PricingDecisions.Stamp(moment))
+                : string.Empty;
+
+            // Причина называется КАК ЕСТЬ (слова берёт клиент) и рядом — до какого времени панель
+            // молчит: без второго человек не знал бы, ждать минуту или сутки.
+            return string.Format(
+                CultureInfo.CurrentCulture, PanelStrings.UpdateAttemptRateLimitedFormat, when, attempt.Error, until);
+        }
+
+        return string.Format(
+            CultureInfo.CurrentCulture, PanelStrings.UpdateAttemptFailedFormat, when, attempt.Error);
     }
 }

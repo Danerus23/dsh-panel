@@ -494,7 +494,7 @@ public class BackupScopeTests
     [Fact]
     public void Подсказка_поля_лишних_имён_коротка_и_не_повторяет_режим()
     {
-        var name = nameof(PanelStrings.BackupScopeExtraHint);
+        var name = nameof(PanelStrings.BackupScopeExtraNote);
 
         foreach (var language in DshPanel.Localization.Loc.Known)
         {

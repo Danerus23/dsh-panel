@@ -81,7 +81,7 @@ public class SettingsTests
             workDir: @"C:\Проба\работа",
             workDirConfigured: true,
             serverPort: 3080,
-            serverText: PanelStrings.ServerNotStartedWithPort);
+            portState: PanelStrings.EnvPortFree);
 
         public string EnvironmentText() => EnvironmentInfo().Text();
 
@@ -335,7 +335,7 @@ public class SettingsTests
             Assert.NotEqual(string.Empty, controller.LoadProblem);
             Assert.False(controller.Save(new PanelSettings { Theme = PanelSettings.ThemeDark }));
 
-            Assert.Contains(log, line => line.Contains("прогон проверки", StringComparison.Ordinal));
+            Assert.Contains(log, line => line.Contains(PanelStrings.SettingsReadOnlyNote, StringComparison.Ordinal));
             Assert.Equal(PanelSettings.ThemeDark, store.Load().Settings.Theme);
         }
         finally
@@ -518,17 +518,31 @@ public class SettingsTests
         Assert.Equal(PanelSettings.ThemeIndex(PanelSettings.ThemeDark), theme!.SelectedIndex);
         Assert.Equal(3, theme.ItemCount);
 
-        // ОТЧЁТ ОКРУЖЕНИЯ — ГРУППАМИ, а не абзацем (просьба владельца 28.09.2026): у раздела
-        // «Сервер» три группы, и в каждой свои строки. Прежней одной строки текста больше нет.
+        // ОТЧЁТ ОКРУЖЕНИЯ — КАРТОЧКАМИ, а не абзацем (просьба владельца 28.09.2026; форма карточек
+        // принята им 14.10.2026 по рендеру): карточка — это `Border.card` с заголовком внутри,
+        // и без умений она одна — «Что найдено на этой машине». Прежней одной строки текста нет.
         Assert.NotEmpty(environment!.Children);
-        Assert.Equal(3, environment.Children.Count);
 
-        var groups = environment.Children.OfType<StackPanel>().Select(group =>
-            group.Children.OfType<TextBlock>().FirstOrDefault()?.Text ?? string.Empty).ToList();
+        // Умений у подставных настроек нет — значит карточка ровно одна, и это проверяемое
+        // состояние, а не недоделка: таблицу умений приносит та же дверь отчёта.
+        Assert.Single(environment.Children);
 
-        Assert.Contains(PanelStrings.EnvGroupSetup, groups);
-        Assert.Contains(PanelStrings.EnvGroupRuntime, groups);
-        Assert.Contains(PanelStrings.EnvGroupDsh, groups);
+        var card = Assert.IsType<Border>(environment.Children[0]);
+        Assert.Contains("card", card.Classes);
+
+        var title = card.Child is StackPanel stack
+            ? stack.Children.OfType<TextBlock>().FirstOrDefault()?.Text ?? string.Empty
+            : string.Empty;
+
+        Assert.Equal(PanelStrings.EnvFoundTitle, title);
+
+        // И ПОЯСНЕНИЕ ПОД ЗАГОЛОВКОМ — ОДНОЙ СТРОКОЙ, как у GOV.UK summary list: имя блока, под ним
+        // одна короткая строка, а не абзац (прежний подзаголовок раздела убран — решение владельца).
+        var subtitle = card.Child is StackPanel lines
+            ? lines.Children.OfType<TextBlock>().Skip(1).FirstOrDefault()?.Text ?? string.Empty
+            : string.Empty;
+
+        Assert.Equal(PanelStrings.EnvFoundSubtitle, subtitle);
 
         Assert.True(suggest!.IsVisible, "найденная рабочая папка обязана быть видна как предложение");
     }
@@ -585,6 +599,7 @@ public class SettingsTests
     [AvaloniaFact]
     public void Галочка_автозапуска_в_настройках_и_подстановка_не_считается_нажатием()
     {
+        // КОРЕНЬ: путь к своему exe для сверки записи; в тексте проверяется подстрока «Автозапуск включён», не путь.
         var self = Environment.ProcessPath!;
         var store = new FakeAutostartStore();
         store.Seed(AutostartDecisions.ValueName, AutostartDecisions.BuildValue(self));
@@ -622,10 +637,12 @@ public class SettingsTests
     public void В_прогоне_проверки_галочка_автозапуска_недоступна()
     {
         var inner = new FakeAutostartStore();
+        // КОРЕНЬ: значение записи в подставном хранилище (как в реестре), а не текст человеку.
         inner.Seed(AutostartDecisions.ValueName, "\"" + Environment.ProcessPath + "\"");
 
         var window = new SettingsWindow();
         window.Attach(new FakeSettings(), new AutostartController(
+            // КОРЕНЬ: свой exe для контроллера «только на чтение»; показывается подстрока о блокировке, не путь.
             new ReadOnlyAutostartStore(inner), Environment.ProcessPath!, _ => { }));
 
         var check = window.FindControl<CheckBox>("AutostartCheck");
@@ -955,7 +972,7 @@ public class SettingsTests
             Assert.False(locked.SetAdoptedServer(ServerDecisions.OwnerPort));
             Assert.Equal(0, locked.Settings.AdoptedServerPort);
             Assert.Equal(0, store.Load().Settings.AdoptedServerPort);
-            Assert.Contains(lockedLog, line => line.Contains("прогон проверки", StringComparison.Ordinal));
+            Assert.Contains(lockedLog, line => line.Contains(PanelStrings.SettingsReadOnlyNote, StringComparison.Ordinal));
             Assert.DoesNotContain(lockedLog, line => line.Contains("запомнил согласие", StringComparison.Ordinal));
         }
         finally
@@ -1242,7 +1259,7 @@ public class SettingsTests
             Assert.False(locked.SetWindowPlacement(10, 10, 640, 480));
 
             Assert.Equal(300, store.Load().Settings.WindowX);
-            Assert.Contains(log, line => line.Contains("прогон проверки", StringComparison.Ordinal));
+            Assert.Contains(log, line => line.Contains(PanelStrings.SettingsReadOnlyNote, StringComparison.Ordinal));
         }
         finally
         {

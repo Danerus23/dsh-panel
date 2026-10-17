@@ -88,7 +88,14 @@ public static class HeadlessRun
         var settings = load.Settings;
         var engine = DshEngine.Locate();
 
-        Say(mode, "режим: копия без окна — полная (с движком и Node), имя по правилу v1");
+        // ПРАВО ВЗЯТЬ МАШИННУЮ УСТАНОВКУ ДВИЖКА (A4, находка C1 CH-08). Прогон без окна человеком
+        // не запускается, поэтому ответ ожидаемо «нельзя» — но СПРАШИВАЕТСЯ, а не решается
+        // литералом: одно место правды на всю панель (`RunRights`), и завтра это условие
+        // поменяется там же, где все остальные.
+        var mayTakeMachineEngine = RunRights.MachineEngineData(context, humanLaunch: false);
+
+        Say(mode, "режим: копия без окна — полная, имя по правилу v1; движок и Node берутся " +
+                  "только из своего корня прогона, машинная установка — только с правом");
         Say(mode, $"изоляция: корень прогона {DisplayMask.Path(paths.Root)}");
         Say(mode, $"настройки: {DisplayMask.Path(paths.SettingsFile)} — " +
                   (load.Ok ? "прочитаны" : "НЕ разобраны, взяты умолчания"));
@@ -100,10 +107,9 @@ public static class HeadlessRun
             Say(mode, line);
         }
 
-        Say(mode, engine is null
-            ? "движок и Node не найдены: копия соберётся без них и самодостаточной не будет — " +
-              "движок назовёт это замечанием (имя файла при этом всё равно скажет «полная»)"
-            : $"движок найден: {DisplayMask.Path(engine.BinPath)} (версия {BackupEngine.InstalledVersion(engine)})");
+        // СТРОКА О ДВИЖКЕ — ТРЁХЗНАЧНАЯ, и это правка правды, а не стиля: прежде она обещала
+        // «полную (с движком и Node)» там, где в изоляции движка в копии не будет вовсе.
+        Say(mode, EngineLine(paths, engine, mayTakeMachineEngine));
 
         // Сервер — ТОЛЬКО чтением. Гасить его этот режим не умеет и не станет: гасит человек.
         var server = HeadlessServer.Read(probe, settings.ServerPort);
@@ -236,10 +242,49 @@ public static class HeadlessRun
             paths,
             settings,
             allowed: BackupController.For(context, humanLaunch: false),
+
+            // Право — то же, что спрошено выше: одно решение, а не второе рядом.
+            mayTakeMachineEngineData: RunRights.MachineEngineData(context, humanLaunch: false),
+
             locateEngine: engine,
             clock: clock,
             log: journal.Add,
             confineToRunRoot: context.IsIsolated);
+
+    /// <summary>
+    /// ЧТО ЖДЁТ ЧЕЛОВЕКА ОТ ДВИЖКА В ЭТОЙ КОПИИ — ТРИ СОСТОЯНИЯ, ТРИ РАЗНЫХ ТЕКСТА (A4, §4.5).
+    ///
+    /// 1. движок найден и он СВОЙ (под корнем прогона) либо право есть — копия с движком;
+    /// 2. движок найден, но он МАШИННЫЙ и права нет — копия без него, и причина называется
+    ///    ТЕМ ЖЕ ключом, что у плана (<see cref="PanelStrings.BackupEngineOutsideRunRoot"/>):
+    ///    одни слова на всю панель, чтобы отчёт и замечание не спорили;
+    /// 3. движка нет вовсе — тоже ГОТОВЫМ ключом (<see cref="PanelStrings.BackupEngineNotFound"/>).
+    ///
+    /// ⚠️ Движок при этом НЕ обнуляется: он остаётся прочитанным (версия в опись), а в копию
+    /// не попадает — это решает план по пути. Обнулить его значило бы соврать второй раз:
+    /// «движок и Node не найдены» там, где они найдены и не положены.
+    ///
+    /// ⚠️ **НИ ОДНОГО РУССКОГО ЛИТЕРАЛА В ЭТОЙ СТРОКЕ** (находка вычитки `a-3-klyucha.md` §3,
+    /// мутация CD8). Прежде состояния 2 и 3 были написаны здесь по-русски: строка 2 ещё и
+    /// СКЛЕИВАЛА словарный ключ с русской скобкой «(движок найден: …)», и на панели с `en`/`zh`
+    /// человек читал два языка в одном предложении. Теперь оба состояния — ЦЕЛИКОМ словарные;
+    /// проверка `HeadlessModesTests.Строка_отчёта_о_движке_целиком_из_словаря` роняет возврат литерала.
+    ///
+    /// Строка состояния 1 остаётся отчётным голосом: рядом с ней нет нашей фразы из словаря,
+    /// и внутренние имена в отчёте разрешены (отступление №4).
+    /// </summary>
+    internal static string EngineLine(AppPaths paths, DshEngine? engine, bool mayTakeMachineEngine)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        if (engine is null) return PanelStrings.BackupEngineNotFound;
+
+        var inside = BackupPlanner.IsInside(engine.BinPath, paths.Root);
+
+        return inside || mayTakeMachineEngine
+            ? $"движок найден: {DisplayMask.Path(engine.BinPath)} (версия {BackupEngine.InstalledVersion(engine)})"
+            : PanelStrings.BackupEngineOutsideRunRoot;
+    }
 
     /// <summary>Версия движка, которой снята копия (поле описи <c>versions.dsh</c>). Пусто — не записана.</summary>
     private static string CopyEngineVersion(BackupManifest? manifest) =>

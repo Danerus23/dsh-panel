@@ -34,7 +34,7 @@
 
     <AssemblyName>DshPanel</AssemblyName>
     <RootNamespace>DshPanel</RootNamespace>
-    <Version>2.0.3</Version>
+    <Version>2.1.0</Version>
     <Product>DSH Panel</Product>
   </PropertyGroup>
 
@@ -69,6 +69,19 @@
       все строки в ключи. Файл без BOM: `.json` с меткой ломает разбор.
     -->
     <EmbeddedResource Include="Localization\*.json" />
+
+    <!--
+      ЗАМОК ПРОВЕРЕННОГО ДВИЖКА — тоже внутри сборки, и по той же причине: панель раздаётся
+      ОДНИМ exe, а замок нужен ей ДО первой установки и БЕЗ сети (решение владельца 10.10.2026:
+      ставить движок точными версиями и суммами, «как решит npm» — нельзя). Файл снимается
+      замером (`upd-build\make-engine-lock.ps1`) из СВОЕЙ изолированной установки и лежит в корне
+      дерева; в раздачу он входит этим ресурсом, а обновляться может отдельно — одним файлом
+      данных, как подсказки о версиях.
+
+      Имя ресурса получается из пути точками, и оно НЕ хардкодится: `EngineTreeLock` ищет замок
+      по суффиксу `.EngineLock.json`. Файл без BOM: `.json` с меткой ломает разбор.
+    -->
+    <EmbeddedResource Include="..\..\engine-lock.json" Link="Server/engine-lock.json" LogicalName="DshPanel.Server.EngineTreeLock.json" />
   </ItemGroup>
 
   <ItemGroup>
@@ -97,6 +110,20 @@
          как в v1: им снимались кадры для README и проверялась вёрстка. Без этого
          пакета проверить, что нарисовано, можно только показав окно человеку. -->
     <PackageReference Include="Avalonia.Headless" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      QR ДЛЯ ТЕЛЕФОНА — единственная библиотека, добавленная ради картинки, которую человек
+      наводит камерой (решение владельца 11.10.2026). Своего генератора в панели НЕТ и не будет:
+      «похожее на QR» — это мусор в камере, а не код.
+
+      ⚠️ Версия — в `Directory.Packages.props`; замок `packages.lock.json` держит её вместе со
+      всем деревом. Взято ради ДВУХ вещей: `QRCodeGenerator.CreateQrCode` (кодирование адреса)
+      и `PngByteQRCode` (готовый PNG — рисовать PNG самим не надо). Нативных частей в пакете нет,
+      в сеть он не ходит: кодирование считается на месте.
+    -->
+    <PackageReference Include="QRCoder" />
   </ItemGroup>
 
 </Project>

@@ -276,6 +276,23 @@ public static class BackupPlanner
     /// В режиме <see cref="BackupScope.Full"/> список не действует вовсе (там не пропускается
     /// ничего), и об этом план говорит замечанием — иначе выключенный фильтр выглядел бы забытым.
     /// </param>
+    /// <param name="mayTakeMachineEngineData">
+    /// ПРАВО ВЗЯТЬ ФАЙЛЫ МАШИННОЙ УСТАНОВКИ ДВИЖКА (<see cref="RunRights.MachineEngineData"/>).
+    /// Умолчание — <c>false</c>, и это второй рубеж, а не украшение: забыли передать — копия
+    /// соберётся БЕЗ машинного движка и НАЗОВЁТ отказ, а не унесёт его тихо.
+    ///
+    /// Установка движка берётся в копию, если **обе** её половины (каталог пакетов npm и каталог
+    /// Node) лежат под корнем прогона — это своё; либо если право выдано — это человек. Иначе
+    /// ни одна половина не добавляется, а в замечания уходит
+    /// <see cref="PanelStrings.BackupEngineOutsideRunRoot"/>.
+    /// </param>
+    /// <param name="confineToRunRoot">
+    /// БРАТЬ ТОЛЬКО КОРНИ ПОД КОРНЕМ ПРОГОНА (находка C1 CH-11 — расширение A4). Ставит
+    /// изолированный прогон. Рабочая папка и каталоги ключей — тоже корни, и путь у них бывает
+    /// ЧУЖОЙ: <c>--restore &lt;архив&gt; --with-panel</c> кладёт в корень прогона настройки из архива,
+    /// а в настройках бывает записана рабочая папка человека — и следующий <c>--backup</c> унёс бы
+    /// её в архив. Отказ — словами, не молчанием: у каждого пропущенного корня своя строка.
+    /// </param>
     public static BackupPlan Full(
         AppPaths paths,
         string? workingDirectory = null,
@@ -285,7 +302,9 @@ public static class BackupPlanner
         IEnumerable<string>? keyDirectories = null,
         bool shareable = false,
         BackupScope scope = BackupScope.Auto,
-        IEnumerable<string>? extraExclusions = null)
+        IEnumerable<string>? extraExclusions = null,
+        bool mayTakeMachineEngineData = false,
+        bool confineToRunRoot = false)
     {
         ArgumentNullException.ThrowIfNull(paths);
 
@@ -323,6 +342,12 @@ public static class BackupPlanner
         // ⚠️ Ссылка входа попала сюда решением 26.09.2026 вместе с самой ссылкой: в ней ТОКЕН,
         // и «копия для передачи» уезжает другому человеку. В СВОЕЙ копии она остаётся — иначе
         // развёрнутая на той же машине панель потеряла бы кнопку «Открыть панель».
+        //
+        // ⚠️ ПРОПУСК ТЕЛЕФОНА (`state\phone-pass.txt`) — третья вещь того же класса (находка C1,
+        // пачка A цикла C2): по этому файлу калитка пускает устройство к движку, то есть это
+        // пропуск, а не настройка. В «копии для передачи» ему делать нечего: получатель копии
+        // получил бы пропуск к движку того, кто копию снял. В СВОЕЙ копии он остаётся — иначе
+        // развёрнутая на той же машине панель потеряла бы сопряжённые устройства.
         IReadOnlyList<string>? Restricted(string? directory)
         {
             if (!shareable) return null;
@@ -335,8 +360,20 @@ public static class BackupPlanner
             if (BackupPlanner.IsInside(paths.EntryLinkFile, directory))
                 names.Add(AppPaths.EntryLinkFileName);
 
+            if (BackupPlanner.IsInside(paths.PhonePassFile, directory))
+                names.Add(AppPaths.PhonePassFileName);
+
             return names.Count == 0 ? null : names;
         }
+
+        // ЧУЖОЙ ПУТЬ: у изолированного прогона (confineToRunRoot) корень вне его корня не берётся.
+        // У обычного запуска человеком правило молчит — его копия и должна быть самодостаточной.
+        // Функция от ПРАВА не зависит и работает для всех корней сразу: право отвечает на «чей это
+        // прогон», путь — на «чей это каталог», и смешивать их нельзя (разбор A4, §3.1–3.2).
+        bool OutsideRunRoot(string? directory) =>
+            confineToRunRoot
+            && !string.IsNullOrWhiteSpace(directory)
+            && !IsInside(directory, paths.Root);
 
         // 1. Домашний каталог движка: ключи всех агентов, настройки, плагины, сессии и история.
         //    У «копии для передачи» из него выпадает ровно ОДИН файл — ключи доступа.
@@ -358,12 +395,27 @@ public static class BackupPlanner
         // 2. Рабочая папка со всеми проектами — требование владельца дословно.
         //    Если рабочая папка — домашний каталог человека, файл ключей лежит и внутри неё:
         //    тогда правило срабатывает и здесь (см. `Restricted`), а не только у движка.
+        //
+        //    ⚠️ ЧУЖОЙ ПУТЬ В ИЗОЛИРОВАННОМ ПРОГОНЕ НЕ БЕРЁТСЯ (CH-11). Рабочая папка приходит
+        //    ИЗ НАСТРОЕК, а настройки в изолированный корень может положить накат
+        //    (`--restore … --with-panel`): в них бывает записана папка человека, и копия унесла бы
+        //    его проекты — личные данные, а не «просто объём».
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
-            Add(roots, notes, workingDirectory, BackupRootKind.WorkingFolder,
-                PanelStrings.BackupRootWorkingFolder,
-                everything: full, skip: Skip(ProjectTrash), whole: full ? null : WholeGit,
-                files: Restricted(workingDirectory));
+            if (OutsideRunRoot(workingDirectory))
+            {
+                notes.Add(string.Format(
+                    CultureInfo.CurrentCulture,
+                    PanelStrings.BackupWorkingFolderOutsideRunRootFormat,
+                    DisplayMask.Path(workingDirectory)));
+            }
+            else
+            {
+                Add(roots, notes, workingDirectory, BackupRootKind.WorkingFolder,
+                    PanelStrings.BackupRootWorkingFolder,
+                    everything: full, skip: Skip(ProjectTrash), whole: full ? null : WholeGit,
+                    files: Restricted(workingDirectory));
+            }
         }
         else
         {
@@ -391,26 +443,46 @@ public static class BackupPlanner
         else
         {
             var npm = NpmDirectory(engine);
-            if (npm is null)
+            var node = Path.GetDirectoryName(engine.NodePath);
+
+            // СВОЁ — ВСЁ, ЧТО ПОД КОРНЕМ ПРОГОНА; ЧУЖОЕ (машинная установка) — ТОЛЬКО С ПРАВОМ
+            // (находка C1 CH-08). Решение считается по УСТАНОВКЕ ЦЕЛИКОМ: половина движка в копии
+            // хуже, чем никакой — она объявляет копию самодостаточной, не будучи ею.
+            //
+            // ⚠️ Право спрашивается ЗДЕСЬ по значению, а не по «изоляция/человек»: у этого файла
+            // нет контекста прогона, и второе определение изоляции в панели запрещено
+            // (`docs\ISOLATION.md` §2). Значение даёт вызывающий (`RunRights.MachineEngineData`).
+            var outside = new[] { npm, node }
+                .Where(dir => !string.IsNullOrWhiteSpace(dir) && !IsInside(dir, paths.Root))
+                .ToArray();
+
+            if (outside.Length > 0 && !mayTakeMachineEngineData)
             {
-                notes.Add(string.Format(CultureInfo.CurrentCulture, PanelStrings.BackupNpmDirUnknownFormat, DisplayMask.Path(engine.BinPath)));
+                // ОТКАЗ СЛОВАМИ, не молчание: «не найден» и «не положено» — разные факты.
+                notes.Add(PanelStrings.BackupEngineOutsideRunRoot);
             }
             else
             {
-                // Шимы dsh/npm/pnpm лежат рядом с пакетами: без них восстановленная система
-                // не знает команду dsh (урок v1).
-                Add(roots, notes, npm, BackupRootKind.EnginePackages,
-                    PanelStrings.BackupRootEnginePackages,
+                if (npm is null)
+                {
+                    notes.Add(string.Format(CultureInfo.CurrentCulture, PanelStrings.BackupNpmDirUnknownFormat, DisplayMask.Path(engine.BinPath)));
+                }
+                else
+                {
+                    // Шимы dsh/npm/pnpm лежат рядом с пакетами: без них восстановленная система
+                    // не знает команду dsh (урок v1).
+                    Add(roots, notes, npm, BackupRootKind.EnginePackages,
+                        PanelStrings.BackupRootEnginePackages,
+                        everything: true, skip: Skip(null), whole: null);
+                }
+
+                Add(roots, notes, node, BackupRootKind.EngineNode,
+                    PanelStrings.BackupRootNode,
                     everything: true, skip: Skip(null), whole: null);
             }
-
-            var node = Path.GetDirectoryName(engine.NodePath);
-            Add(roots, notes, node, BackupRootKind.EngineNode,
-                PanelStrings.BackupRootNode,
-                everything: true, skip: Skip(null), whole: null);
         }
 
-        AddKeyRoots(roots, notes, paths, withKeys, keyDirectories, Skip(null));
+        AddKeyRoots(roots, notes, paths, withKeys, keyDirectories, Skip(null), confineToRunRoot);
 
         // Режим называют ЗАМЕЧАНИЕМ, а не только подписью в окне: отчёт копии читают и в журнале,
         // и в описи после наката, и «почему копия такая большая» должно быть видно там же, где
@@ -652,7 +724,8 @@ public static class BackupPlanner
         AppPaths paths,
         bool withKeys,
         IEnumerable<string>? configured,
-        IReadOnlyList<string>? extraSkip)
+        IReadOnlyList<string>? extraSkip,
+        bool confineToRunRoot)
     {
         if (!withKeys)
         {
@@ -668,8 +741,23 @@ public static class BackupPlanner
             return;
         }
 
+        var taken = new List<(string Directory, string Prefix)>();
+
         foreach (var (directory, prefix) in keyRoots)
         {
+            // КАТАЛОГ КЛЮЧЕЙ ВНЕ КОРНЯ ПРОГОНА НЕ БЕРЁТСЯ (CH-11). Ключи — данные человека,
+            // и изолированный прогон не владеет каталогом за своим корнем: он там просто
+            // не его. Отказ называется СЛОВАМИ, и это не «ключей нет».
+            if (confineToRunRoot && !IsInside(directory, paths.Root))
+            {
+                notes.Add(string.Format(
+                    CultureInfo.CurrentCulture,
+                    PanelStrings.BackupKeyDirOutsideRunRootFormat,
+                    DisplayMask.Path(directory)));
+
+                continue;
+            }
+
             // Внутри каталога ключей не пропускается НИЧЕГО из общего списка мусора
             // (everything: true): человек разрешил взять каталог целиком, и общее правило мусора
             // тут не судья — оно про сборки и кэши, а здесь лежат файлы, ради которых разрешение
@@ -677,12 +765,18 @@ public static class BackupPlanner
             Add(roots, notes, directory, BackupRootKind.KeyRing,
                 PanelStrings.BackupRootKeys,
                 everything: true, skip: extraSkip, whole: null, groupName: prefix);
+
+            taken.Add((directory, prefix));
         }
+
+        // Пусто — молчим: причина у каждого каталога уже названа выше, и «ключей в копии нет»
+        // второй раз подряд читалось бы как отдельное бедствие.
+        if (taken.Count == 0) return;
 
         notes.Add(string.Format(
             CultureInfo.CurrentCulture,
             PanelStrings.BackupKeysIncludedFormat,
-            string.Join(", ", keyRoots.Select(root => $"«{root.Prefix}»"))));
+            string.Join(", ", taken.Select(root => $"«{root.Prefix}»"))));
     }
 
     // --- сборка корней и проверки раскладки ----------------------------------

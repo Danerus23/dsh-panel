@@ -58,6 +58,9 @@ public class MainWindowLayoutTests
         public ServerState Adopt(FoundServer found) => State;
 
         public ServerState Detach() => State;
+        /// <summary>Подставной ответ на «подними свой сервер заново»: ничего не делает.</summary>
+        public ServerState RecoverOwnServer(TimeSpan timeout, bool confirmed) => State;
+
     }
 
     /// <summary>Дать вёрстке и очереди диспетчера отработать до конца: без этого Bounds ещё нулевые.</summary>

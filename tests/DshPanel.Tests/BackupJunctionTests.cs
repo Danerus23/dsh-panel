@@ -355,7 +355,7 @@ public class BackupJunctionTests
 
             // 2. Полного успеха нет: накат неполный, и это видно и в итоге, и в коде возврата.
             Assert.False(result.Ok, "накат без ссылок не должен выглядеть полным успехом");
-            Assert.Contains("НЕПОЛНОЕ", result.Summary(), StringComparison.Ordinal);
+            Assert.Contains(PanelStrings.RestoreIncompleteSummaryFormat.Split('(')[0], result.Summary(), StringComparison.Ordinal);
             Assert.Contains("ссылок создать не удалось: 8 из 8", result.Summary(), StringComparison.Ordinal);
 
             // 3. Данные легли — «неполный» не значит «ничего не сделано»: итог называет число
@@ -489,7 +489,7 @@ public class BackupJunctionTests
 
             // «копия не снята» без виновника — ровно то, чего быть не должно.
             Assert.Contains("запертый.txt", result.Error, StringComparison.Ordinal);
-            Assert.Contains("НЕ ПРОЧИТАН", result.Error, StringComparison.Ordinal);
+            Assert.Contains("не прочитан", result.Error, StringComparison.Ordinal);
             Assert.Contains("IOException", result.Error, StringComparison.Ordinal);
 
             // И это в отчёте, а не только в поле ошибки: отчёт — то, что читает человек.

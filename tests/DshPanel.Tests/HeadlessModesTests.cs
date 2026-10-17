@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using DshPanel.Backup;
 using DshPanel.Headless;
@@ -345,5 +346,87 @@ public class HeadlessModesTests
         Assert.Contains("той же версии", same, StringComparison.Ordinal);
 
         Assert.Contains("не записана", RestoreEngine.VersionNote(string.Empty, "0.1.5-rc.2"), StringComparison.Ordinal);
+    }
+
+    // --- строка отчёта о движке: целиком из словаря (CD8) ---------------------
+
+    /// <summary>
+    /// СТРОКА ОТЧЁТА О ДВИЖКЕ НЕ СКЛЕИВАЕТ СЛОВАРНЫЙ КЛЮЧ С РУССКИМ ЛИТЕРАЛОМ (находка вычитки
+    /// `_team\c2\a-3-klyucha.md` §3; мутация CD8).
+    ///
+    /// **От какого случая.** В отчёте `--backup` два состояния были написаны здесь, по-русски, —
+    /// и одно из них ещё и приклеивало русскую скобку «(движок найден: …)» к нашему словарному
+    /// ключу. На панели с `en`/`zh` человек читал ДВА ЯЗЫКА В ОДНОМ ПРЕДЛОЖЕНИИ. Это не «отчётный
+    /// голос»: рядом стояла фраза из словаря, и литерал читался как её продолжение.
+    ///
+    /// **Как проверяется.** Строка берётся у того же члена, что её печатает
+    /// (<see cref="HeadlessRun.EngineLine"/>), и сравнивается СО СЛОВАРНЫМ КЛЮЧОМ ЦЕЛИКОМ:
+    /// любая дописанная рядом строка — своя или русская — ломает равенство.
+    ///
+    /// **Мутации, которые обязаны упасть:** «вернуть литерал в состояние «не найдены»» ·
+    /// «вернуть скобку «движок найден» к ключу отказа» (CD8).
+    /// </summary>
+    [Fact]
+    public void Строка_отчёта_о_движке_целиком_из_словаря()
+    {
+        // ДВА каталога, и это существо проверки: корень прогона и МАШИННАЯ установка вне его.
+        // Движок внутри корня считался бы своим (`IsInside`) и проверка мерила бы не тот случай.
+        var root = Path.Combine(Path.GetTempPath(), "dsh-headless-run-" + Guid.NewGuid().ToString("N"));
+        var machineRoot = Path.Combine(Path.GetTempPath(), "dsh-headless-machine-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var paths = AppPaths.Under(root);
+            Directory.CreateDirectory(paths.Root);
+
+            // Движок ВНЕ корня прогона — то есть машинный.
+            var machine = machineRoot;
+            var bin = Path.Combine(machine, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+            Directory.CreateDirectory(Path.GetDirectoryName(bin)!);
+            File.WriteAllText(bin, "// engine\n");
+            File.WriteAllText(
+                Path.Combine(machine, "node_modules", "@deepseek-ai", "dsh", "package.json"),
+                "{\"version\":\"0.1.5-rc.2\"}\n");
+
+            var engine = new Server.DshEngine(Path.Combine(machine, "node.exe"), bin);
+
+            // 1. ДВИЖКА НЕТ — ГОТОВЫЙ КЛЮЧ, ни одного своего слова рядом.
+            Assert.Equal(
+                PanelStrings.BackupEngineNotFound,
+                HeadlessRun.EngineLine(paths, engine: null, mayTakeMachineEngine: false));
+
+            // 2. ДВИЖОК ЕСТЬ, НО НЕ ПОЛОЖЕН — тоже ровно ключ: скобки «движок найден» больше нет.
+            var refused = HeadlessRun.EngineLine(paths, engine, mayTakeMachineEngine: false);
+
+            Assert.Equal(PanelStrings.BackupEngineOutsideRunRoot, refused);
+            Assert.DoesNotContain("движок", refused, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("(", refused, StringComparison.Ordinal);
+
+            // 3. ЗАКОННЫЙ СЛУЧАЙ — отчётный голос: путь под маской, и нашего ключа в строке нет.
+            var allowed = HeadlessRun.EngineLine(paths, engine, mayTakeMachineEngine: true);
+
+            Assert.DoesNotContain(PanelStrings.BackupEngineOutsideRunRoot, allowed, StringComparison.Ordinal);
+            Assert.Contains(DisplayMask.Path(bin), allowed, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Временный каталог в %TEMP%: не убрался — не провал проверки.
+            }
+
+            try
+            {
+                if (Directory.Exists(machineRoot)) Directory.Delete(machineRoot, recursive: true);
+            }
+            catch
+            {
+                // Второй временный каталог — по той же причине.
+            }
+        }
     }
 }

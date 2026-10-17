@@ -13,6 +13,35 @@ public interface IServerControl
 {
     ServerState State { get; }
 
+    /// <summary>
+    /// СОСТОЯНИЕ СЕРВЕРА ПРОЧИТАНО ХОТЬ РАЗ (задание владельца 14.10.2026, §1).
+    ///
+    /// **От какого случая.** В первые мгновения после запуска панели состояние сервера ещё
+    /// не прочитано, и «сервера нет» — это ЕЩЁ НЕ ОТВЕТ, а «не смотрели». Калитка телефона
+    /// спрашивала подписку в этот самый миг и писала в журнал «связи с сервером DSH нет — вопрос
+    /// агенту телефону показать нечем» про работающий СВОЙ сервер (живой случай владельца
+    /// 14.10.2026, 23:53:43). Различать «нет» и «не смотрели» можно только здесь: прочитанность
+    /// знает тот, кто читает.
+    ///
+    /// ⚠️ **Реализация по умолчанию — «прочитано»**: подстановкам сервера в проверках читать
+    /// нечего, они отвечают готовым состоянием, и молчаливо-«неизвестное» сделало бы их слепыми.
+    /// </summary>
+    bool Known => true;
+
+    /// <summary>
+    /// СМЕНА СОСТОЯНИЯ СЕРВЕРА — СООБЩЕНИЕ О ДАННЫХ, А НЕ ЧАСЫ (задание владельца 14.10.2026, §3).
+    ///
+    /// Нужно разделу «Сервер» в настройках: он обязан перерисоваться, когда сервер поднялся или
+    /// погас, — иначе строки порта и состояния остаются прежними до нажатия кнопки. Опрос раз
+    /// в секунду у главного окна — его дело, здесь сообщение.
+    ///
+    /// ⚠️ **Реализация по умолчанию МОЛЧИТ**, и это не заглушка «пока»: подстановок сервера
+    /// в проверках много, и каждой из них заводить событие незачем — молчащая дверь честно
+    /// говорит, что сообщать ей нечего. Тем же способом молчит образцовая дверь обновления
+    /// в `Program` (`IUpdateControl`: «подписка принимается и молчит»).
+    /// </summary>
+    event Action? Changed { add { } remove { } }
+
     /// <summary>Кто поднял сервер, которым управляет панель. Влияет на право гашения.</summary>
     ServerOwner Owner { get; }
 
@@ -56,6 +85,17 @@ public interface IServerControl
     /// контроллер — и решает так же, как при гашении (красная линия 6).
     /// </summary>
     ServerState Restart(TimeSpan timeout, bool confirmed);
+
+    /// <summary>
+    /// ПОДНЯТЬ СВОЙ СЕРВЕР ЗАНОВО: погасить работающий DSH, который панель НЕ поднимала,
+    /// и поднять на его месте свой (своей ссылкой входа). Решение владельца 13.10.2026.
+    ///
+    /// <paramref name="confirmed"/> ОБЯЗАТЕЛЕН и спрашивается КАЖДЫЙ раз: гасится чужой процесс,
+    /// через который может идти текущая работа человека. Без подтверждения не происходит ничего.
+    /// Встроенный сервер (<see cref="ServerOwner.Adopted"/>) этой дорогой не гасится — у него своя
+    /// («Отвязаться» и «Остановить»).
+    /// </summary>
+    ServerState RecoverOwnServer(TimeSpan timeout, bool confirmed);
 
     /// <summary>
     /// Найти работающие серверы DSH, которые панель НЕ поднимала. Свой сервер и тот, в который
@@ -127,12 +167,32 @@ public sealed class ServerController : IServerControl, IDisposable
     /// <summary>Сколько ждать, пока порт действительно освободится после гашения.</summary>
     public static readonly TimeSpan DefaultStopWait = TimeSpan.FromSeconds(20);
 
+    /// <summary>
+    /// Сколько раз панель пробует снять УСТАРЕВШУЮ запись о своём сервере, прежде чем сказать
+    /// человеку словами. Три — потому что осмотр идёт раз в секунду, а снятие файла может
+    /// не удаться из-за мгновенной занятости; бесконечно пробовать нельзя: это и есть тот
+    /// «тихий цикл», ради которого предел заведён.
+    /// </summary>
+    public const int ForgetAttempts = 3;
+
+    /// <summary>Пауза между попытками снять устаревшую запись (осмотр состояния идёт раз в секунду).</summary>
+    public static readonly TimeSpan ForgetPause = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// Редкий повтор ПОСЛЕ лимита: файл мог освободиться сам. Молча и не чаще раза в пять минут —
+    /// слова человеку уже сказаны, а повторять их каждую секунду значит шуметь вместо работы.
+    /// </summary>
+    public static readonly TimeSpan ForgetSlowRetry = TimeSpan.FromMinutes(5);
+
     private readonly string _dshHome;
     private readonly Func<string> _workingDirectory;
     private readonly Func<int> _requestedPort;
     private readonly Action<string> _log;
     private readonly Func<DshEngine?> _locateEngine;
     private readonly IProcessKiller _killer;
+
+    /// <summary>Сообщение человеку: предупреждение перед гашением (решение владельца 10.10.2026).</summary>
+    private readonly Action<Isolation.NoticeKind, string, string>? _notify;
     private readonly ServerProbe _probe;
     private readonly TimeSpan _stopWait;
     private readonly TimeSpan _scanInterval;
@@ -140,9 +200,51 @@ public sealed class ServerController : IServerControl, IDisposable
     private readonly Action<int>? _rememberAdoptedPort;
     private readonly bool _allowParallelStart;
     private readonly bool _mayOccupyOwnerPort;
+
+    /// <summary>
+    /// Право убрать МЁРТВЫЙ замок движка (<see cref="RunRights.MayClearEngineLocks"/>): это
+    /// удаление чужого файла в доме движка.
+    ///
+    /// Умолчание — <c>false</c>, и это БЕЗОПАСНАЯ сторона, ровно как у <c>allowParallelStart</c>
+    /// (тоже право, тоже с умолчанием «замок включён»): забыть выдать право значит «не убирать
+    /// ничего» — человек увидит названный замок и уберёт его сам, — а вот забыть запретить было бы
+    /// удалением чужого файла. Выдаёт право <c>App.StartPanel</c>, и только обычному запуску
+    /// человеком или изолированному прогону (<see cref="RunRights.MayClearEngineLocks"/>).
+    /// </summary>
+    private readonly bool _mayClearEngineLocks;
     private readonly ServerStateFiles _files;
+
+    /// <summary>
+    /// ГДЕ ЛЕЖИТ СВОЙ ДВИЖОК ПАНЕЛИ (<c>&lt;корень панели&gt;\engine</c>) — третья примета владения
+    /// (этап E3): по ней панель узнаёт свой сервер **по пути запуска**, а разведка помечает находку
+    /// «наш движок (версия)».
+    ///
+    /// ⚠️ **Почему отдельным доводом, а не через файлы состояния.** Прежде путь шёл в
+    /// <see cref="ServerStateFiles.OwnEngineDir"/> — и это было неверно: файлы состояния дают
+    /// **право читать и писать** данные панели, а путь к своей папке движка правом не является
+    /// (это не секрет и не чужие данные). Из-за смешения съёмка, которой файлы состояния не выдаются
+    /// вовсе, не могла показать пометку «наш движок» — и кадр врал: два сервера выглядели
+    /// одинаково чужими. Пусто — приметы нет, и находки остаются «чужими».
+    /// </summary>
+    private readonly Func<string> _ownEngineDir;
+
+    /// <summary>
+    /// Каким движком панель подняла СВОЙ сервер (путь к <c>bin.js</c>).
+    ///
+    /// Живёт в памяти ровно для одной записи: <c>state\own-server.txt</c> обязана называть движок
+    /// и его версию (этап E3). Из памяти, а не из повторного поиска: поиск находит движок **человека**
+    /// (глобальную установку), а свой — тот, которым панель только что запустила процесс.
+    /// </summary>
+    private string _ownEnginePath = string.Empty;
     private readonly Func<string>? _readFoundServerLink;
     private readonly Func<string, LinkProbe> _linkProbe;
+
+    /// <summary>
+    /// Часы панели. Нужны ровно для одного: пауза между попытками снять устаревшую запись
+    /// о своём сервере. Шов для проверок — иначе предел и паузу пришлось бы ждать в реальном
+    /// времени (пятнадцать секунд на каждую проверку).
+    /// </summary>
+    private readonly Func<DateTimeOffset> _clock;
 
     private readonly object _gate = new();
     private readonly object _scanGate = new();
@@ -161,7 +263,13 @@ public sealed class ServerController : IServerControl, IDisposable
     // Ссылка входа. В ПАМЯТИ — чтобы кнопка работала сразу после запуска сервера, на диске —
     // чтобы она работала и после перезапуска панели (сервер панель при выходе не гасит).
     private string _entryLink = string.Empty;
-    private bool _entryLinkLoaded;
+
+    // ПОВТОР ЧТЕНИЯ ССЫЛКИ, когда её ещё нет. Защёлка «прочитано один раз за прогон» теряла вход,
+    // появившийся позже: файла в первый миг может не быть, а чтение может не удаться (файл занят).
+    // Замер 17.10.2026 (цикл V-02 §r4): 0 попаданий из 96 обращений за 3 с после появления файла.
+    private static readonly TimeSpan EntryLinkRetryDefault = TimeSpan.FromMilliseconds(500);
+    private long _entryLinkRetryAt;
+    private readonly TimeSpan _entryLinkRetry;
 
     // Запасной источник ссылки — файл панели 1.x. Ответ порта по чужой ссылке измеряется сетью,
     // а спрашивают ссылку каждую секунду (окно перерисовывается), поэтому ответ запоминается
@@ -174,6 +282,18 @@ public sealed class ServerController : IServerControl, IDisposable
     // жила бы ровно одно мгновение — человек нажал «Запустить» и не успел бы прочитать, почему
     // ничего не произошло. Держится, пока причина верна, и гаснет вместе с ней.
     private string _startRefusal = string.Empty;
+
+    // ПОПЫТКИ СНЯТЬ УСТАРЕВШУЮ ЗАПИСЬ о своём сервере: о какой записи речь, сколько раз пробовали,
+    // когда в последний раз и что об этом уже сказано человеку.
+    //
+    // Зачем это здесь, а не «просто удалить файл». Осмотр идёт раз в секунду, а снятие может
+    // не удаться (файл занят, закрыт правами) — и без памяти панель повторяла бы попытку И строку
+    // в журнал каждую секунду, бесконечно: тихий цикл, который никто не увидит. Предел, пауза
+    // и ОДНИ слова человеку — вот что здесь живёт.
+    private string _forgetTarget = string.Empty;
+    private int _forgetAttempts;
+    private DateTimeOffset _forgetLastAt = DateTimeOffset.MinValue;
+    private string _forgetRefusal = string.Empty;
 
     // Встроенный сервер: порт, номер процесса и время его создания. Время нужно, чтобы гашение
     // не попало в чужой процесс с тем же номером (номера переиспользуются).
@@ -250,6 +370,7 @@ public sealed class ServerController : IServerControl, IDisposable
         Func<DshEngine?>? locateEngine = null,
         Func<int>? requestedPort = null,
         IProcessKiller? killer = null,
+        Action<Isolation.NoticeKind, string, string>? notify = null,
         ServerProbe? probe = null,
         TimeSpan? stopWait = null,
         TimeSpan? scanInterval = null,
@@ -257,8 +378,12 @@ public sealed class ServerController : IServerControl, IDisposable
         Action<int>? rememberAdoptedPort = null,
         bool allowParallelStart = false,
         ServerStateFiles? files = null,
+        Func<string>? ownEngineDir = null,
         Func<string>? foundServerEntryLink = null,
-        Func<string, LinkProbe>? linkProbe = null)
+        Func<string, LinkProbe>? linkProbe = null,
+        Func<DateTimeOffset>? clock = null,
+        bool mayClearEngineLocks = false,
+        TimeSpan? entryLinkRetry = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dshHome);
         ArgumentNullException.ThrowIfNull(workingDirectory);
@@ -270,7 +395,9 @@ public sealed class ServerController : IServerControl, IDisposable
         _requestedPort = requestedPort ?? (() => ServerDecisions.DefaultServerPort);
         _mayOccupyOwnerPort = mayOccupyOwnerPort;
         _killer = killer ?? new TreeProcessKiller();
+        _notify = notify;
         _probe = probe ?? ServerProbe.System();
+        _ownEngineDir = ownEngineDir ?? (() => string.Empty);
         _stopWait = stopWait ?? DefaultStopWait;
         _scanInterval = scanInterval ?? DefaultScanInterval;
         _readAdoptedPort = adoptedPort;
@@ -279,11 +406,58 @@ public sealed class ServerController : IServerControl, IDisposable
         _files = files ?? ServerStateFiles.None;
         _readFoundServerLink = foundServerEntryLink;
         _linkProbe = linkProbe ?? ServerDiscovery.ProbeLink;
+        _clock = clock ?? (() => DateTimeOffset.Now);
+        _mayClearEngineLocks = mayClearEngineLocks;
+        _entryLinkRetry = entryLinkRetry ?? EntryLinkRetryDefault;
 
         State = ServerState.Stopped(0, PanelStrings.SrvNotStartedYet);
     }
 
-    public ServerState State { get; private set; }
+    public ServerState State
+    {
+        get => _state;
+
+        private set
+        {
+            // СООБЩЕНИЕ О СМЕНЕ СОСТОЯНИЯ — И ТОЛЬКО О НАСТОЯЩЕЙ СМЕНЕ (задание владельца
+            // 14.10.2026, §3). Раздел «Сервер» в настройках обязан перерисовываться, когда сервер
+            // поднимается или гаснет: строки «порт» и «состояние» устаревают молча.
+            //
+            // ⚠️ **Сравнение, а не «сообщать всегда»:** `Refresh()` зовётся опросом раз в секунду,
+            // и «сообщать всегда» превратило бы сообщение в те же часы, от которых панель уходит.
+            // Состояние — запись (<see cref="ServerState"/>), поэтому равенство здесь честное.
+            //
+            // ⚠️ Состояние меняется и с ФОНОВОЙ нитки (запуск, гашение, опрос): подписчиков зовём
+            // на нитке интерфейса (`Shell\UiThread.Post`) — рисовать окно из чужой нитки нельзя.
+            // Нитки нет (прогон проверки) — сообщать некому, и это не потеря.
+            if (Equals(_state, value)) return;
+
+            _state = value;
+
+            UiThread.Post(() => Changed?.Invoke());
+        }
+    }
+
+    /// <summary>
+    /// СМЕНА СОСТОЯНИЯ СЕРВЕРА — сообщение о ДАННЫХ, а не часы (задание владельца 14.10.2026).
+    ///
+    /// ⚠️ Прежде этого сообщения не было вовсе, и раздел «Сервер» в настройках знал о сервере
+    /// только то, что успел прочитать в момент своей отрисовки: пока сервер поднимался или гас,
+    /// строки порта и состояния оставались прежними, пока человек не нажмёт кнопку.
+    /// </summary>
+    public event Action? Changed;
+
+    private ServerState _state;
+
+    /// <summary>
+    /// СОСТОЯНИЕ ПРОЧИТАНО ХОТЬ РАЗ — «нет сервера» это уже ОТВЕТ, а не «ещё не смотрели»
+    /// (задание владельца 14.10.2026, §1). Поднимается первым же <see cref="Refresh"/> — то есть
+    /// тем самым чтением, после которого о сервере вообще можно что-то утверждать.
+    ///
+    /// ⚠️ Ставится ДО присваивания <see cref="State"/>: на смену состояния подписчики приходят
+    /// сразу (`Changed`), и они обязаны видеть «прочитано» уже в тот миг.
+    /// </summary>
+    public bool Known { get; private set; }
 
     public ServerOwner Owner { get; private set; } = ServerOwner.None;
 
@@ -311,6 +485,10 @@ public sealed class ServerController : IServerControl, IDisposable
     {
         lock (_gate)
         {
+            // ПРОЧИТАНО — ДО ВСЕГО ОСТАЛЬНОГО: с этого мига «сервера нет» становится ОТВЕТОМ,
+            // а не «ещё не смотрели» (задание владельца 14.10.2026, §1; см. `Known`).
+            Known = true;
+
             ForgetExitedProcess();
 
             // СВОЙ СЕРВЕР, УЗНАННЫЙ ПО ЗАПИСИ, — ДО ветки запомненного согласия. Панель при выходе
@@ -347,6 +525,12 @@ public sealed class ServerController : IServerControl, IDisposable
 
                     _startRefusal = string.Empty;
                 }
+
+                // ЗАПИСЬ О СВОЁМ СЕРВЕРЕ НЕ УБИРАЕТСЯ (файл занят или закрыт правами). Это не
+                // «сервер не запущен»: панель не может привести в порядок СВОЮ запись, и об этом
+                // она говорит словами — иначе предел попыток был бы тишиной, а не ответом.
+                // Причина держится, пока верна, и гаснет вместе с записью.
+                if (_forgetRefusal.Length > 0) return State = ServerState.Stopped(0, _forgetRefusal);
 
                 return State = ServerState.Stopped(0, PanelStrings.SrvNotStartedYet);
             }
@@ -416,8 +600,15 @@ public sealed class ServerController : IServerControl, IDisposable
         // «Не смог узнать» — НЕ то же самое, что «сервера нет»: запись не трогаем, врать нельзя.
         if (listener < 0) return;
 
+        // Чем поднят тот, кто СЕЙЧАС слушает порт: путь к bin.js из его командной строки.
+        // Это третья примета владения (этап E3) — она не зависит ни от номера процесса,
+        // ни от версии движка.
+        var runningBin = listener > 0 ? OwnEngine.BinPathFromCommandLine(_probe.CommandLine(listener)) : string.Empty;
+
         if (listener == 0 || listener != saved.Pid)
         {
+            if (AdoptOwnEngineProcess(saved, listener, runningBin)) return;
+
             ForgetStaleOwnRecord(saved);
             return;
         }
@@ -425,7 +616,10 @@ public sealed class ServerController : IServerControl, IDisposable
         if (!saved.Matches(listener, _probe.StartTicks(listener)))
         {
             // Номер тот же, а процесс ДРУГОЙ: номера переиспользуются, и по одному номеру панель
-            // однажды погасила бы чужой процесс. Свой сервер ушёл — записи верить больше нечем.
+            // однажды погасила бы чужой процесс. Но если этот другой поднят ИЗ НАШЕЙ ПАПКИ ДВИЖКА —
+            // это наш сервер, просто после обновления движка у него новый номер.
+            if (AdoptOwnEngineProcess(saved, listener, runningBin)) return;
+
             ForgetStaleOwnRecord(saved);
             return;
         }
@@ -441,17 +635,112 @@ public sealed class ServerController : IServerControl, IDisposable
     }
 
     /// <summary>
+    /// ПРИЗНАТЬ СВОИМ СЕРВЕР, ПОДНЯТЫЙ ИЗ НАШЕЙ ПАПКИ ДВИЖКА, — хотя запись ему уже не пара.
+    ///
+    /// **Зачем.** Панель ставит свой движок и **обновляет** его (этап E3). Обновление поднимает
+    /// сервер **новым процессом**: другая пара «номер + время создания». Прежняя запись перестала
+    /// совпадать — и без этой приметы панель приняла бы **свой же** сервер за найденный чужой:
+    /// предложила бы «встроиться» и отказывалась бы его гасить. Примета по пути запуска от версии
+    /// не зависит вовсе: `<корень панели>\engine\<версия>\…` — наша папка, чей бы номер ни был.
+    ///
+    /// **Чего эта примета НЕ делает.** Она срабатывает только на порту из записи (то есть на порту,
+    /// который панель сама и занимала), только когда порт отвечает отпечатком сервера DSH и только
+    /// когда путь процесса лежит **внутри нашей папки движка** — с проверкой границы имени папки,
+    /// а не по вхождению подстроки. Чужой глобальный движок человека в нашу папку не попадёт,
+    /// и найденный чужой сервер по-прежнему спрашивает разрешение, а не гасится.
+    /// </summary>
+    private bool AdoptOwnEngineProcess(OwnServerRecord saved, int listener, string runningBin)
+    {
+        if (listener <= 0) return false;
+        if (!OwnEngine.IsOwnBinPath(runningBin, _ownEngineDir())) return false;
+        if (!_probe.AnswersFingerprint(saved.Port)) return false;
+
+        _port = saved.Port;
+        _ownPid = listener;
+        _ownEnginePath = runningBin;
+        Owner = ServerOwner.Panel;
+
+        // Запись приводим в порядок ТОЙ ЖЕ рукой, что и при запуске: иначе следующий перезапуск
+        // панели снова упёрся бы в старое «номер не тот».
+        var ticks = _probe.StartTicks(listener);
+        if (ticks > 0)
+        {
+            PersistOwnRecord(OwnEngine.Record(saved.Port, listener, ticks, runningBin));
+        }
+
+        _log(string.Format(
+            CultureInfo.CurrentCulture,
+            PanelStrings.SrvOwnServerRestoredByEngineLogFormat,
+            _port,
+            _ownPid,
+            Shell.DisplayMask.Path(runningBin)));
+
+        return true;
+    }
+
+    /// <summary>
     /// Снять запись о своём сервере, которая больше не верна: на записанном порту никого или уже
     /// ДРУГОЙ процесс. Снимается вместе со ссылкой входа — ссылка живёт ровно столько, сколько
     /// живёт сервер, и мёртвый адрес человеку показывать незачем.
+    ///
+    /// **Предел и пауза.** Метод зовётся на КАЖДОМ осмотре, то есть раз в секунду, а снятие файла
+    /// может не удаться (файл занят, закрыт правами). Прежде панель пробовала и писала строку
+    /// каждую секунду — бесконечно и молча для человека (найдено разведкой этапа B 10.10.2026).
+    /// Теперь: не больше <see cref="ForgetAttempts"/> попыток с паузой <see cref="ForgetPause"/>,
+    /// после лимита — ОДНИ слова человеку (и в журнал, и в строку состояния), а дальше только
+    /// редкий молчаливый повтор <see cref="ForgetSlowRetry"/>: файл мог освободиться сам.
+    ///
+    /// **Снялась ли запись — спрашиваем ФАЙЛ, а не «команда не бросила исключение»:**
+    /// <see cref="ServerStateFiles"/> глушит отказ удаления молча, и без этой сверки панель
+    /// считала бы неснятое убранным — ровно та ошибка, от которой правило и заведено.
     /// </summary>
     private void ForgetStaleOwnRecord(OwnServerRecord saved)
     {
-        _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvOwnServerStaleLogFormat, saved.Port));
+        var now = _clock();
+        var identity = saved.Format();
+
+        // Речь о ДРУГОЙ записи — счёт начинается заново: прежние попытки были про другое.
+        if (!string.Equals(identity, _forgetTarget, StringComparison.Ordinal))
+        {
+            _forgetTarget = identity;
+            _forgetAttempts = 0;
+            _forgetRefusal = string.Empty;
+        }
+
+        var pause = _forgetAttempts < ForgetAttempts ? ForgetPause : ForgetSlowRetry;
+        if (_forgetAttempts > 0 && now - _forgetLastAt < pause) return;
+
+        _forgetAttempts++;
+        _forgetLastAt = now;
+
+        // Строка «запись устарела» — ОДИН раз на запись, а не каждую секунду.
+        if (_forgetAttempts == 1)
+        {
+            _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvOwnServerStaleLogFormat, saved.Port));
+        }
 
         ClearOwnServerFiles();
         _port = 0;
         _ownPid = 0;
+
+        if (ReadOwnServerFile().Trim().Length == 0)
+        {
+            // Убралась — и памяти о попытках больше не нужно: она была про эту запись.
+            _forgetTarget = string.Empty;
+            _forgetAttempts = 0;
+            _forgetRefusal = string.Empty;
+            return;
+        }
+
+        if (_forgetAttempts < ForgetAttempts || _forgetRefusal.Length > 0) return;
+
+        _forgetRefusal = string.Format(
+            CultureInfo.CurrentCulture,
+            PanelStrings.SrvOwnServerForgetRefusedFormat,
+            Shell.DisplayMask.Path(_files.DescribeOwnServer()),
+            _forgetAttempts);
+
+        _log(_forgetRefusal);
     }
 
     /// <summary>
@@ -475,7 +764,7 @@ public sealed class ServerController : IServerControl, IDisposable
         var hadRecord = ReadOwnServerFile().Trim().Length > 0;
 
         _entryLink = string.Empty;
-        _entryLinkLoaded = true;
+        _entryLinkRetryAt = 0;
         _fallbackCheckedPort = 0;
         _fallbackLink = string.Empty;
 
@@ -630,13 +919,38 @@ public sealed class ServerController : IServerControl, IDisposable
             return;
         }
 
-        var record = new OwnServerRecord(port, pid, ticks);
+        PersistOwnRecord(OwnEngine.Record(port, pid, ticks, _ownEnginePath));
+    }
+
+    /// <summary>
+    /// ЗАПИСАТЬ, ЧТО СЕРВЕР — НАШ. Одна рука на два случая: сервер только что поднят панелью
+    /// (<see cref="RecordOwnServer"/>) и сервер **узнан по пути движка** после обновления, когда
+    /// процесс новый (<see cref="AdoptOwnEngineProcess"/>). Второго места записи быть не должно:
+    /// две расходящиеся записи — это панель, которая сама себя не узнаёт.
+    /// </summary>
+    private void PersistOwnRecord(OwnServerRecord record)
+    {
+        if (!_files.Persists) return;
 
         try
         {
             _files.WriteOwnServer(record.Format());
             _log(string.Format(
-                CultureInfo.CurrentCulture, PanelStrings.SrvOwnServerRecordedLogFormat, port, pid));
+                CultureInfo.CurrentCulture,
+                PanelStrings.SrvOwnServerRecordedLogFormat,
+                record.Port,
+                record.Pid));
+
+            // Каким движком поднят — отдельной строкой: это то, что человек ищет в журнале,
+            // когда спрашивает «а какая версия сейчас работает?» (этап E3, шаг в RECOVERY.md).
+            if (record.NamesEngine)
+            {
+                _log(string.Format(
+                    CultureInfo.CurrentCulture,
+                    PanelStrings.SrvOwnServerEngineLogFormat,
+                    Shell.DisplayMask.Path(record.EnginePath),
+                    record.EngineVersion.Length > 0 ? record.EngineVersion : PanelStrings.EnvValueUnknown));
+            }
         }
         catch (Exception ex)
         {
@@ -672,29 +986,46 @@ public sealed class ServerController : IServerControl, IDisposable
     /// <summary>Своя ссылка. Пусто, если сервер не наш или ссылки у него нет.</summary>
     private string OwnEntryLink()
     {
-        int port;
-        string memory;
-
         lock (_gate)
         {
             if (Owner != ServerOwner.Panel || _port <= 0) return string.Empty;
 
-            port = _port;
-            memory = _entryLink;
-
-            // Файл читается ОДИН раз за прогон: второго писателя у него нет, а спрашивают ссылку
-            // каждую секунду (окно перерисовывается). Прочитанное остаётся в памяти.
-            if (memory.Length == 0 && !_entryLinkLoaded)
+            // Запомненная ссылка годится, только пока она про ЭТОТ порт: про другой она мусор,
+            // и держать её значило бы не прочитать файл заново (дефект найден 17.10.2026).
+            if (_entryLink.Length > 0 && !EntryLinkDecisions.MatchesPort(_entryLink, _port))
             {
-                _entryLinkLoaded = true;
-                memory = EntryLinkDecisions.ReadFile(ReadEntryLinkFile()).Url;
+                _entryLink = string.Empty;
+                _entryLinkRetryAt = 0;
             }
+
+            // Файл читается не «один раз за прогон», а до тех пор, пока ссылки нет: в первый миг
+            // после старта панели его может ещё не быть, а чтение может не удаться (файл занят).
+            // Прежняя защёлка закрывалась навсегда — ссылка, появившаяся позже, не доезжала до
+            // калитки без перезапуска панели (замер 17.10.2026, цикл V-02 §r4: за 3 с и 96
+            // обращений — ни одного попадания). Повтор — не чаще одного раза в `_entryLinkRetry`:
+            // спрашивают ссылку каждую секунду (окно перерисовывается).
+            if (_entryLink.Length == 0)
+            {
+                var now = Environment.TickCount64;
+                if (now >= _entryLinkRetryAt)
+                {
+                    _entryLinkRetryAt = now + (long)_entryLinkRetry.TotalMilliseconds;
+                    var candidate = EntryLinkDecisions.ReadFile(ReadEntryLinkFile()).Url;
+
+                    // ЗАПИСЬ — ПОД ТЕМ ЖЕ ЗАМКОМ, что и защёлка. Прежний код записывал поле ПОСЛЕ
+                    // освобождения замка, и второй спрашивающий (калитка и окно спрашивают ссылку
+                    // одновременно), вошедший между этими действиями, видел пустое поле при уже
+                    // прочитанной ссылке и отвечал «входа нет» (замер 17.10.2026: 1 пустой ответ
+                    // из 30 заходов с ждущим потоком — это и был редкий флейк сторожевой проверки
+                    // «вход, появившийся после старта, доезжает без перезапуска»).
+                    if (EntryLinkDecisions.MatchesPort(candidate, _port)) _entryLink = candidate;
+                }
+            }
+
+            // Отдаём только ссылку ЭТОГО порта: чужой адрес в ответе означал бы, что кнопка входа
+            // открывает не тот сервер.
+            return EntryLinkDecisions.MatchesPort(_entryLink, _port) ? _entryLink : string.Empty;
         }
-
-        if (!EntryLinkDecisions.MatchesPort(memory, port)) return string.Empty;
-
-        lock (_gate) _entryLink = memory;
-        return memory;
     }
 
     /// <summary>
@@ -768,7 +1099,7 @@ public sealed class ServerController : IServerControl, IDisposable
         lock (_gate)
         {
             _entryLink = url;
-            _entryLinkLoaded = true;
+            _entryLinkRetryAt = 0;
         }
 
         try
@@ -843,7 +1174,9 @@ public sealed class ServerController : IServerControl, IDisposable
             if (ownPid > 0) exclude.Add(ownPid);
             if (adoptedPid > 0) exclude.Add(adoptedPid);
 
-            return _lastScan = ServerDiscovery.Find(_probe, exclude);
+            // Своя папка движка — чтобы найденный сервер, поднятый ИЗ НЕЁ, был назван нашим
+            // (и версией), а не «поднятым не панелью» (этап E3).
+            return _lastScan = ServerDiscovery.Find(_probe, exclude, _ownEngineDir());
         }
     }
 
@@ -960,10 +1293,7 @@ public sealed class ServerController : IServerControl, IDisposable
             var blocker = ForeignServerBlocker();
             if (blocker is not null)
             {
-                return Refuse(string.Format(
-                    CultureInfo.CurrentCulture,
-                    PanelStrings.ParallelStartRefusedFormat,
-                    blocker.Value.Port));
+                return Refuse(ParallelStartRefusal(blocker.Value));
             }
 
             // Замок пропустил — прежний отказ больше не верен, и показывать его нельзя.
@@ -972,8 +1302,20 @@ public sealed class ServerController : IServerControl, IDisposable
             var engine = _locateEngine();
             if (engine is null)
             {
+                // ДИАГНОСТИКА ОТДЕЛЬНОЙ ЖУРНАЛЬНОЙ СТРОКОЙ (S-11, пачка B). Прежде пути поиска
+                // и имя пакета стояли В СЛОВАХ ЧЕЛОВЕКУ — это наша кухня, и человеку она не нужна.
+                // Но журналу она нужна: без неё «сервер DSH не найден» нечем разобрать.
+                _log(string.Format(
+                    CultureInfo.CurrentCulture,
+                    PanelStrings.SrvNoEngineWhereLogFormat,
+                    string.Join(", ", DshEngine.SearchPlaces)));
+
                 return Fail(PanelStrings.SrvNoEngine);
             }
+
+            // Запоминаем, ЧЕМ поднимаем: своя запись обязана называть движок и версию (этап E3),
+            // иначе после обновления движка панель не скажет, что именно работает.
+            _ownEnginePath = engine.BinPath;
 
             var requested = _requestedPort();
 
@@ -1002,6 +1344,10 @@ public sealed class ServerController : IServerControl, IDisposable
             // контроллера: это настройка, и она обязана применяться без перезапуска панели.
             var workDir = ResolveWorkingDirectory();
 
+            // МЁРТВЫЕ ЗАМКИ ДВИЖКА — ДО его запуска: убитый владелец оставляет замок на диске
+            // навсегда, и поднятый движок упёрся бы в него первой же записью (замер 10.10.2026).
+            ClearStaleEngineLocks();
+
             if (!TryStartProcess(engine, port, workDir, out var error))
             {
                 _port = 0;
@@ -1011,9 +1357,7 @@ public sealed class ServerController : IServerControl, IDisposable
             Owner = ServerOwner.Panel;
             _ownPid = OwnProcessId();
 
-            _log(string.Format(
-                CultureInfo.CurrentCulture, PanelStrings.SrvEngineStartedLogFormat,
-                _process!.Id, port, _dshHome, DshPanel.Shell.DisplayMask.Path(workDir)));
+            _log(EngineStartedLogLine(_process!.Id, port, _dshHome, workDir));
 
             // Порт теперь НАШ — и если он же лежал в запомненном согласии на найденный сервер,
             // прежнее согласие больше не верно: оно было про «найденный сервер», а на этом порту
@@ -1029,6 +1373,26 @@ public sealed class ServerController : IServerControl, IDisposable
     }
 
     /// <summary>
+    /// СТРОКА ЖУРНАЛА О ЗАПУЩЕННОМ СЕРВЕРЕ — ОДНО МЕСТО, И ОБА ПУТИ В МАСКЕ (находка C1, пачка A).
+    ///
+    /// **От какого случая.** Прежде маскировалась только рабочая папка, а домашний каталог движка
+    /// (`DSH_HOME`) уезжал в журнал НАСТОЯЩИМ путём — рядом с замаскированным соседом, то есть
+    /// выглядел проверенным и потому особенно обманчивым. Журнал панели уходит в резервную копию
+    /// и в чужой отчёт (красная линия 7), и имя пользователя в нём — личные данные.
+    ///
+    /// ⚠️ Вынесено отдельным членом, а не двумя вызовами маски на месте: строку журнала можно
+    /// проверить прогоном только тогда, когда её можно собрать без запуска движка.
+    /// </summary>
+    internal static string EngineStartedLogLine(int pid, int port, string? dshHome, string? workingDirectory) =>
+        string.Format(
+            CultureInfo.CurrentCulture,
+            PanelStrings.SrvEngineStartedLogFormat,
+            pid,
+            port,
+            DisplayMask.Path(dshHome),
+            DisplayMask.Path(workingDirectory));
+
+    /// <summary>
     /// Каталог, из которого поднимется движок. Пустая настройка означает «папка панели» —
     /// ровно так было и в v1 (`serverWorkingDir`: «Пусто — папка панели»).
     /// </summary>
@@ -1036,6 +1400,95 @@ public sealed class ServerController : IServerControl, IDisposable
     {
         var configured = _workingDirectory();
         return string.IsNullOrWhiteSpace(configured) ? _dshHome : configured;
+    }
+
+    /// <summary>
+    /// УБРАТЬ МЁРТВЫЕ ЗАМКИ ДВИЖКА перед тем, как его поднять, и назвать каждый в журнале.
+    ///
+    /// **Зачем.** Движок запирает запись файлом-соседом `<файл>.lock`, внутри — номер процесса,
+    /// и снимает его сам, но только если процесс дожил до конца записи. Убитый (`taskkill`)
+    /// владелец оставляет замок на диске НАВСЕГДА, и следующий писатель получает отказ по времени;
+    /// сам движок свой замок не убирает никогда — он говорит прямо, что это дело человека,
+    /// «убедившись, что владельца нет» (замер разведки этапа B, 10.10.2026: опыт с убитым
+    /// держателем — `settings.yaml.lock`, 6 байт, «13268», отказ у следующего писателя).
+    /// Панель и есть тот человек: она проверяет владельца по номеру процесса.
+    ///
+    /// **Три запрета, и каждый — правило, а не осторожность:**
+    /// 1. замок ЖИВОГО владельца не трогается никогда — это чья-то работа прямо сейчас;
+    /// 2. «не смог узнать, жив ли» — тоже не трогается: сомнение решается в пользу чужой работы;
+    /// 3. без права (<see cref="RunRights.MayClearEngineLocks"/>) не делается НИЧЕГО, и об этом
+    ///    одна строка в журнал: молчание выглядело бы как «замков не было».
+    ///
+    /// В журнал — ОДНА строка на замок, с путём и номером процесса: по ней видно и что нашлось,
+    /// и что панель с этим сделала. Замков нет — молчание, и это обычное состояние.
+    /// </summary>
+    private void ClearStaleEngineLocks()
+    {
+        if (!_mayClearEngineLocks)
+        {
+            _log(PanelStrings.EngineLockNoRightLog);
+            return;
+        }
+
+        foreach (var found in EngineLocks.Inspect(_dshHome, _probe.Liveness))
+        {
+            switch (found.State)
+            {
+                case EngineLockState.Stale:
+                    if (TryDeleteLock(found.Path))
+                    {
+                        _log(string.Format(
+                            CultureInfo.CurrentCulture,
+                            PanelStrings.EngineLockStaleRemovedLogFormat,
+                            found.Path,
+                            found.Pid));
+                    }
+                    else
+                    {
+                        // Замок назван, но убрать не удалось (файл держит кто-то ещё) — говорим как есть:
+                        // «не убрал» здесь правда, а «не было» — ложь.
+                        _log(string.Format(
+                            CultureInfo.CurrentCulture,
+                            PanelStrings.EngineLockStaleKeptLogFormat,
+                            found.Path,
+                            found.Pid));
+                    }
+
+                    break;
+
+                case EngineLockState.Live:
+                    _log(string.Format(
+                        CultureInfo.CurrentCulture,
+                        PanelStrings.EngineLockLiveLogFormat,
+                        found.Path,
+                        found.Pid));
+                    break;
+
+                default:
+                    _log(string.Format(
+                        CultureInfo.CurrentCulture,
+                        PanelStrings.EngineLockUnreadableLogFormat,
+                        found.Path));
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Удалить файл замка и УБЕДИТЬСЯ, что его нет: «команда не бросила исключение» здесь ничего
+    /// не доказывает — удаление чужого файла может не состояться молча.
+    /// </summary>
+    private static bool TryDeleteLock(string path)
+    {
+        try
+        {
+            File.Delete(path);
+            return !File.Exists(path);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private bool TryStartProcess(DshEngine engine, int port, string workDir, out string error)
@@ -1155,6 +1608,7 @@ public sealed class ServerController : IServerControl, IDisposable
             }
 
             var port = _port;
+            StopWarning.Say(_log, _notify, own: true, port);
             _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvStoppingEngineLogFormat, process.Id));
 
             try
@@ -1235,6 +1689,7 @@ public sealed class ServerController : IServerControl, IDisposable
         }
 
         var pid = State.Pid;
+        StopWarning.Say(_log, _notify, own: false, port);
         _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvStoppingAdoptedLogFormat, State.ProcessName, pid, port));
 
         if (!_killer.Kill(pid, _adoptedStartTicks, out var error))
@@ -1309,6 +1764,7 @@ public sealed class ServerController : IServerControl, IDisposable
         }
 
         var pid = State.Pid;
+        StopWarning.Say(_log, _notify, own: true, port);
         _log(string.Format(
             CultureInfo.CurrentCulture, PanelStrings.SrvStoppingOwnByRecordLogFormat, State.ProcessName, pid, port));
 
@@ -1340,6 +1796,118 @@ public sealed class ServerController : IServerControl, IDisposable
             ? ServerState.Stopped(0, PanelStrings.SrvStopped)
             : new ServerState(ServerPresence.BusyByOther, port, 0, string.Empty,
                 string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvPortStillBusyFormat, port));
+    }
+
+    /// <summary>
+    /// ПОДНЯТЬ СВОЙ СЕРВЕР ЗАНОВО — единственный путь из состояния «сервер на порту поднят
+    /// не панелью» (решение владельца 13.10.2026, ответы 1 и 2).
+    ///
+    /// **От какого случая.** Панель нашла на своём порту работающий DSH, которого она не поднимала:
+    /// своей ссылки входа у неё нет, вопросы агента на телефон не придут, а обновить сервер DSH
+    /// из панели нельзя. Прежняя строка («сервер поднят не панелью — панель им не управляет»)
+    /// не говорила ни того, что за этим следует, ни одного пути назад.
+    ///
+    /// ⚠️ **ЭТО ДЕЙСТВИЕ ГАСИТ ЧУЖОЙ ПРОЦЕСС, ПОЭТОМУ ОНО СПРАШИВАЕТ ВСЕГДА** — и это не то же
+    /// правило, что у встроенного сервера (там гасит запомненное согласие): здесь человек своё
+    /// согласие даёт **на это нажатие**, каждый раз заново, потому что через найденный сервер может
+    /// идти его текущая работа. Без <paramref name="confirmed"/> не происходит **ничего**.
+    ///
+    /// ⚠️ **Гасится ровно тот процесс, который занимает порт СЕЙЧАС** (`ListenerPid`) и чьё время
+    /// создания прочитано сейчас же (`StartTicks`): номер процесса переиспользуется, и по одному
+    /// номеру панель однажды погасила бы чужой процесс (урок v1). Отпечаток DSH при этом
+    /// перепроверяется (`AnswersFingerprint`) — гасим сервер DSH, а не «что-то на этом порту».
+    ///
+    /// Ссылка входа СВОЕГО прежнего сервера забывается: она живёт ровно столько, сколько жил он.
+    /// </summary>
+    public ServerState RecoverOwnServer(TimeSpan timeout, bool confirmed)
+    {
+        lock (_gate)
+        {
+            var port = ActivePort();
+
+            if (port == 0)
+            {
+                return Fail(PanelStrings.SrvNotStartedYet);
+            }
+
+            // Встроенный сервер этой кнопкой не гасится: у него СВОЯ дорога — «Отвязаться»
+            // (вернуть как было) и «Остановить» с подтверждением. Это и есть то различие словами
+            // и кнопкой, которое выбрал владелец (13.10.2026, ответ 1).
+            if (Owner == ServerOwner.Adopted)
+            {
+                _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvAlreadyManagedFormat, port));
+
+                return State = State with
+                {
+                    Detail = string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvAlreadyManagedFormat, port),
+                };
+            }
+
+            if (!confirmed)
+            {
+                return State = State with
+                {
+                    Detail = string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvRecoverConfirmFormat, port, State.ProcessName, State.Pid),
+                };
+            }
+
+            // Перечитываем СЕЙЧАС: между подтверждением человека и этим мгновением мир мог измениться.
+            Refresh();
+
+            if (State.Presence != ServerPresence.Running)
+            {
+                _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvRecoverGoneFormat, port));
+                return State = State with
+                {
+                    Detail = string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvRecoverGoneFormat, port),
+                };
+            }
+
+            var pid = _probe.ListenerPid(port);
+            var startedAt = pid > 0 ? _probe.StartTicks(pid) : 0;
+
+            if (pid <= 0 || startedAt == 0 || !_probe.AnswersFingerprint(port))
+            {
+                var why = PanelStrings.SrvListenerUnknownFormat;
+                _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvRecoverRefusedFormat, port, why));
+                return State = State with
+                {
+                    Detail = string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvRecoverRefusedFormat, port, why),
+                };
+            }
+
+            StopWarning.Say(_log, _notify, own: false, port);
+            _log(string.Format(
+                CultureInfo.CurrentCulture, PanelStrings.SrvRecoverStoppedLogFormat, port, State.ProcessName, pid));
+
+            if (!_killer.Kill(pid, startedAt, out var error))
+            {
+                _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvRecoverRefusedFormat, port, error));
+                return State = State with
+                {
+                    Detail = string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvRecoverRefusedFormat, port, error),
+                };
+            }
+
+            // Ссылка входа прежнего своего сервера больше не верна: сервер, который её напечатал, погашен.
+            if (ClearOwnServerFiles().EntryLink) _log(PanelStrings.SrvEntryLinkClearedLog);
+
+            _port = port;
+            _ownPid = 0;
+            Owner = ServerOwner.None;
+            ClearAdopted();
+
+            if (!WaitForPortRelease(port))
+            {
+                var busy = string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvPortStillBusyFormat, port);
+                _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvRecoverRefusedFormat, port, busy));
+                return State = new ServerState(ServerPresence.BusyByOther, port, 0, string.Empty, busy);
+            }
+
+            // Свой сервер поднимается ТЕМ ЖЕ путём, что по кнопке «Запустить»: своего способа
+            // у этого действия нет — иначе ссылку входа пришлось бы ловить вторым кодом.
+            return Start(timeout);
+        }
     }
 
     /// <summary>
@@ -1451,6 +2019,31 @@ public sealed class ServerController : IServerControl, IDisposable
 
         return found.First;
     }
+
+    /// <summary>
+    /// СЛОВА ОТКАЗА ПОДНЯТЬ СВОЙ СЕРВЕР РЯДОМ С НАЙДЕННЫМ. Два случая, и путать их нельзя:
+    ///
+    /// * найден **чужой** движок (установка человека) — «найден работающий DSH… возьмите его
+    ///   под управление»;
+    /// * найден **НАШ** движок другой версии (например старая версия пережила обновление) —
+    ///   «на порту N уже работает наш движок версии V: сначала остановите его». Сказать тут
+    ///   «поднят не панелью» значило бы соврать про собственный движок, а предложить «взять
+    ///   под управление» — предложить взять то, что и так наше, вместо «остановите старое».
+    ///
+    /// Две версии на одном профиле пишут в одни файлы, и это **опаснее чужого сервера** — поэтому
+    /// замок здесь тот же, а слова разные.
+    /// </summary>
+    private static string ParallelStartRefusal(FoundServer blocker) =>
+        blocker.IsOurEngine
+            ? string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.ParallelStartOwnVersionRefusedFormat,
+                blocker.Port,
+                blocker.OwnVersion)
+            : string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.ParallelStartRefusedFormat,
+                blocker.Port);
 
     private void ForgetExitedProcess()
     {

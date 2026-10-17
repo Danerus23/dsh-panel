@@ -77,8 +77,16 @@ public class WindowDoorsTests
             .Where(name => name is not null)
             .ToList();
 
+        // ⚠️ «RecoverOwnServerButton» — ЧЕТВЁРТАЯ ДВЕРЬ СЕРВЕРА, и она серверная по существу:
+        // «поднять свой сервер заново» гасит найденный сервер и поднимает свой (решение владельца
+        // 13.10.2026). Скрыта по умолчанию и появляется только в положении «сервер поднят
+        // не панелью» — рядом с «Отвязаться», которое в том положении, наоборот, не показывается.
         Assert.Equal(
-            new[] { "StartServerButton", "RestartServerButton", "StopServerButton", "DetachServerButton" },
+            new[]
+            {
+                "StartServerButton", "RestartServerButton", "StopServerButton", "DetachServerButton",
+                "RecoverOwnServerButton",
+            },
             inRow);
 
         // И обратная сторона обещания: дверей в ряду сервера нет НИ ОДНОЙ — ни в ряду, ни где-то

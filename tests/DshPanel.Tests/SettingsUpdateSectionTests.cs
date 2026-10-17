@@ -45,11 +45,13 @@ public class SettingsUpdateSectionTests
             string current = "2.0.0",
             bool skipped = false,
             bool allowed = true,
-            string notes = "")
+            string notes = "",
+            string attempt = "")
         {
             Current = current;
             Skipped = skipped;
             Allowed = allowed;
+            AttemptText = attempt;
 
             Result = ok
                 ? new UpdateRelease(
@@ -81,6 +83,9 @@ public class SettingsUpdateSectionTests
         public bool Newer => Result.Ok && UpdateDecisions.IsNewer(Result.Latest, Current);
 
         public bool Skipped { get; }
+
+        /// <summary>Строка о последней попытке: пусто — попытки не было или она удалась.</summary>
+        public string AttemptText { get; }
 
         public string SourceText => Result.Ok ? "проверено 28.09.2026, 15:00" : "Обновление ещё не проверялось.";
 
@@ -230,6 +235,74 @@ public class SettingsUpdateSectionTests
 
             // И показывается именно он, когда его выбрали.
             Assert.Equal(SettingsWindow.UpdateSection, window.ShowSection(SettingsWindow.UpdateSection));
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ⚠️ ТРЕБОВАНИЕ ВЛАДЕЛЬЦА 11.10.2026 (проверка обязана падать, если это сломать): **РАЗДЕЛ
+    /// НЕ ТЕРЯЕТ РЕЗУЛЬТАТ ПРОВЕРКИ.** Прежний ответ (тот, что сохранён с датой) стоит в окне,
+    /// а неудачная попытка названа ОТДЕЛЬНОЙ строкой — и вместе они дают полную правду:
+    /// «что мы знаем» и «что новая попытка не вышла».
+    ///
+    /// Пустое окно после настоящей работы — тот самый дефект, ради которого хвост и заведён.
+    /// </summary>
+    [AvaloniaFact]
+    public void Раздел_не_теряет_результат_проверки_из_за_отказа()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = Stand(dir, new FakeUpdate(attempt: "последняя попытка: 11.10.2026, 15:04 — не вышло: HTTP 503"));
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            // Прежний ответ на месте: версия, решение и дата проверки.
+            Assert.Contains("v2.1.0", window.FindControl<TextBlock>("UpdateVerdictText")!.Text!, StringComparison.Ordinal);
+
+            var source = window.FindControl<TextBlock>("UpdateSourceText")!;
+
+            Assert.True(source.IsVisible, "строка «когда проверяли» пропала — окно выглядит как «не проверялось»");
+            Assert.NotEqual(PanelStrings.UpdateNeverChecked, source.Text);
+
+            // И строка о попытке тоже видна: причина отказа не спрятана.
+            var attempt = window.FindControl<TextBlock>("UpdateAttemptText")!;
+
+            Assert.True(attempt.IsVisible, "строка о неудачной попытке не показана");
+            Assert.Contains("HTTP 503", attempt.Text!, StringComparison.Ordinal);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// СТРОКА О ПОПЫТКЕ МОЛЧИТ, КОГДА МОЛЧАТЬ ПРАВИЛЬНО: у удачной проверки про время говорит
+    /// строка «проверено {дата}», и повторять то же самое второй строкой панель не должна.
+    /// </summary>
+    [AvaloniaFact]
+    public void Строка_о_попытке_молчит_у_удачной_проверки()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = Stand(dir, new FakeUpdate());
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            Assert.False(window.FindControl<TextBlock>("UpdateAttemptText")!.IsVisible);
 
             window.CloseQuietly();
         }

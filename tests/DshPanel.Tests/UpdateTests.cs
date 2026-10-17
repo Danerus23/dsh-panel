@@ -869,7 +869,8 @@ public class UpdateTests
         bool allowed = true,
         bool isolated = false,
         string current = "2.0.0",
-        string language = "ru") =>
+        string language = "ru",
+        Action<UpdateAttempt>? rememberAttempt = null) =>
         new(
             client,
             () => settings,
@@ -881,7 +882,8 @@ public class UpdateTests
             log ?? (_ => { }),
             remember ?? (_ => { }),
             checkedAt ?? (_ => { }),
-            isolated);
+            isolated,
+            rememberAttempt ?? (_ => { }));
 
     /// <summary>
     /// АВТОМАТИЧЕСКАЯ ПРОВЕРКА ИДЁТ ПО РАСПИСАНИЮ И ОТМЕЧАЕТСЯ: отметки нет — проверка есть,
@@ -954,8 +956,12 @@ public class UpdateTests
     }
 
     /// <summary>
-    /// ОТКАЗ СЕТИ НЕ ПИШЕТ НИ СЛЕДОВ, НИ ОТМЕТКИ: записывать «проверено» про неудавшуюся проверку
-    /// значило бы закрыть суточный гейт на сутки вперёд — то есть соврать. Зато причина называется.
+    /// ОТКАЗ СЕТИ НЕ ПИШЕТ НИ СЛЕДОВ, НИ ОТМЕТКИ УДАЧНОЙ ПРОВЕРКИ: записывать «проверено» про
+    /// неудавшуюся проверку значило бы закрыть суточный гейт на сутки вперёд — то есть соврать.
+    ///
+    /// ⚠️ НО ПОПЫТКА ЗАПОМИНАЕТСЯ (11.10.2026): она — отдельная правда, по ней часы берут отступ,
+    /// а окно говорит человеку, что панель стучалась и не достучалась. Разделение и есть суть
+    /// четвёртого хвоста: «проверено» — про удачу, «попытка» — про дело.
     /// </summary>
     [Fact]
     public void Отказ_сети_не_пишет_следов()
@@ -963,20 +969,31 @@ public class UpdateTests
         var settings = new PanelSettings();
         var stamps = new List<string>();
         var traces = new List<UpdateTraces>();
+        var attempts = new List<UpdateAttempt>();
 
         var controller = Controller(
-            new FakeClient(() => UpdateRelease.Failed(PanelStrings.UpdateRateLimited, Now)),
+            new FakeClient(() => UpdateRelease.Failed(PanelStrings.UpdateRateLimited, Now) with { RateLimited = true }),
             settings,
             remember: traces.Add,
-            checkedAt: stamps.Add);
+            checkedAt: stamps.Add,
+            rememberAttempt: attempts.Add);
 
         controller.Check();
 
         Assert.True(SpinWait.SpinUntil(() => !controller.Busy, 5000), "проверка не завершилась");
-        Assert.False(controller.Result.Ok);
+
+        // Провала проверки не прячем: следов удачной проверки нет и отметка «проверено» не ставится.
         Assert.Empty(traces);
         Assert.Empty(stamps);
-        Assert.Contains(PanelStrings.UpdateRateLimited, controller.SourceText, StringComparison.Ordinal);
+
+        // А попытка — записана, с приметой лимита: ею живут и отступ, и строка в окне.
+        var attempt = Assert.Single(attempts);
+        Assert.Equal(Now, attempt.At);
+        Assert.True(attempt.Failed);
+        Assert.True(attempt.RateLimited);
+        Assert.Equal(UpdateAttempt.KindLimited, attempt.Kind);
+
+        Assert.Contains(PanelStrings.UpdateRateLimited, controller.AttemptText, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1032,7 +1049,7 @@ public class UpdateTests
     /// ⚠️ ГЛАВНОЕ УТВЕРЖДЕНИЕ О ПРОГОНЕ ПРОВЕРКИ: **без права он в сеть не ходит вовсе**
     /// и ничего не записывает. Проверка ЖДЁТ, а не считает сразу: запрос уходит в фон, и «сейчас
     /// ноль вызовов» ничего не доказывало бы — вызов мог случиться через миллисекунду.
-    /// </summary>
+    /// </summary>    [Fact]
     [Fact]
     public void Без_права_сети_нет_и_ничего_не_пишется()
     {
@@ -1134,8 +1151,165 @@ public class UpdateTests
         failed.Check();
 
         Assert.True(SpinWait.SpinUntil(() => !failed.Busy, 5000), "проверка не завершилась");
-        Assert.Contains("HTTP 503", failed.SourceText, StringComparison.Ordinal);
+
+        // ⚠️ ПРИЧИНА НАЗЫВАЕТСЯ СТРОКОЙ О ПОПЫТКЕ, а не строкой состояния: состояние берётся
+        // из последнего УДАЧНОГО ответа, и отказ сети его больше не стирает (11.10.2026).
+        Assert.Contains("HTTP 503", failed.AttemptText, StringComparison.Ordinal);
         Assert.Contains("{0}", PanelStrings.UpdateFailedFormat, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ⚠️ ТРЕБОВАНИЕ ВЛАДЕЛЬЦА 11.10.2026 (проверка обязана падать, если это сломать):
+    /// **ОТМЕТКА УДАЧНОЙ ПРОВЕРКИ НЕ СТАВИТСЯ ПРИ ОТКАЗЕ.**
+    ///
+    /// «Проверено» — утверждение о прочитанных выпусках, а не о том, что панель куда-то сходила.
+    /// Поставив отметку после отказа, панель соврала бы человеку и заперла себе проверку на сутки
+    /// вперёд. А попытка при этом запоминается — она про дело, и ею живёт отступ.
+    /// </summary>
+    [Fact]
+    public void Отметка_проверки_не_ставится_при_отказе()
+    {
+        var settings = new PanelSettings();
+        var stamps = new List<string>();
+        var attempts = new List<UpdateAttempt>();
+
+        var broken = Controller(
+            new FakeClient(() => UpdateRelease.Failed("HTTP 503", Now)),
+            settings,
+            checkedAt: stamps.Add,
+            rememberAttempt: attempts.Add);
+
+        broken.Check();
+
+        Assert.True(SpinWait.SpinUntil(() => !broken.Busy, 5000), "проверка не завершилась");
+
+        Assert.Empty(stamps);
+        Assert.Single(attempts);
+        Assert.False(attempts[0].Ok);
+
+        // А удачная проверка отметку ставит — иначе проверка ниже была бы слепой.
+        var good = Controller(
+            new FakeClient(() => Release()),
+            new PanelSettings(),
+            checkedAt: stamps.Add,
+            rememberAttempt: attempts.Add);
+
+        good.Check();
+
+        Assert.True(SpinWait.SpinUntil(() => !good.Busy, 5000), "проверка не завершилась");
+        Assert.Single(stamps);
+    }
+
+    /// <summary>
+    /// ⚠️ ТРЕБОВАНИЕ ВЛАДЕЛЬЦА 11.10.2026 (вторая обязательная проверка): **ОТКАЗ НЕ УНОСИТ
+    /// ПРЕЖНИЙ ОТВЕТ.** В настройках лежит удачная проверка («v2.1.0», своя дата), новая попытка
+    /// срывается — и окно обязано показать ПРЕЖНИЙ ответ с его датой, а не «обновление ещё
+    /// не проверялось»; рядом встаёт строка о неудачной попытке.
+    /// </summary>
+    [Fact]
+    public void Отказ_не_уносит_прежний_ответ()
+    {
+        var saved = Now.AddDays(-1);
+
+        var settings = new PanelSettings
+        {
+            UpdateLatest = "v2.1.0",
+            UpdatePageUrl = ProductLinks.ReleasesPageUrl,
+            UpdatePublished = "2026-10-10T10:00:00Z",
+            UpdateNotes = "Прежние заметки",
+            UpdateNotesRaw = "## RU\n\nПрежние заметки",
+            UpdateCheckedAt = Pricing.PricingDecisions.Stamp(saved),
+        };
+
+        var controller = Controller(new FakeClient(() => UpdateRelease.Failed("HTTP 503", Now)), settings);
+
+        // До проверки: состояние уже из настроек (перезапуск панели в те же сутки).
+        Assert.True(controller.Result.Ok, controller.Result.Error);
+        Assert.Equal("v2.1.0", controller.Result.Latest);
+        Assert.Equal(saved, controller.Result.CheckedAt);
+
+        controller.Check();
+
+        Assert.True(SpinWait.SpinUntil(() => !controller.Busy, 5000), "проверка не завершилась");
+
+        // Прежний ответ ЦЕЛ: и версия, и дата, и заметки.
+        Assert.True(controller.Result.Ok, "отказ сети унёс прежний ответ");
+        Assert.Equal("v2.1.0", controller.Result.Latest);
+        Assert.Equal(saved, controller.Result.CheckedAt);
+        Assert.Equal("Прежние заметки", controller.Notes);
+
+        // И окно не пустое: источник состояния называет дату прежней проверки, а не «не проверялось».
+        Assert.NotEqual(PanelStrings.UpdateNeverChecked, controller.SourceText);
+        Assert.Contains(
+            Pricing.PricingDecisions.CheckedText(Pricing.PricingDecisions.Stamp(saved)),
+            controller.SourceText,
+            StringComparison.Ordinal);
+
+        // Неудача при этом названа — своей строкой.
+        Assert.Contains("HTTP 503", controller.AttemptText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ОТСТУП ДЕРЖИТ ЧАСЫ: после отказа по числу запросов панель НЕ идёт в сеть несколько часов —
+    /// иначе следующий запуск (или следующий такт) снова стучался бы в выеденный лимит GitHub.
+    /// Записанная попытка переживает перезапуск — проверка начинается с настроек, а не с чистого листа.
+    /// </summary>
+    [Fact]
+    public void Отступ_после_лимита_держит_часы()
+    {
+        // Час назад лимит: по расписанию пора (отметка суточной давности), но отступ запрещает.
+        var recent = new PanelSettings
+        {
+            UpdateCheckedAt = Pricing.PricingDecisions.Stamp(Now.AddHours(-25)),
+            UpdateAttemptAt = Pricing.PricingDecisions.Stamp(Now.AddHours(-1)),
+            UpdateAttemptKind = UpdateAttempt.KindLimited,
+            UpdateAttemptError = PanelStrings.UpdateRateLimited,
+        };
+
+        var held = new FakeClient(() => Release());
+        var quiet = Controller(held, recent);
+
+        quiet.Tick(Now);
+
+        // ⚠️ ЖДЁМ, А НЕ СЧИТАЕМ СРАЗУ: запрос уходит в фон, и «сейчас ноль вызовов» ничего
+        // не доказывало бы — вызов мог случиться через миллисекунду. Мутация «отступ не
+        // спрашивается» сначала ВЫЖИВАЛА именно на этом (найдено 11.10.2026).
+        System.Threading.Thread.Sleep(300);
+
+        Assert.False(quiet.Busy, "отступ не удержал: проверка всё-таки пошла");
+        Assert.Equal(0, held.Calls);
+
+        // Семь часов назад — отступ кончился, проверяем.
+        var old = new PanelSettings
+        {
+            UpdateCheckedAt = Pricing.PricingDecisions.Stamp(Now.AddHours(-25)),
+            UpdateAttemptAt = Pricing.PricingDecisions.Stamp(Now.AddHours(-7)),
+            UpdateAttemptKind = UpdateAttempt.KindLimited,
+            UpdateAttemptError = PanelStrings.UpdateRateLimited,
+        };
+
+        var fresh = new FakeClient(() => Release());
+        var busy = Controller(fresh, old);
+
+        busy.Tick(Now);
+
+        Assert.True(SpinWait.SpinUntil(() => fresh.Calls == 1, 5000), "отступ не пустил проверку после срока");
+
+        // Прочая неудача держит час: два часа назад — уже можно.
+        var plain = new PanelSettings
+        {
+            UpdateCheckedAt = Pricing.PricingDecisions.Stamp(Now.AddHours(-25)),
+            UpdateAttemptAt = Pricing.PricingDecisions.Stamp(Now.AddHours(-2)),
+            UpdateAttemptKind = UpdateAttempt.KindFailed,
+            UpdateAttemptError = "HTTP 503",
+        };
+
+        var again = new FakeClient(() => Release());
+        var run = Controller(again, plain);
+
+        run.Tick(Now);
+
+        Assert.True(SpinWait.SpinUntil(() => again.Calls == 1, 5000), "прочая неудача заперла проверку дольше часа");
     }
 
     /// <summary>

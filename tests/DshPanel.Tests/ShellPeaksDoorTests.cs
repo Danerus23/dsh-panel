@@ -219,6 +219,9 @@ public class ShellPeaksDoorTests
 
         public string StatusText => string.Empty;
 
+        /// <summary>Попытки не было — строки о ней нет (дверь молчит, и это её ответ).</summary>
+        public string AttemptText => string.Empty;
+
         public TrayStatusLine TrayLine => new(string.Empty, TrayTone.Neutral);
 
         public event Action<string>? Announce { add { } remove { } }

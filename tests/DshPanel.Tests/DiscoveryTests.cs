@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using DshPanel.Server;
 using Xunit;
+using DshPanel.Shell;
 
 namespace DshPanel.Tests;
 
@@ -138,6 +139,40 @@ public class DiscoveryTests
         Assert.Equal(3080, ServerDecisions.PortInCommandLine(
             "node bin.js web --port:3080"));
         Assert.Equal(0, ServerDecisions.PortInCommandLine("node bin.js web --no-open"));
+    }
+
+    /// <summary>
+    /// ЧЕЙ ДВИЖОК У НАЙДЕННОГО СЕРВЕРА (этап E3, правило «две версии на одном профиле»).
+    ///
+    /// Находка несёт **путь запуска** и, если он лежит в НАШЕЙ папке движка, **версию** — тогда
+    /// панель говорит о ней своими словами и не поднимает второй сервер на том же профиле.
+    /// Приметы нет (прогон без права на файлы панели) — находка остаётся «чужой»: узнавать своего
+    /// движка ему нечем, и это безопасная сторона.
+    /// </summary>
+    [Fact]
+    public void Находка_несёт_примету_своего_движка()
+    {
+        const string engineDir = @"C:\Проба\панель\engine";
+        var ownBin = OwnEngine.BinPath(engineDir, "0.1.5-rc.2");
+
+        // Чужая установка человека: пути в нашей папке нет — версии тоже нет.
+        var foreign = ServerDiscovery.Find(ProbeFor(3080, 19804, DshCommandLine(3080)), null, engineDir);
+
+        Assert.False(foreign.First!.Value.IsOurEngine);
+        Assert.Equal(string.Empty, foreign.First.Value.OwnVersion);
+
+        var ownProbe = ProbeFor(
+            3080, 19804, $"\"node.exe\" {ownBin} web --no-open --port 3080");
+
+        var ours = ServerDiscovery.Find(ownProbe, null, engineDir);
+
+        Assert.True(ours.First!.Value.IsOurEngine);
+        Assert.Equal("0.1.5-rc.2", ours.First.Value.OwnVersion);
+        Assert.Equal(ownBin, ours.First.Value.EnginePath);
+
+        // Прогон без права: своей папки движка у него нет — и находка не объявляется нашей.
+        Assert.False(ServerDiscovery.Find(ownProbe).First!.Value.IsOurEngine);
+        Assert.False(ServerDiscovery.Find(ownProbe, null, string.Empty).First!.Value.IsOurEngine);
     }
 
     /// <summary>
@@ -573,7 +608,7 @@ public class DiscoveryTests
         // Дело дошло до поиска движка — значит замок не сработал. Отказ теперь про движок,
         // которого на этой машине проверки нет, а не про найденный сервер.
         Assert.Equal(1, engineLookups);
-        Assert.Contains("движок не найден", state.Detail, StringComparison.Ordinal);
+        Assert.Contains(PanelStrings.SrvNoEngine, state.Detail, StringComparison.Ordinal);
         Assert.DoesNotContain("не поднимает", state.Detail, StringComparison.Ordinal);
     }
 
@@ -595,7 +630,7 @@ public class DiscoveryTests
         var state = controller.Start(TimeSpan.FromSeconds(5));
 
         Assert.Equal(1, engineLookups);
-        Assert.Contains("движок не найден", state.Detail, StringComparison.Ordinal);
+        Assert.Contains(PanelStrings.SrvNoEngine, state.Detail, StringComparison.Ordinal);
     }
 
     /// <summary>

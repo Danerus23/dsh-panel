@@ -45,7 +45,10 @@ public class IsolationTests
         //   * `PanelStarted` — требование владельца 29.09.2026: обычный запуск не показывает окна,
         //     и человек не понимает, работает панель или нет. Это ПЕРВЫЙ вид, показываемый при
         //     запуске без просьбы человека, и от общего предохранителя он не освобождён.
-        Assert.Equal(11, kinds.Length);
+        // ⚠️ ДВЕНАДЦАТЫЙ (`ServerStop`, предупреждение перед гашением сервера) добавлен 10.10.2026
+        // вместе с решением владельца «важная магия — с предупреждением»: новый вид сообщения обязан
+        // попасть под ТУ ЖЕ общую дверь изоляции, а не завести себе отдельную.
+        Assert.Equal(12, kinds.Length);
 
         foreach (var kind in kinds)
         {
@@ -252,7 +255,20 @@ public class IsolationTests
         // владельца. Последний добавлен 29.09.2026 вместе с историей цен: она тоже файл состояния
         // под корнем панели, и прогон без права не должен ни читать чужую, ни писать свою.
         // Изменил перечень — перечитай и этот список, и `docs/ISOLATION.md` §3.
-        Assert.Equal(14, paths.AllPaths.Count);
+        // ⚠️ ПЯТНАДЦАТЫЙ (`InstalledFile`, опись поставленного) добавлен 10.10.2026 вместе
+        // с этапом D: изолированный прогон обязан писать СВОЮ опись под своим корнем, а не опись
+        // владельца, — и попадает он под то же правило перебора, что и остальные.
+        // ⚠️ ШЕСТНАДЦАТЫЙ (`NodeDir`, свой Node панели) добавлен 10.10.2026 вместе с этапом E3.1:
+        // свой Node — десятки мегабайт, и изолированный прогон обязан класть их под СВОЙ корень,
+        // а не рядом с движком владельца. Путь обязан быть и в перечне — иначе изоляция дырявая.
+        // ⚠️ СЕМНАДЦАТЫЙ (`EngineStateFile`, запись «что стоит сейчас») — тогда же, шагом 2:
+        // из неё берутся и откат, и опись поставленного; у изолированного прогона она своя.
+        // ⚠️ ВОСЕМНАДЦАТЫЙ (`PhonePassFile`, пропуск телефона) добавлен 11.10.2026 вместе
+        // с этапом F1: в нём лежит секрет, по которому калитка пускает устройство. Файл обязан
+        // быть и в перечне, и под корнем прогона — иначе изолированный прогон прочитал бы
+        // НАСТОЯЩИЙ пропуск владельца (или записал бы свой в его панель).
+        const int expected = 18;
+        Assert.Equal(expected, paths.AllPaths.Count);
     }
 
     /// <summary>
@@ -312,6 +328,44 @@ public class IsolationTests
         // И в обратную сторону: строка в перечне, за которой не стоит ни одного свойства-пути, —
         // это путь, подменяемый наугад. Число не задано, оно сверяется с найденным.
         Assert.Equal(declared.Count, paths.AllPaths.Count);
+    }
+
+    /// <summary>
+    /// ⚠️ СВОЙ NODE И ДВИЖОК ЛЕЖАТ В LOCALAPPDATA, И ЭТО ПРОВЕРЯЕМОЕ СВОЙСТВО, а не украшение
+    /// (названо владельцем 10.10.2026): движок весит 213 МБ, свой Node — ещё десятки, и в
+    /// РОУМИНГ-профиле (`APPDATA`) они ездили бы на сервер и обратно при каждом входе человека.
+    /// Проверка смотрит на значения настоящего прогона и требует, чтобы оба пути росли из
+    /// `LocalApplicationData` и НЕ росли из `ApplicationData`.
+    /// </summary>
+    [Fact]
+    public void Свой_движок_и_свой_Node_лежат_в_LOCALAPPDATA()
+    {
+        var owner = AppPaths.ForOwner();
+
+        var local = Path.TrimEndingDirectorySeparator(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        var roaming = Path.TrimEndingDirectorySeparator(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+
+        foreach (var (name, path) in new[] { ("движок", owner.EngineDir), ("свой Node", owner.NodeDir) })
+        {
+            Assert.StartsWith(local + Path.DirectorySeparatorChar, path, StringComparison.OrdinalIgnoreCase);
+            Assert.False(
+                path.StartsWith(roaming + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase),
+                $"{name} оказался в роуминг-профиле: «{path}»");
+        }
+
+        // Имя папки версии — ВЕРСИЯ, а не `current`/`latest`: две версии не смешиваются,
+        // а откат — это подъём сервера из соседней папки.
+        var versionFolder = DshPanel.Server.OwnEngine.VersionDir(owner.EngineDir, "0.1.5-rc.2");
+
+        Assert.EndsWith("0.1.5-rc.2", versionFolder);
+        Assert.DoesNotContain("current", versionFolder, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("latest", versionFolder, StringComparison.OrdinalIgnoreCase);
+
+        var nodeFolder = DshPanel.Server.EngineNode.VersionDir(owner.NodeDir);
+
+        Assert.EndsWith(DshPanel.Server.EngineNode.Release, nodeFolder);
     }
 
     /// <summary>

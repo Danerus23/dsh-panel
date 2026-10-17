@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using DshPanel.Server;
 using DshPanel.Shell;
@@ -48,6 +50,12 @@ public class ServerTests
         /// <summary>Что отвечает разведка. Пусто — «ничего не нашли».</summary>
         public FoundServer? Found { get; set; }
 
+        /// <summary>
+        /// НЕСКОЛЬКО найденных серверов — случай, ради которого заведён список в окне
+        /// (решение владельца 10.10.2026). Пусто — разведка отвечает одним <see cref="Found"/>.
+        /// </summary>
+        public List<FoundServer> FoundMany { get; } = new();
+
         /// <summary>Удалось ли прочитать таблицу портов. False — «посмотреть не удалось».</summary>
         public bool TableReadable { get; set; } = true;
 
@@ -77,9 +85,12 @@ public class ServerTests
         public DiscoveryResult Scan()
         {
             Scans++;
-            IReadOnlyList<FoundServer> found = Found is null
-                ? Array.Empty<FoundServer>()
-                : new[] { Found.Value };
+
+            IReadOnlyList<FoundServer> found = FoundMany.Count > 0
+                ? FoundMany.ToArray()
+                : Found is null
+                    ? Array.Empty<FoundServer>()
+                    : new[] { Found.Value };
 
             return new DiscoveryResult(TableReadable, found);
         }
@@ -95,6 +106,9 @@ public class ServerTests
             DetachCalls++;
             return State;
         }
+
+        /// <summary>Подставной ответ на «подними свой сервер заново»: ничего не делает.</summary>
+        public ServerState RecoverOwnServer(TimeSpan timeout, bool confirmed) => State;
     }
 
     // ------------------------------------------------------------ классификация
@@ -445,7 +459,7 @@ public class ServerTests
         // Нашли: строка называет порт и процесс, кандидат отдан окну, встраивание разрешено.
         var offer = new ServerPanelModel(new FakeServer(ServerState.Stopped(0)), new DiscoveryResult(true, new[] { found }));
         Assert.Contains("3080", offer.FoundText);
-        Assert.Contains("19804", offer.FoundText);
+        Assert.Contains("3080", offer.FoundText, StringComparison.Ordinal);
 
         // Порт владельца назван отдельно: через него идёт текущая работа человека.
         Assert.Contains(ServerDecisions.OwnerPort.ToString(), offer.FoundText);
@@ -480,11 +494,11 @@ public class ServerTests
     [Fact]
     public void Пояснение_к_кнопке_называет_что_именно_панель_берёт()
     {
-        Assert.Contains("своим", PanelStrings.AdoptHint, StringComparison.Ordinal);
-        Assert.Contains(PanelStrings.StopButton, PanelStrings.AdoptHint, StringComparison.Ordinal);
-        Assert.Contains(PanelStrings.DetachButton, PanelStrings.AdoptHint, StringComparison.Ordinal);
-        Assert.Contains("запомнится", PanelStrings.AdoptHint, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("продолжит работу", PanelStrings.AdoptHint, StringComparison.Ordinal);
+        Assert.Contains("своим", PanelStrings.AdoptNote, StringComparison.Ordinal);
+        Assert.Contains(PanelStrings.StopButton, PanelStrings.AdoptNote, StringComparison.Ordinal);
+        Assert.Contains(PanelStrings.DetachButton, PanelStrings.AdoptNote, StringComparison.Ordinal);
+        Assert.Contains("без вопроса", PanelStrings.AdoptNote, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("продолжит работу", PanelStrings.AdoptNote, StringComparison.Ordinal);
 
         // И подпись кнопки говорит про то, что панель БЕРЁТ сервер, а не «подключается на сеанс».
         Assert.Contains("под управление", PanelStrings.AdoptButton, StringComparison.Ordinal);
@@ -507,7 +521,7 @@ public class ServerTests
 
         var panel = window.FindControl<Border>("FoundServerPanel");
         var found = window.FindControl<TextBlock>("FoundServerText");
-        var hint = window.FindControl<TextBlock>("AdoptHintText");
+        var hint = window.FindControl<TextBlock>("AdoptNoteText");
         var adopt = window.FindControl<Button>("AdoptServerButton");
 
         Assert.NotNull(panel);
@@ -519,8 +533,185 @@ public class ServerTests
         Assert.Contains("3080", found!.Text ?? string.Empty);
         Assert.Equal(PanelStrings.AdoptButton, adopt!.Content);
         Assert.True(adopt.IsEnabled, "кнопка «Взять под управление» обязана быть доступна");
+
+        // ⚠️ И ОНА ВИДНА. Один найденный сервер — это ОБЫЧНЫЙ случай, и он не должен ломаться,
+        // когда рядом появился список для нескольких: «доступна, но не видна» — это тот же отказ,
+        // только молчащий (нашлось мутацией 10.10.2026).
+        Assert.True(adopt.IsVisible, "кнопка при одном найденном сервере обязана быть видна");
         Assert.Contains(PanelStrings.DetachButton, hint!.Text ?? string.Empty);
     }
+
+    /// <summary>
+    /// ⚠️ НАЙДЕНО ДВА СЕРВЕРА — ОКНО ПОКАЗЫВАЕТ ОБА, с пометкой, чей это движок (решение владельца
+    /// 10.10.2026). Случай из жизни: чужой DSH человека на 3080 и **наш** движок другой версии рядом.
+    ///
+    /// **Почему одной строки мало.** Между этими двумя разница не косметическая: чужой панель
+    /// предлагает **взять под управление** (и спрашивает согласие нажатием), а свой прежней версии —
+    /// **остановить**, потому что две версии на одном профиле пишут в одни файлы. Показать «первый
+    /// по таблице портов» значит решить за человека то, что он должен выбрать сам.
+    /// </summary>
+    [AvaloniaFact]
+    public void Окно_показывает_оба_найденных_сервера_с_пометками()
+    {
+        const string engineDir = @"C:\Проба\панель\engine";
+
+        var window = new MainWindow();
+        var server = new FakeServer(ServerState.Stopped(0));
+
+        server.FoundMany.Add(new FoundServer(
+            3080, 19804, "node", OwnEngine.BinPath(engineDir, "0.1.5-rc.2"), "0.1.5-rc.2"));
+        server.FoundMany.Add(new FoundServer(
+            3099, 22222, "node", @"C:\Users\Public\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js", string.Empty));
+
+        window.Attach(server);
+        window.RefreshNow();
+        Dispatcher.UIThread.RunJobs();
+
+        var text = window.FindControl<TextBlock>("FoundServerText");
+        var single = window.FindControl<Button>("AdoptServerButton");
+        var list = window.FindControl<StackPanel>("FoundServersList");
+
+        Assert.NotNull(text);
+        Assert.NotNull(single);
+        Assert.NotNull(list);
+
+        // ОБА названы — и каждый со своей пометкой.
+        Assert.Contains("3080", text!.Text ?? string.Empty);
+        Assert.Contains("3099", text.Text ?? string.Empty);
+        Assert.Contains(PanelStrings.FoundServerOwnMarkFormat.Split('(')[0], text.Text ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains(PanelStrings.FoundServerForeignMark, text.Text ?? string.Empty, StringComparison.Ordinal);
+        Assert.Contains("0.1.5-rc.2", text.Text ?? string.Empty);
+
+        // ОБЩАЯ КНОПКА ПРЯЧЕТСЯ: без порта она была бы загадкой «какой из двух».
+        Assert.False(single!.IsVisible, "при двух найденных одна кнопка без порта не годится");
+
+        // А В СПИСКЕ — своя кнопка на каждого, с портом в подписи, и все доступны:
+        // «видно, но нажать нельзя» оставило бы человека без выхода.
+        var buttons = list!.Children.OfType<Button>().ToList();
+
+        Assert.Equal(2, buttons.Count);
+        Assert.Contains(buttons, b => (b.Content as string ?? string.Empty).Contains("3080", StringComparison.Ordinal));
+        Assert.Contains(buttons, b => (b.Content as string ?? string.Empty).Contains("3099", StringComparison.Ordinal));
+        Assert.All(buttons, b => Assert.True(b.IsEnabled, "кнопка «взять под управление» обязана быть доступна"));
+
+        // И подсказка у каждой та же: согласие даётся нажатием на СВОЙ сервер.
+        Assert.All(buttons, b => Assert.Equal(
+            PanelStrings.AdoptNote, ToolTip.GetTip(b) as string ?? string.Empty));
+    }
+
+    /// <summary>
+    /// КАДР ПРИЁМКИ: ДВА НАЙДЕННЫХ СЕРВЕРА НА ЭКРАНЕ. «Зелёная проверка» не отвечает на вопрос
+    /// «а как это выглядит человеку», и решение владельца 10.10.2026 требует **кадр** с двумя
+    /// серверами — поэтому здесь окно не только меряется, но и сохраняется в PNG
+    /// (<see cref="PanelTestStand.SaveFrame"/>).
+    ///
+    /// ⚠️ **Проверка держит ВИД, а не факт записи файла:** два сервера обязаны быть видны ОБА, каждый
+    /// со своей пометкой, и у каждого — своя кнопка. Кадр может быть непустым и при одной строке,
+    /// поэтому «файл создан» здесь ничего не доказывает.
+    /// </summary>
+    [AvaloniaFact]
+    public void Кадр_с_двумя_найденными_серверами_сохраняется()
+    {
+        const string engineDir = @"C:\Проба\панель\engine";
+
+        var window = new MainWindow();
+        var server = new FakeServer(ServerState.Stopped(0));
+
+        server.FoundMany.Add(new FoundServer(
+            3080, 19804, "node", OwnEngine.BinPath(engineDir, "0.1.5-rc.2"), "0.1.5-rc.2"));
+        server.FoundMany.Add(new FoundServer(
+            3099, 22222, "node", @"C:\Users\Public\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js", string.Empty));
+
+        window.Attach(server);
+
+        // ⚠️ ОКНО НАДО ПОКАЗАТЬ. Без `Show()` вёрстка не считается и кадр выходит ПУСТЫМ
+        // (белым листом) — проверка «файл создан» такую пустоту пропустила бы. Проверено: первый
+        // прогон этой проверки дал ровно белый кадр.
+        window.Show();
+        window.RefreshNow();
+        Dispatcher.UIThread.RunJobs();
+
+        var frame = PanelTestStand.SaveFrame(window, "found-two-servers");
+
+        Assert.True(File.Exists(frame), "кадр не сохранён: " + frame);
+
+        var text = window.FindControl<TextBlock>("FoundServerText")!.Text ?? string.Empty;
+        var buttons = window.FindControl<StackPanel>("FoundServersList")!.Children.OfType<Button>().ToList();
+
+        Assert.Contains("3080", text, StringComparison.Ordinal);
+        Assert.Contains("3099", text, StringComparison.Ordinal);
+        Assert.Equal(2, buttons.Count);
+
+        // И КАДР НЕ ПУСТОЙ: одноцветный лист не доказывает ничего, а мерить надо то, что видно.
+        Assert.True(PanelTestStand.ColorsIn(window) > 2, "кадр одноцветный — окно не нарисовано");
+        window.Close();
+    }
+
+    /// <summary>
+    /// НАЖАТИЕ БЕРЁТ ИМЕННО СВОЙ СЕРВЕР, а не «первый найденный»: у второй кнопки должна
+    /// уехать в контроллер её собственная пара «порт + процесс». Иначе выбор из двух был бы
+    /// украшением: человек нажимал бы на один сервер, а панель брала другой.
+    /// </summary>
+    [AvaloniaFact]
+    public void Кнопка_берёт_тот_сервер_который_назван()
+    {
+        var window = new MainWindow();
+        var server = new FakeServer(ServerState.Stopped(0));
+
+        server.FoundMany.Add(new FoundServer(3080, 19804, "node"));
+        server.FoundMany.Add(new FoundServer(3099, 22222, "node"));
+
+        window.Attach(server);
+        window.RefreshNow();
+        Dispatcher.UIThread.RunJobs();
+
+        var buttons = window.FindControl<StackPanel>("FoundServersList")!.Children.OfType<Button>().ToList();
+        var second = buttons.Single(b => (b.Content as string ?? string.Empty).Contains("3099", StringComparison.Ordinal));
+
+        second.Command?.Execute(null);
+        second.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+        // ⚠️ НАЖАТИЕ УХОДИТ В ФОН — ЖДАТЬ НАДО ЕГО, А НЕ ОЧЕРЕДЬ ИНТЕРФЕЙСА (флейк D2, 17.10.2026).
+        // Здесь стоял ОДИН `RunJobs()` и сразу чтение `AdoptCalls`. Но кнопка зовёт
+        // `MainWindow.AdoptFound` → `RunInBackground(() => _server.Adopt(found))` → `Task.Run(...)`:
+        // работа уходит в ПУЛ, а `RunJobs()` разгружает только очередь диспетчера и задачу пула не
+        // ждёт. Пока задержки не было, пул успевал между строками — проверка была зелёной
+        // «по везению»; под нагрузкой полного прогона (пятое падение; в `HISTORY.md:9602–9605`
+        // тот же симптом записан как «причина не найдена») она краснела с `Collection: []`.
+        // Ожидание — с ПОТОЛКОМ, а не «поспать немного»: не случилось за 5 с — падаем и говорим это.
+        Assert.True(
+            WaitForBackground(() => server.AdoptCalls.Count > 0),
+            "нажатие не дошло до сервера за 5 с: фоновый вызов так и не случился");
+
+        Assert.Contains(server.AdoptCalls, found => found.Port == 3099 && found.Pid == 22222);
+        Assert.DoesNotContain(server.AdoptCalls, found => found.Port == 3080);
+    }
+
+    /// <summary>
+    /// ДОЖДАТЬСЯ РАБОТЫ, УШЕДШЕЙ В ФОН: прокручивать очередь интерфейса и спрашивать условие,
+    /// но не дольше потолка.
+    ///
+    /// **Зачем отдельным помощником (находка D2 приёмки пачки D).** Нажатия в окне уходят в фон
+    /// осознанно (`MainWindow.RunInBackground`: окно не должно залипать, пока сервер отвечает), и
+    /// `Dispatcher.UIThread.RunJobs()` этого ожидания не заменяет — он разгружает очередь
+    /// диспетчера, а задача пула живёт своей жизнью. Такой же помощник уже есть в четырёх классах
+    /// (`FirewallSectionTests.WaitFor`, `SettingsEngineBlockTests.SettleUntil`,
+    /// `BackupScopeWindowTests`/`BackupShareableWindowTests`/`BackupWindowStopFlowTests.WaitFor`,
+    /// `BackupStopWindowRenderTests` — свой цикл); этот класс просто остался без него.
+    ///
+    /// **Почему потолок, а не фиксированная пауза:** пауза «на глаз» либо коротка (флейк остаётся),
+    /// либо длинна (набор медленнее), и в обоих случаях непонятно, почему она такая. Здесь потолок —
+    /// срок, за который вызов обязан случиться, иначе проверка падает и называет, чего не дождалась.
+    /// </summary>
+    private static bool WaitForBackground(Func<bool> condition, int milliseconds = 5000) =>
+        SpinWait.SpinUntil(
+            () =>
+            {
+                Dispatcher.UIThread.RunJobs();
+
+                return condition();
+            },
+            TimeSpan.FromMilliseconds(milliseconds));
 
     /// <summary>
     /// КНОПКА «ОТКРЫТЬ АГЕНТА»: доступна ровно тогда, когда сервер отвечает И ссылка известна.
@@ -541,14 +732,14 @@ public class ServerTests
         // Сервер отвечает, а ссылки панель ещё не знает — нажимать нечем, и она это говорит.
         var noLink = new ServerPanelModel(running);
         Assert.False(noLink.CanOpenAgent);
-        Assert.Equal(PanelStrings.OpenAgentNoLinkHint, noLink.OpenAgentHint);
+        Assert.Equal(PanelStrings.OpenAgentNoLinkNote, noLink.OpenAgentHint);
 
         // Ссылка есть — кнопка доступна, и подсказка не выдаёт её содержимое.
         running.EntryLink = Secret;
 
         var ready = new ServerPanelModel(running);
         Assert.True(ready.CanOpenAgent);
-        Assert.Equal(PanelStrings.OpenAgentReadyHint, ready.OpenAgentHint);
+        Assert.Equal(PanelStrings.OpenAgentReadyNote, ready.OpenAgentHint);
         Assert.Equal(PanelStrings.OpenAgentButton, ready.OpenAgentButtonText);
 
         // Сервер не работает — открывать нечего, даже когда ссылка сохранилась с прошлого раза.
@@ -556,12 +747,12 @@ public class ServerTests
         var idle = new ServerPanelModel(stopped);
 
         Assert.False(idle.CanOpenAgent);
-        Assert.Equal(PanelStrings.OpenAgentNoServerHint, idle.OpenAgentHint);
+        Assert.Equal(PanelStrings.OpenAgentNoServerNote, idle.OpenAgentHint);
 
         // Окно без контроллера — тоже «открывать нечего», а не «сейчас откроем».
         var unbound = new ServerPanelModel();
         Assert.False(unbound.CanOpenAgent);
-        Assert.Equal(PanelStrings.OpenAgentNoServerHint, unbound.OpenAgentHint);
+        Assert.Equal(PanelStrings.OpenAgentNoServerNote, unbound.OpenAgentHint);
 
         // НИ ОДНА из подсказок и подписей не содержит ссылки и токена.
         var texts = new[]
@@ -618,7 +809,7 @@ public class ServerTests
     /// Кнопка и сообщения о ДЕЙСТВИИ зовут агента — своим словом в каждом языке («агент» / «agent» /
     /// «智能体»), тем же, каким он назван в остальных строках словаря.
     ///
-    /// ⚠️ Две строки-ПРИЧИНЫ (<c>OpenAgentNoLinkHint</c> и <c>OpenAgentNoLinkTitle</c>) в этот
+    /// ⚠️ Две строки-ПРИЧИНЫ (<c>OpenAgentNoLinkNote</c> и <c>OpenAgentNoLinkTitle</c>) в этот
     /// список не входят намеренно: они называют причину — «ссылка входа ещё неизвестна», — а не
     /// действие, и вставленное туда слово «агент» сделало бы подсказку и заголовок хуже, ничего
     /// не уточнив. Их сторожит проверка выше: панели в них нет.
@@ -636,8 +827,8 @@ public class ServerTests
         string[] actionKeys =
         {
             nameof(PanelStrings.OpenAgentButton),
-            nameof(PanelStrings.OpenAgentReadyHint),
-            nameof(PanelStrings.OpenAgentNoServerHint),
+            nameof(PanelStrings.OpenAgentReadyNote),
+            nameof(PanelStrings.OpenAgentNoServerNote),
             nameof(PanelStrings.OpenAgentFailedTitle),
             nameof(PanelStrings.OpenAgentOpenedLog),
             nameof(PanelStrings.OpenAgentOpenFailedLogFormat),
@@ -661,9 +852,9 @@ public class ServerTests
     private static string[] AgentButtonKeys() => new[]
     {
         nameof(PanelStrings.OpenAgentButton),
-        nameof(PanelStrings.OpenAgentReadyHint),
-        nameof(PanelStrings.OpenAgentNoServerHint),
-        nameof(PanelStrings.OpenAgentNoLinkHint),
+        nameof(PanelStrings.OpenAgentReadyNote),
+        nameof(PanelStrings.OpenAgentNoServerNote),
+        nameof(PanelStrings.OpenAgentNoLinkNote),
         nameof(PanelStrings.OpenAgentFailedTitle),
         nameof(PanelStrings.OpenAgentNoLinkTitle),
         nameof(PanelStrings.OpenAgentOpenedLog),
@@ -698,11 +889,11 @@ public class ServerTests
 
         // Надписи под кнопкой нет вовсе — и это проверяется прямо: она была обращением к человеку
         // от лица программы и занимала строку на виду.
-        Assert.Null(window.FindControl<TextBlock>("OpenAgentHintText"));
+        Assert.Null(window.FindControl<TextBlock>("OpenAgentNoteText"));
 
         // Ссылки панель ещё не знает — кнопка недоступна, и ПОДСКАЗКА называет причину.
         Assert.False(button.IsEnabled);
-        Assert.Equal(PanelStrings.OpenAgentNoLinkHint, ToolTip.GetTip(button) as string);
+        Assert.Equal(PanelStrings.OpenAgentNoLinkNote, ToolTip.GetTip(button) as string);
 
         // Ссылка появилась — кнопка доступна, и подсказка говорит, что произойдёт.
         server.EntryLink = "http://127.0.0.1:3080/?token=SECRET-TOKEN-42";
@@ -710,7 +901,7 @@ public class ServerTests
         Dispatcher.UIThread.RunJobs();
 
         Assert.True(button.IsEnabled);
-        Assert.Equal(PanelStrings.OpenAgentReadyHint, ToolTip.GetTip(button) as string);
+        Assert.Equal(PanelStrings.OpenAgentReadyNote, ToolTip.GetTip(button) as string);
 
         // Ни подпись, ни подсказка ссылку не выдают.
         Assert.DoesNotContain("SECRET-TOKEN-42", ToolTip.GetTip(button) as string ?? string.Empty, StringComparison.Ordinal);
@@ -759,5 +950,54 @@ public class ServerTests
 
         // Панель спрашивает состояние у сервера, а не рисует придуманное.
         Assert.True(server.Refreshes >= 1, "окно не спросило состояние у сервера");
+    }
+    /// <summary>
+    /// СТРОКА ЖУРНАЛА О ЗАПУЩЕННОМ СЕРВЕРЕ ПРЯЧЕТ КАТАЛОГ ПОЛЬЗОВАТЕЛЯ (A2, находка C1).
+    ///
+    /// **От какого случая.** В одной строке журнала рабочая папка уже была под маской, а домашний
+    /// каталог движка (`DSH_HOME`) уезжал НАСТОЯЩИМ путём — то есть рядом с замаскированным соседом
+    /// и потому особенно похоже на проверенное. Журнал панели уходит в резервную копию и в чужой
+    /// отчёт, и имя пользователя в нём — личные данные (красная линия 7).
+    ///
+    /// Проверка идёт ПО СТРОКЕ ЖУРНАЛА, которую собирает тот же член, что и запуск сервера:
+    /// сервер при этом не поднимается — иначе проверка трогала бы машину.
+    ///
+    /// **Мутации, которые обязаны упасть:** «снять маску с `DSH_HOME`» (CD2) · «снять маску
+    /// с рабочей папки».
+    /// </summary>
+    [Fact]
+    public void Строка_журнала_о_запуске_сервера_прячет_каталог_пользователя()
+    {
+        var line = ServerController.EngineStartedLogLine(
+            pid: 4242,
+            port: 3081,
+            dshHome: @"C:\Users\Кто-тоТам\.dsh",
+            workingDirectory: @"C:\Users\Кто-тоТам\Documents\projects");
+
+        // Имени пользователя в строке нет — ни в домашнем каталоге движка, ни в рабочей папке.
+        Assert.DoesNotContain("Кто-тоТам", line, StringComparison.OrdinalIgnoreCase);
+
+        // А путь остался понятным: каталог пользователя заменён на `~`.
+        Assert.Contains("~", line, StringComparison.Ordinal);
+        Assert.Contains(".dsh", line, StringComparison.Ordinal);
+
+        // Порт и номер процесса — то, ради чего строка и пишется, — на месте: маска их не съела.
+        Assert.Contains("3081", line, StringComparison.Ordinal);
+        Assert.Contains("4242", line, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ЗАКОННЫЙ ПУТЬ МАСКА НЕ ПОРТИТ: путь вне профиля пользователя остаётся собой, а пустой —
+    /// пустым. Иначе «прячем личное» превратилось бы в «прячем всё» и строка журнала перестала бы
+    /// говорить, куда именно поднялся сервер.
+    /// </summary>
+    [Fact]
+    public void Маска_не_трогает_путь_вне_профиля_пользователя()
+    {
+        var line = ServerController.EngineStartedLogLine(1, 3081, @"D:\dsh-home", @"D:\projects");
+
+        Assert.Contains(@"D:\dsh-home", line, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"D:\projects", line, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("~", line, StringComparison.Ordinal);
     }
 }

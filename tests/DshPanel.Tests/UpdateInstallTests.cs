@@ -110,6 +110,10 @@ public class UpdateInstallTests
     /// <summary>
     /// ПОДСТАНОВКА ВМЕСТО СЕТИ: отдаёт заранее известные байты и считает, что у него просили.
     /// Ни одного живого запроса: адреса здесь вымышленные и ведут в никуда.
+    ///
+    /// ⚠️ Подстановка ПРОВЕРЯЕТ НАЗВАННУЮ СУММУ так же, как живая загрузка: движок подготовки
+    /// передаёт сюда ожидаемый хэш, и подстановка, глотающая его, стерегла бы не тот путь,
+    /// которым идёт панель.
     /// </summary>
     private sealed class FakeDownload : IUpdateDownload
     {
@@ -118,6 +122,9 @@ public class UpdateInstallTests
         public List<string> Asked { get; } = new();
 
         public List<UpdateProgress> Ticks { get; } = new();
+
+        /// <summary>Ожидаемая сумма, которую передал движок подготовки (по адресу).</summary>
+        public Dictionary<string, string> SumAsked { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Адрес, на котором подстановка обязана отказать (пусто — не отказывает).</summary>
         public string FailUrl { get; set; } = string.Empty;
@@ -128,9 +135,15 @@ public class UpdateInstallTests
             return this;
         }
 
-        public void Save(string url, string path, Action<long, long>? progress)
+        public UpdateDownloadResult Save(
+            string url,
+            string path,
+            string? expectedSum,
+            Action<long, long>? progress,
+            UpdateDownloadPolicy? policy = null)
         {
             Asked.Add(url);
+            SumAsked[url] = expectedSum ?? string.Empty;
 
             if (FailUrl.Length > 0 && string.Equals(url, FailUrl, StringComparison.OrdinalIgnoreCase))
                 throw new HttpRequestException("HTTP 500");
@@ -138,9 +151,20 @@ public class UpdateInstallTests
             if (!_files.TryGetValue(url, out var bytes))
                 throw new InvalidOperationException("подстановки для адреса нет: " + url);
 
+            // Сумма считается СВОИМ счётом, а не `UpdateSums.Sha256`: иначе подстановка сверяла бы
+            // панель с нею же, и неверная сумма в файле сумм осталась бы незамеченной.
+            var got = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+            var wanted = (expectedSum ?? string.Empty).Trim();
+
             progress?.Invoke(0, bytes.Length);
+
+            if (wanted.Length > 0 && !string.Equals(wanted, got, StringComparison.OrdinalIgnoreCase))
+                return new UpdateDownloadResult(UpdateDownloadOutcome.SumMismatch, string.Empty, wanted, got);
+
             File.WriteAllBytes(path, bytes);
             progress?.Invoke(bytes.Length, bytes.Length);
+
+            return UpdateDownloadResult.Done;
         }
     }
 
@@ -522,6 +546,7 @@ public class UpdateInstallTests
     {
         // Каталог прогона, а не Location сборки: у сборки одним файлом путь пуст, и проверка
         // молча мерила бы не то. Рядом с проверками лежит настоящая собранная панель.
+        // КОРЕНЬ: каталог сборки проверок — из него читается версия собранной панели, а не показывается путь.
         var folder = AppContext.BaseDirectory;
 
         var version = UpdateStaging.ReadVersion(folder);

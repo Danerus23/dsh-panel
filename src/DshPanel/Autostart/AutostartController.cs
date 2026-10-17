@@ -132,14 +132,29 @@ public sealed class AutostartController : IAutostartControl
         return false;
     }
 
-    /// <summary>Короткое описание состояния по-русски — для журнала. Одно на всю панель.</summary>
+    /// <summary>
+    /// Короткое описание состояния по-русски — для журнала. Одно на всю панель.
+    ///
+    /// ⚠️ **ПУТЬ ЗДЕСЬ — МАСКОЙ** (A2, находка C1): запись хранит абсолютный путь к exe, то есть
+    /// каталог пользователя, а журнал панели уходит в резервную копию и в чужой отчёт (красная
+    /// линия 7). Маска — та же, что у путей в окнах (`Shell\DisplayMask`), поэтому путь остаётся
+    /// понятным: `~` вместо каталога человека.
+    ///
+    /// Это описание уезжает в журнал из ЧЕТЫРЁХ мест (`Locked`, `Kept`, `Failed`, `Repaired`),
+    /// поэтому маска стоит ЗДЕСЬ, а не на каждом вызове: иначе одна из строк однажды осталась бы
+    /// без неё — ровно так и вышло с журнальной строкой сервера (A2, `DSH_HOME`).
+    /// </summary>
     public static string Describe(AutostartState state) => state.Where switch
     {
         AutostartWhere.Self => PanelStrings.AutostartWhereSelfLog,
         AutostartWhere.Missing => string.Format(
-            CultureInfo.CurrentCulture, PanelStrings.AutostartWhereMissingLogFormat, state.Path),
+            CultureInfo.CurrentCulture,
+            PanelStrings.AutostartWhereMissingLogFormat,
+            DisplayMask.Path(state.Path)),
         AutostartWhere.Other => string.Format(
-            CultureInfo.CurrentCulture, PanelStrings.AutostartWhereOtherLogFormat, state.Path),
+            CultureInfo.CurrentCulture,
+            PanelStrings.AutostartWhereOtherLogFormat,
+            DisplayMask.Path(state.Path)),
         AutostartWhere.Unknown => PanelStrings.AutostartWhereUnknownLog,
         _ => PanelStrings.AutostartWhereOffLog,
     };

@@ -162,7 +162,7 @@ public partial class BackupWindow : Window
         };
 
         ScopeExtraLabel.Text = PanelStrings.BackupScopeExtraLabel;
-        ScopeExtraHint.Text = PanelStrings.BackupScopeExtraHint;
+        ScopeExtraHint.Text = PanelStrings.BackupScopeExtraNote;
         SaveExtrasButton.Content = PanelStrings.BackupScopeExtraSave;
 
         // Правда о копии на ходу — там же, где кнопка: работающий сервер ради копии не гасится
@@ -290,7 +290,7 @@ public partial class BackupWindow : Window
                 CultureInfo.CurrentCulture,
                 PanelStrings.BackupFolderHintFormat,
                 DisplayMask.Path(_backups.Folder))
-            : PanelStrings.BackupFolderCustomHint;
+            : PanelStrings.BackupFolderCustomNote;
 
         // Две РАЗНЫЕ мысли — двумя строками, а не склейкой через пробел. В прогоне проверки к подписи
         // папки добавляется оговорка «копии здесь не снимаются», и однажды они слиплись в кашу:
@@ -576,8 +576,8 @@ public partial class BackupWindow : Window
         BackupScope.Full => PanelStrings.BackupScopeFullWarning,
         BackupScope.Custom => _backups is not null && _backups.ExtraExclusions.Count == 0
             ? PanelStrings.BackupScopeCustomEmpty
-            : PanelStrings.BackupScopeCustomHint,
-        _ => PanelStrings.BackupScopeAutoHint,
+            : PanelStrings.BackupScopeCustomNote,
+        _ => PanelStrings.BackupScopeAutoNote,
     };
 
     /// <summary>
@@ -741,7 +741,7 @@ public partial class BackupWindow : Window
 
         if (_backups.ListProblem.Length > 0) return _backups.ListProblem;
 
-        if (_backups.Entries.Count > 0) return PanelStrings.BackupListSelectHint;
+        if (_backups.Entries.Count > 0) return PanelStrings.BackupListSelectNote;
 
         return Directory.Exists(_backups.Folder)
             ? PanelStrings.BackupListEmpty

@@ -59,11 +59,25 @@ public readonly record struct ServerState(
 /// Найденный работающий сервер DSH, который подняла не панель. Это ещё НЕ взятый под управление
 /// сервер: панель обязана показать его человеку и спросить (решение владельца 24.09.2026),
 /// а не встраиваться молча.
+///
+/// ⚠️ **«Не панель» — не то же самое, что «чужой движок»** (этап E3): найденный сервер может быть
+/// поднят **нашим** движком из **нашей** папки — например, старой версией, которая пережила
+/// обновление. Тогда `OwnVersion` называет её версию, и панель обязана говорить об этом **своими
+/// словами**: «поднят не панелью» про свой же движок — неправда, а «возьмите под управление»
+/// предлагало бы человеку взять под управление то, что и так наше, вместо «остановите старое».
 /// </summary>
-public readonly record struct FoundServer(int Port, int Pid, string ProcessName)
+public readonly record struct FoundServer(
+    int Port,
+    int Pid,
+    string ProcessName,
+    string EnginePath = "",
+    string OwnVersion = "")
 {
     /// <summary>Порт владельца: именно на нём чаще всего и стоит его живой DSH.</summary>
     public bool IsOwnerPort => Port == ServerDecisions.OwnerPort;
+
+    /// <summary>Этот сервер поднят НАШИМ движком (путь запуска лежит в нашей папке движка).</summary>
+    public bool IsOurEngine => OwnVersion.Length > 0;
 }
 
 /// <summary>Чем кончилось опознание процесса, слушающего порт. <c>Match</c> — это сервер DSH.</summary>

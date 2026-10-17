@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using DshPanel.Backup;
 using DshPanel.Isolation;
 
@@ -34,6 +34,16 @@ public sealed record ServerStateFiles(
     /// говорить «сохранил». Читать при этом тоже нечего: обе стороны — следствие одного решения.
     /// </summary>
     public bool Persists { get; init; } = true;
+
+    /// <summary>
+    /// Как НАЗВАТЬ файл записи в словах человеку (для сообщения «не удаётся убрать запись»).
+    ///
+    /// Пусто — не называть. Это ЯРЛЫК ДЛЯ СООБЩЕНИЯ, а не путь для чтения: контроллер по-прежнему
+    /// не знает, где лежат файлы, и прогон без права получает пустую строку. В сообщение путь
+    /// уходит через <c>DisplayMask</c> — каталог пользователя показывается как `~`.
+    /// </summary>
+    public Func<string> DescribeOwnServer { get; init; } = () => string.Empty;
+
 
     /// <summary>
     /// Права на файлы нет — например, прогон проверки. **Пусто и молча**, и это осознанно:
@@ -74,7 +84,10 @@ public sealed record ServerStateFiles(
             ClearEntryLink: () => Delete(paths.EntryLinkFile),
             ReadOwnServer: () => Read(paths.OwnServerFile),
             WriteOwnServer: text => Write(paths.OwnServerFile, text),
-            ClearOwnServer: () => Delete(paths.OwnServerFile));
+            ClearOwnServer: () => Delete(paths.OwnServerFile))
+        {
+            DescribeOwnServer = () => paths.OwnServerFile,
+        };
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using DshPanel.Files;
 using DshPanel.Isolation;
 using DshPanel.Localization;
 using DshPanel.Pricing;
@@ -62,6 +63,11 @@ public static class UpdateSelfTest
     /// <summary>
     /// Подстановка вместо скачивания: отдаёт заранее известные БАЙТЫ и зовёт ход подготовки.
     /// Ни одного живого запроса: адреса здесь вымышленные.
+    ///
+    /// ⚠️ Подстановка СВЕРЯЕТ СУММУ так же, как живая загрузка, — иначе проба объявляла бы
+    /// удачей то, что живой путь отверг бы. Живой путь проверяет сумму ДО занятия рабочего места,
+    /// и подстановка обязана вести себя так же: файл пишется по рабочему пути только целиком
+    /// и только со сходящейся суммой.
     /// </summary>
     private sealed class FakeDownload : IUpdateDownload
     {
@@ -73,14 +79,28 @@ public static class UpdateSelfTest
             return this;
         }
 
-        public void Save(string url, string path, Action<long, long>? progress)
+        public UpdateDownloadResult Save(
+            string url,
+            string path,
+            string? expectedSum,
+            Action<long, long>? progress,
+            UpdateDownloadPolicy? policy = null)
         {
             if (!_files.TryGetValue(url, out var bytes))
                 throw new InvalidOperationException("подстановки для адреса нет: " + url);
 
             progress?.Invoke(0, bytes.Length);
+
+            var wanted = (expectedSum ?? string.Empty).Trim();
+            var got = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+            if (wanted.Length > 0 && !string.Equals(wanted, got, StringComparison.OrdinalIgnoreCase))
+                return new UpdateDownloadResult(UpdateDownloadOutcome.SumMismatch, string.Empty, wanted, got);
+
             File.WriteAllBytes(path, bytes);
             progress?.Invoke(bytes.Length, bytes.Length);
+
+            return UpdateDownloadResult.Done;
         }
     }
 
@@ -248,7 +268,9 @@ public static class UpdateSelfTest
                 dispatch: action => action(),
                 log: _ => { },
                 remember: traces => settings.SetUpdateChecked(traces),
-                rememberCheckedAt: stamp => settings.SetUpdateCheckedAt(stamp)))
+                rememberCheckedAt: stamp => settings.SetUpdateCheckedAt(stamp),
+                isolatedRun: false,
+                rememberAttempt: attempt => settings.SetUpdateAttempt(attempt)))
             {
                 Check("до проверки состояние — «ещё не проверяли»", controller.SourceText == PanelStrings.UpdateNeverChecked);
 
@@ -272,6 +294,15 @@ public static class UpdateSelfTest
                 Check("страница выпуска записана в настройки", settings.Settings.UpdatePageUrl.Length > 0);
                 Check("сырое тело выпуска записано в настройки", settings.Settings.UpdateNotesRaw.Contains("## ZH", StringComparison.Ordinal));
 
+                // ⚠️ УДАЧНАЯ попытка тоже записывается, видом `ok`. Иначе после удачной проверки
+                // в файле остался бы след прежней неудачи, и панель держала бы отступ, который
+                // уже ни на чём не основан.
+                Check(
+                    "удачная попытка записана в настройки видом и временем",
+                    settings.Settings.UpdateAttemptKind == UpdateAttempt.KindOk
+                    && PricingDecisions.TryParse(settings.Settings.UpdateAttemptAt, out var okAt)
+                    && okAt == now);
+
                 using (var again = new UpdateController(
                     client,
                     () => settings.Settings,
@@ -282,7 +313,9 @@ public static class UpdateSelfTest
                     dispatch: action => action(),
                     log: _ => { },
                     remember: traces => settings.SetUpdateChecked(traces),
-                    rememberCheckedAt: stamp => settings.SetUpdateCheckedAt(stamp)))
+                    rememberCheckedAt: stamp => settings.SetUpdateCheckedAt(stamp),
+                    isolatedRun: false,
+                    rememberAttempt: attempt => settings.SetUpdateAttempt(attempt)))
                 {
                     again.Announce += announcements.Add;
                     again.Tick(now);
@@ -316,7 +349,9 @@ public static class UpdateSelfTest
                 dispatch: action => action(),
                 log: _ => { },
                 remember: traces => settings.SetUpdateChecked(traces),
-                rememberCheckedAt: stamp => settings.SetUpdateCheckedAt(stamp)))
+                rememberCheckedAt: stamp => settings.SetUpdateCheckedAt(stamp),
+                isolatedRun: false,
+                rememberAttempt: attempt => settings.SetUpdateAttempt(attempt)))
             {
                 var told = new List<string>();
                 skipped.Announce += told.Add;
@@ -337,7 +372,9 @@ public static class UpdateSelfTest
                     dispatch: action => action(),
                     log: _ => { },
                     remember: traces => settings.SetUpdateChecked(traces),
-                    rememberCheckedAt: stamp => settings.SetUpdateCheckedAt(stamp)))
+                    rememberCheckedAt: stamp => settings.SetUpdateCheckedAt(stamp),
+                    isolatedRun: false,
+                    rememberAttempt: attempt => settings.SetUpdateAttempt(attempt)))
                 {
                     afterSkip.Check();
                     Wait(() => !afterSkip.Busy);
@@ -360,14 +397,33 @@ public static class UpdateSelfTest
                 dispatch: action => action(),
                 log: _ => { },
                 remember: _ => { },
-                rememberCheckedAt: _ => { }))
+                rememberCheckedAt: _ => { },
+                isolatedRun: false,
+                // Дверь попытки ведёт в НАСТОЯЩИЕ настройки (файл под корнем прогона): только так
+                // видно, что отказ ПЕРЕЖИВАЕТ перезапуск, а не живёт до закрытия окна.
+                rememberAttempt: attempt => settings.SetUpdateAttempt(attempt)))
             {
                 refused.Check();
                 Wait(() => !refused.Busy);
 
                 Check("отказ GitHub не бросил исключения наружу", !refused.Busy);
-                Check("отказ назван человеку словами", !refused.Result.Ok && refused.Result.Error.Length > 0);
-                Check("отказ виден в строке состояния", refused.SourceText.Contains(PanelStrings.UpdateRateLimited, StringComparison.Ordinal));
+                Check(
+                    "отказ записан попыткой и назван человеку словами",
+                    refused.Attempt.Failed
+                    && refused.AttemptText.Contains(PanelStrings.UpdateRateLimited, StringComparison.Ordinal));
+                Check("отказ не выдаёт себя за источник состояния", refused.SourceText == PanelStrings.UpdateNeverChecked);
+
+                // ⚠️ ГЛАВНОЕ ПРО ЭТОТ БЛОК: попытка обязана пережить ПЕРЕЗАПУСК панели — иначе
+                // следующий запуск снова пойдёт в сеть (в том числе в выеденный лимит GitHub),
+                // то есть дефект владельца остался бы в живом пути. Читаем НОВЫМ хранилищем, с диска.
+                var reloaded = new SettingsStore(paths.SettingsFile).Load().Settings;
+                var revived = UpdateAttempt.Parse(
+                    reloaded.UpdateAttemptAt, reloaded.UpdateAttemptKind, reloaded.UpdateAttemptError);
+
+                Check("попытка проверки переживает перезапуск панели", revived.Failed && revived.At == now);
+                Check(
+                    "отступ после отказа считается от записанной попытки",
+                    UpdateDecisions.Waiting(now.AddMinutes(30), revived));
             }
 
             // --- 5. прогон без права в сеть не ходит ВООБЩЕ ----------------------
@@ -385,7 +441,9 @@ public static class UpdateSelfTest
                 dispatch: action => action(),
                 log: log.Add,
                 remember: _ => { },
-                rememberCheckedAt: _ => { }))
+                rememberCheckedAt: _ => { },
+                isolatedRun: false,
+                rememberAttempt: _ => { }))
             {
                 locked.Start();
                 locked.Tick(now);
@@ -554,19 +612,11 @@ public static class UpdateSelfTest
         }
         finally
         {
-            var gone = true;
-            var why = string.Empty;
+            var removal = TreeDeletion.Remove(root);
+            var gone = removal.Ok;
+            var why = removal.Ok ? string.Empty : $" ({removal.Reason})";
 
-            try
-            {
-                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
-                try { if (Directory.Exists(parent)) Directory.Delete(parent); } catch { }
-            }
-            catch (Exception ex)
-            {
-                gone = false;
-                why = $" ({ex.GetType().Name}: {ex.Message})";
-            }
+            try { if (Directory.Exists(parent)) Directory.Delete(parent); } catch { }
 
             total++;
             if (gone) passed++;

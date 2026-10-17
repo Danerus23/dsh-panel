@@ -214,6 +214,7 @@ public class AutostartTests
         Assert.NotEqual("DeepSeekHarness", AutostartDecisions.ValueName);
 
         var store = new FakeStore();
+        // КОРЕНЬ: путь к своему exe для сверки записи; в текст человеку он здесь не попадает — проверяются имена записи в хранилище.
         var controller = new AutostartController(store, Environment.ProcessPath!, _ => { });
 
         Assert.True(controller.Set(true));
@@ -307,7 +308,7 @@ public class AutostartTests
         Assert.Empty(inner.Written);
         Assert.Empty(inner.Deleted);
         Assert.False(controller.Writable);
-        Assert.Contains(log, line => line.Contains("прогон проверки", StringComparison.Ordinal));
+        Assert.Contains(log, line => line.Contains("проверка панели", StringComparison.Ordinal));
     }
 
     // ---------------------------------------------------------------- файловое хранилище
@@ -372,7 +373,10 @@ public class AutostartTests
     [Fact]
     public void Живая_чужая_запись_сверкой_не_переписывается()
     {
+        // КОРЕНЬ: путь к своему exe для сверки записи; в текст человеку не идёт (проверяется состояние и хранилище).
         var self = Environment.ProcessPath!;
+
+        // КОРЕНЬ: путь к файлу-соседу — так сверка видит «другую живую копию»; только для чтения, не для показа.
         var neighbour = Path.Combine(AppContext.BaseDirectory, "DshPanel.dll");
 
         var log = new List<string>();
@@ -391,7 +395,10 @@ public class AutostartTests
     [Fact]
     public void По_просьбе_человека_запись_переводится_на_эту_копию()
     {
+        // КОРЕНЬ: путь к своему exe для сверки записи; в текст человеку не идёт (проверяется состояние и хранилище).
         var self = Environment.ProcessPath!;
+
+        // КОРЕНЬ: путь к файлу-соседу — так сверка видит «другую живую копию»; только для чтения, не для показа.
         var neighbour = Path.Combine(AppContext.BaseDirectory, "DshPanel.dll");
 
         var store = new FakeStore();
@@ -417,10 +424,27 @@ public class AutostartTests
     /// <summary>
     /// Удачная попытка — обычная подпись про состояние записи. Отказ не выдумывается там,
     /// где всё получилось.
+    ///
+    /// ⚠️ **ОЖИДАНИЕ СТРОИТСЯ ТОЙ ЖЕ ДВЕРЬЮ, ЧТО И ПОДПИСЬ, — через маску** (находка приёмки F-1).
+    /// Пачка A научила подпись маскировать путь (`Views\AutostartPanelModel.cs`: `DisplayMask.Path`),
+    /// а здесь ожидание собиралось из `Environment.ProcessPath` БЕЗ маски. Итог: в рабочем дереве
+    /// (`C:\Harness\…` — вне профиля пользователя) проверка была зелёной, а в чистой копии в
+    /// `%TEMP%` (путь ПОД профилем) падала ВСЕГДА — то есть мерила место, где лежит дерево,
+    /// а не подпись продукта.
+    ///
+    /// ⚠️ **Почему `Environment.ProcessPath`, а не выдуманный путь вне профиля** (как в соседней
+    /// проверке отказа): сверка записи сравнивает путь с ФАЙЛОМ на диске. С несуществующим путём
+    /// состояние стало бы «ведёт на отсутствующий файл», а не «эта копия», и проверка перестала бы
+    /// испытывать ту подпись, ради которой заведена. Здесь нужен настоящий свой exe — и маска
+    /// на нём, потому что именно так его показывает продукт.
+    ///
+    /// Маску на этом пути стережёт отдельная, НЕ зависящая от места проверка:
+    /// <see cref="Путь_записи_в_подписи_показывается_маской"/> (путь профиля задан литералом).
     /// </summary>
     [Fact]
     public void Удачная_попытка_оставляет_обычную_подпись()
     {
+        // КОРЕНЬ: путь к своему exe для сверки записи; в текст он попадает ТОЛЬКО через подпись, и там маска.
         var self = Environment.ProcessPath!;
         var store = new FakeStore();
         var model = new AutostartPanelModel(new AutostartController(store, self, _ => { }));
@@ -428,8 +452,11 @@ public class AutostartTests
         Assert.Equal(PanelStrings.AutostartOff, model.NoteText);
 
         Assert.True(model.Set(true));
+
+        // Ожидание — через ТУ ЖЕ дверь, что у продукта: `DisplayMask.Path`. Иначе проверка ловит
+        // не подпись, а место дерева (вне профиля маска ничего не меняет — и дефект невидим).
         Assert.Equal(
-            string.Format(CultureInfo.CurrentCulture, PanelStrings.AutostartSelfFormat, self),
+            string.Format(CultureInfo.CurrentCulture, PanelStrings.AutostartSelfFormat, DisplayMask.Path(self)),
             model.NoteText);
     }
 
@@ -498,4 +525,95 @@ public class AutostartTests
     // её показа, подстановки состояния и недоступности в прогоне проверки живут теперь
     // в `SettingsTests.cs` — вместе с окном, в котором она стоит. Домен автозапуска
     // и его хранилища проверяются здесь и никуда не переезжали.
+    /// <summary>
+    /// ПУТЬ ЗАПИСИ В ОКНЕ ПОКАЗЫВАЕТСЯ МАСКОЙ (A3, находка C1).
+    ///
+    /// **От какого случая.** Подпись под галочкой называла абсолютный путь записи — то есть каталог
+    /// пользователя. Эта подпись уезжает в кадр `--shot` и в README, а имя пользователя в кадре —
+    /// личные данные (красная линия 7). Маска — та же, что у остальных путей панели
+    /// (`Shell\DisplayMask`), поэтому путь остаётся понятным: `~` вместо каталога человека.
+    ///
+    /// **Мутации, которые обязаны упасть:** «вернуть настоящий путь в подпись» (CD-серия, A3) ·
+    /// «замаскировать пустое состояние» (тогда «автозапуск выключен» стало бы `~`-строкой).
+    /// </summary>
+    [Fact]
+    public void Путь_записи_в_подписи_показывается_маской()
+    {
+        var store = new FakeStore();
+        var self = @"C:\Panel\DshPanel.exe";
+
+        // Запись ведёт на ДРУГУЮ живую копию под профилем пользователя — это и есть личные данные.
+        store.Seed(
+            AutostartDecisions.ValueName,
+            AutostartDecisions.BuildValue(@"C:\Users\Кто-тоТам\AppData\Local\DshPanel2\DshPanel.exe"));
+
+        var model = new AutostartPanelModel(new AutostartController(store, self, _ => { }));
+
+        // Файла по этому пути в проверке нет — значит состояние «запись ведёт на отсутствующий файл».
+        // Путь при этом всё равно показывается человеку и обязан быть под маской; для «другой копии»
+        // (Other) правило подписи то же самое — строка строится общей дверью.
+        Assert.Equal(AutostartWhere.Missing, model.State.Where);
+        Assert.DoesNotContain("Кто-тоТам", model.NoteText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("~", model.NoteText, StringComparison.Ordinal);
+        Assert.Contains("DshPanel.exe", model.NoteText, StringComparison.Ordinal);
+
+        // «Записи нет» — по-прежнему словами, без единого `~`: маска не выдумывает путь там,
+        // где его нет.
+        var empty = new AutostartPanelModel(new AutostartController(new FakeStore(), self, _ => { }));
+
+        Assert.Equal(PanelStrings.AutostartOff, empty.NoteText);
+        Assert.DoesNotContain("~", empty.NoteText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ЖУРНАЛЬНАЯ СТРОКА АВТОЗАПУСКА ПРЯЧЕТ КАТАЛОГ ПОЛЬЗОВАТЕЛЯ (A2, находка C1 — докрытие).
+    ///
+    /// **От какого случая.** Запись автозапуска хранит абсолютный путь к exe. В окне этот путь
+    /// маскировался (A3), а в ЖУРНАЛ уходил настоящим — из четырёх мест сразу (`Locked`, `Kept`,
+    /// `Failed`, `Repaired`) через одно описание `Describe`. Журнал панели уезжает в резервную
+    /// копию и в чужой отчёт (красная линия 7), и имя пользователя в нём — личные данные.
+    ///
+    /// Проверка идёт **ПО СТРОКЕ ЖУРНАЛА**, как у A2: она не разбирает код, а получает строку
+    /// тем же путём, каким её получает человек — через сверку записи при старте.
+    ///
+    /// **Мутации, которые обязаны упасть:** «снять маску в `Describe`» (CD7) · «замаскировать
+    /// только одно из двух местных состояний» (второе утверждение).
+    /// </summary>
+    [Fact]
+    public void Строка_журнала_автозапуска_прячет_каталог_пользователя()
+    {
+        var store = new FakeStore();
+
+        // «Своя» копия — файл, который ДЕЙСТВИТЕЛЬНО есть: иначе после перевода записи на себя
+        // сверка снова увидит «ведёт на отсутствующий файл» и в журнал уйдёт другая строка.
+        // КОРЕНЬ: self — только чтобы сверка признала запись СВОЕЙ (файл существует); в текст идёт чужой путь, и он под маской.
+        var self = Environment.ProcessPath!;
+        var foreign = @"C:\Users\Кто-тоТам\AppData\Local\DshPanel2\DshPanel.exe";
+
+        // Запись ведёт на файл, которого нет: сверка при старте переведёт её на себя и НАЗОВЁТ,
+        // что было. Путь в этой строке — ровно та самая утечка.
+        store.Seed(AutostartDecisions.ValueName, AutostartDecisions.BuildValue(foreign));
+
+        var log = new List<string>();
+        var controller = new AutostartController(store, self, log.Add);
+
+        Assert.Equal(AutostartWhere.Missing, controller.State.Where);
+        Assert.True(controller.Repair());
+
+        var line = Assert.Single(log);
+
+        Assert.DoesNotContain("Кто-тоТам", line, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(foreign, line, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("~", line, StringComparison.Ordinal);
+        Assert.Contains(DisplayMask.Path(foreign), line, StringComparison.Ordinal);
+
+        // И ВТОРОЕ МЕСТО ТОГО ЖЕ ОПИСАНИЯ — «ведёт на другую копию» (Other): маска та же.
+        var other = AutostartController.Describe(new AutostartState(AutostartWhere.Other, foreign, foreign));
+
+        Assert.DoesNotContain("Кто-тоТам", other, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("~", other, StringComparison.Ordinal);
+
+        // А состояния без пути остаются словами и `~` не выдумывают.
+        Assert.DoesNotContain("~", AutostartController.Describe(AutostartState.Off), StringComparison.Ordinal);
+    }
 }

@@ -49,6 +49,19 @@ public sealed class AppPaths
     public string EngineDir { get; }
 
     /// <summary>
+    /// СВОЙ NODE панели: <c>%LOCALAPPDATA%\DshPanel2\node\&lt;версия&gt;</c> — рядом с движком, и по той
+    /// же причине: версия — имя папки, поэтому две версии не смешиваются.
+    ///
+    /// ⚠️ **Именно LOCALAPPDATA, а не APPDATA** (названо владельцем 10.10.2026 как проверяемое
+    /// свойство): свой Node — это десятки мегабайт, и в роуминг-профиле они поехали бы на сервер
+    /// и обратно при каждом входе. Рядом с движком ему и место: движок ставится **этим** npm.
+    ///
+    /// Свой Node появляется только тогда, когда системного нет или он старше порога
+    /// (<see cref="Server.EngineNode"/>), и он — единственное в этой папке, что панель вправе убрать.
+    /// </summary>
+    public string NodeDir { get; }
+
+    /// <summary>
     /// Запись автозапуска ИЗОЛИРОВАННОГО прогона: у настоящего она живёт в реестре
     /// (<c>HKCU\...\Run</c>), а не в файле, и этот путь у него не используется.
     ///
@@ -116,6 +129,56 @@ public sealed class AppPaths
     public string PricingHistoryFile { get; }
 
     /// <summary>
+    /// ЗАПИСЬ «ЧТО СТОИТ СЕЙЧАС»: какая версия движка поставлена, куда и каким Node
+    /// (<see cref="Server.EngineInstallRecord"/>) — <c>state\engine.json</c>.
+    ///
+    /// Нужна двум вещам сразу и по одной причине: **откату** (знать, куда возвращаться) и **описи**
+    /// (назвать поставленное панелью, а не «как помнится»): без неё панель гадала бы по именам
+    /// папок, какие версии ставила она, а какие завёл человек.
+    ///
+    /// Лежит рядом с остальными файлами состояния и выводится из того же корня; в
+    /// <see cref="AllPaths"/> обязан быть по общему правилу — иначе изолированный прогон писал бы
+    /// свою запись в панель владельца.
+    /// </summary>
+    public string EngineStateFile { get; }
+
+    /// <summary>
+    /// ОПИСЬ ТОГО, ЧТО ПАНЕЛЬ ПОСТАВИЛА НА МАШИНУ (<see cref="InstalledInventory"/>): каталоги,
+    /// файлы, ветка реестра, ярлыки. Нужна будущему удалению панели (этап G плана), чтобы снималось
+    /// именно поставленное, а не «как помнится».
+    ///
+    /// Лежит рядом с остальными файлами состояния и выводится из того же корня. В
+    /// <see cref="AllPaths"/> он обязан быть по общему правилу: путь, забытый в перечне, — это путь,
+    /// который изолированный прогон не подменит, и однажды он запишет опись в панель владельца.
+    /// </summary>
+    public string InstalledFile { get; }
+
+    /// <summary>
+    /// Имя файла ПРОПУСКА ТЕЛЕФОНА внутри состояния панели. Имя вынесено сюда по той же причине,
+    /// что у ссылки входа и файла ключей: его знают ДВОЕ — запись пропуска (<c>Server\PhonePass.cs</c>)
+    /// и будущая «копия для передачи», которой этот файл не нужен.
+    /// </summary>
+    public const string PhonePassFileName = "phone-pass.txt";
+
+    /// <summary>
+    /// ПРОПУСК ТЕЛЕФОНА и список сопряжённых устройств — ФАЙЛ-СЕКРЕТ: по нему калитка пускает
+    /// устройство к движку (этап F).
+    ///
+    /// **Почему отдельным файлом, а не полем настроек.** `settings.json` — plaintext и лежит
+    /// у человека открытым; секрет в нём был бы виден любому, кто прочитает файл, и уезжал бы
+    /// в отчёты и копии вместе с настройками. Здесь же файл получает права «только владелец» тем же
+    /// способом, что `state\entry-link.txt` (<c>BackupEngine.RestrictToOwner</c>), — и это ровно
+    /// тот же класс секрета, что ссылка входа.
+    ///
+    /// Содержимое — одна строка JSON (версия, пропуск, устройства; разбор терпимый): формат
+    /// и вся работа с ним живут в <c>Server\PhonePass.cs</c>, а здесь только путь.
+    ///
+    /// В <see cref="AllPaths"/> он обязан быть по общему правилу: путь, забытый в перечне, — это путь,
+    /// который изолированный прогон не подменит, и однажды он запишет СВОЙ пропуск в панель владельца.
+    /// </summary>
+    public string PhonePassFile { get; }
+
+    /// <summary>
     /// Каталог ключей SSH текущего пользователя — тот, который по решению владельца 26.09.2026
     /// снова может попасть в копию и вернуться из неё.
     ///
@@ -132,13 +195,14 @@ public sealed class AppPaths
     public string SshDir { get; }
 
     private AppPaths(
-        string root, string state, string data, string backups, string engine, string dshHome, string ssh)
+        string root, string state, string data, string backups, string engine, string node, string dshHome, string ssh)
     {
         Root = root;
         StateDir = state;
         DataDir = data;
         BackupsDir = backups;
         EngineDir = engine;
+        NodeDir = node;
         DshHome = dshHome;
         SshDir = ssh;
         LogFile = Path.Combine(state, "panel.log");
@@ -147,6 +211,9 @@ public sealed class AppPaths
         EntryLinkFile = Path.Combine(state, EntryLinkFileName);
         OwnServerFile = Path.Combine(state, "own-server.txt");
         PricingHistoryFile = Path.Combine(state, "pricing-history.json");
+        InstalledFile = Path.Combine(state, "installed.json");
+        EngineStateFile = Path.Combine(state, "engine.json");
+        PhonePassFile = Path.Combine(state, PhonePassFileName);
     }
 
     /// <summary>
@@ -166,6 +233,7 @@ public sealed class AppPaths
             data: Path.Combine(root, "data"),
             backups: Path.Combine(root, "backups"),
             engine: Path.Combine(root, "engine"),
+            node: Path.Combine(root, "node"),
             dshHome: Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh"),
             ssh: OwnerSshDir());
@@ -215,6 +283,7 @@ public sealed class AppPaths
             data: Path.Combine(root, "data"),
             backups: Path.Combine(root, "backups"),
             engine: Path.Combine(root, "engine"),
+            node: Path.Combine(root, "node"),
             dshHome: Path.Combine(root, "dsh-home"),
 
             // Ключи изолированного прогона — под его корнем, и переменная тут ни при чём:
@@ -229,8 +298,9 @@ public sealed class AppPaths
     /// </summary>
     public IReadOnlyList<string> AllPaths => new[]
     {
-        Root, StateDir, DataDir, BackupsDir, LogFile, SettingsFile, EngineDir, AutostartFile,
+        Root, StateDir, DataDir, BackupsDir, LogFile, SettingsFile, EngineDir, NodeDir, AutostartFile,
         DshHome, CredentialsPath, SshDir, EntryLinkFile, OwnServerFile, PricingHistoryFile,
+        InstalledFile, EngineStateFile, PhonePassFile,
     };
 
     /// <summary>

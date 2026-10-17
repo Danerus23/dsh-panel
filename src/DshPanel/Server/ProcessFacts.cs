@@ -144,4 +144,77 @@ public static class ProcessFacts
 
     /// <summary>Процесс с таким номером существует и ещё не завершился.</summary>
     public static bool IsAlive(int pid) => StartTicks(pid) != 0;
+
+    /// <summary>
+    /// ЖИВ ЛИ ПРОЦЕСС — с ТРЕТЬИМ ответом «не смог узнать».
+    ///
+    /// **Зачем отдельно от <see cref="IsAlive"/>.** Там ноль значит сразу три вещи: «такого
+    /// процесса нет», «он завершился» и «сведения о нём недоступны». Для гашения этого хватает —
+    /// панель гасит только по совпадению времени создания, — а для УБОРКИ ЧУЖОГО ЗАМКА нет:
+    /// снести замок ЖИВОГО, но защищённого процесса значило бы испортить чужую работу. Поэтому
+    /// здесь «не смог узнать» — отдельный ответ, и он значит «не трогать».
+    ///
+    /// Замер 10.10.2026 (разведка этапа B): замок движка — файл `&lt;файл&gt;.lock` с номером
+    /// процесса внутри, и сам движок такие замки не убирает НИКОГДА: «a contender never deletes
+    /// a lock… an operator removes it only after verifying that no writer still owns it».
+    /// </summary>
+    public enum Liveness
+    {
+        /// <summary>Спросить систему не удалось — владельца проверить нечем, значит не трогать.</summary>
+        Unknown,
+
+        /// <summary>Процесса нет или он завершился — замок мёртв.</summary>
+        Dead,
+
+        /// <summary>Процесс жив — замок его, и он неприкосновенен.</summary>
+        Alive,
+    }
+
+    /// <summary>
+    /// Жив ли процесс — тремя ответами. Номер меньше единицы — «мёртв»: такого процесса не бывает,
+    /// а владельца у замка тогда нет вовсе.
+    /// </summary>
+    public static Liveness LivenessOf(int pid)
+    {
+        if (pid <= 0) return Liveness.Dead;
+
+        Process process;
+        try
+        {
+            process = Process.GetProcessById(pid);
+        }
+        catch (ArgumentException)
+        {
+            // Такого процесса нет — это и есть «мёртв».
+            return Liveness.Dead;
+        }
+        catch
+        {
+            // Спросить не дали (права, чужая учётная запись) — владельца проверить нечем.
+            return Liveness.Unknown;
+        }
+
+        try
+        {
+            using (process)
+            {
+                if (process.HasExited) return Liveness.Dead;
+
+                // Чтение времени создания — это и есть проверка доступа: у защищённого процесса
+                // оно бросит, и ответ будет «не смог узнать», а не «мёртв».
+                _ = process.StartTime;
+                return Liveness.Alive;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Завершился, пока мы спрашивали.
+            return Liveness.Dead;
+        }
+        catch
+        {
+            return Liveness.Unknown;
+        }
+    }
+
 }

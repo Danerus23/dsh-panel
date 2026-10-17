@@ -118,7 +118,7 @@ public class SettingsLookTests
         {
             var icons = new List<Geometry>();
 
-            for (var index = 0; index < 5; index++)
+            for (var index = 0; index < 6; index++)
             {
                 var icon = Item(list, index).GetVisualDescendants().OfType<PathIcon>().SingleOrDefault();
 
@@ -135,14 +135,14 @@ public class SettingsLookTests
 
             // Значки РАЗНЫЕ — и как органы, и как формы (данные пути, а не «четыре раза
             // один и тот же разобранный»).
-            Assert.Equal(5, icons.Distinct().Count());
-            Assert.Equal(5, PanelGlyph.SectionPaths.Distinct().Count());
+            Assert.Equal(6, icons.Distinct().Count());
+            Assert.Equal(6, PanelGlyph.SectionPaths.Distinct().Count());
             Assert.Equal(PanelGlyph.SectionPaths.Count, PanelGlyph.Sections.Count);
 
             // И подпись рядом со значком — на месте: значок дополняет слово, а не заменяет его.
             var titles = list.ItemsSource!.Cast<string>().ToList();
 
-            Assert.Equal(5, titles.Count);
+            Assert.Equal(6, titles.Count);
 
             for (var index = 0; index < titles.Count; index++)
             {
@@ -200,8 +200,8 @@ public class SettingsLookTests
     [Fact]
     public void Данные_значков_не_зависят_от_графики()
     {
-        Assert.Equal(5, PanelGlyph.SectionPaths.Count);
-        Assert.Equal(5, PanelGlyph.SectionPaths.Distinct().Count());
+        Assert.Equal(6, PanelGlyph.SectionPaths.Count);
+        Assert.Equal(6, PanelGlyph.SectionPaths.Distinct().Count());
         Assert.All(PanelGlyph.SectionPaths, path => Assert.False(string.IsNullOrWhiteSpace(path)));
     }
 
@@ -305,6 +305,11 @@ public class SettingsLookTests
     /// У КАЖДОГО РАЗДЕЛА — ЗАГОЛОВОК И СЕРЫЙ ПОДЗАГОЛОВОК «что здесь настраивается».
     /// Подзаголовок — класс <c>hint</c>, а НЕ <c>sectionTitle</c>: на <c>sectionTitle</c> стоит
     /// проверка «заголовок крупнее подсказки и цветом акцента», и подзаголовок сломал бы её смысл.
+    ///
+    /// ⚠️ **РАЗДЕЛ «СЕРВЕР» В ЭТОМ СПИСКЕ ОТСУТСТВУЕТ — НАРОЧНО** (решение владельца 14.10.2026:
+    /// на подзаголовок «Что панель видит на этой машине» он спросил *«зачем этот текст?»*). Пояснение
+    /// у него теперь ПОД СВОИМ СПИСКОМ — у каждой карточки отчёта своя строка, и проверяет их
+    /// `EnvironmentPanelView` своим разбором, а не эта проверка.
     /// </summary>
     [AvaloniaFact]
     public void У_каждого_раздела_есть_серый_подзаголовок()
@@ -318,7 +323,11 @@ public class SettingsLookTests
                 (Title: "GeneralSectionTitle", Subtitle: "GeneralSubtitleText", Text: PanelStrings.SettingsGeneralSubtitle),
                 (Title: "BackupSectionTitle", Subtitle: "BackupSectionSubtitleText", Text: PanelStrings.BackupSectionSubtitle),
                 (Title: "BalanceSectionTitle", Subtitle: "BalanceSectionSubtitleText", Text: PanelStrings.BalanceSectionSubtitle),
-                (Title: "ServerSectionTitle", Subtitle: "ServerSectionSubtitleText", Text: PanelStrings.ServerSectionSubtitle),
+
+                // Разделы «Обновление» и «Телефон» в этом списке тоже обязаны быть: подзаголовок —
+                // обещание «что здесь настраивается», и раздел без него выпадал бы из правила.
+                (Title: "UpdateSectionTitle", Subtitle: "UpdateSectionSubtitleText", Text: PanelStrings.UpdateSectionSubtitle),
+                (Title: "PhoneSectionTitle", Subtitle: "PhoneSectionSubtitleText", Text: PanelStrings.PhoneSectionSubtitle),
             };
 
             foreach (var (titleName, subtitleName, text) in expected)

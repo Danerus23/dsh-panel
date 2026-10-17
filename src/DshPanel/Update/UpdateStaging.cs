@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
 using DshPanel.Backup;
+using DshPanel.Files;
 
 namespace DshPanel.Update;
 
@@ -19,6 +20,12 @@ public sealed record UpdateUnpack(bool Ok, UpdateRefusal Refusal, string Detail,
 
     public static UpdateUnpack Fail(UpdateRefusal refusal, string detail = "", string more = "") =>
         new(false, refusal, detail, more);
+
+    /// <summary>
+    /// ИТОГ УБОРКИ папки распаковки. <c>Ok</c> — прежнего содержимого не осталось; иначе причина
+    /// словами среды едет наружу и называется человеку (см. <c>UpdatePreparation.Cleanup</c>).
+    /// </summary>
+    public TreeRemoval Cleanup { get; init; } = TreeRemoval.Nothing;
 }
 
 /// <summary>
@@ -77,10 +84,25 @@ public static class UpdateStaging
                     read.Unsafe.Count.ToString(CultureInfo.InvariantCulture));
             }
 
+            // ⚠️ ПУТЬ, ЗАНЯТЫЙ ФАЙЛОМ, — ОТКАЗ, А НЕ ПОВОД СНЕСТИ ФАЙЛ. Помощник уборки снял бы
+            // его молча (он умеет и файлы), распаковка после этого прошла бы — и отказ превратился
+            // бы в успех, а файл, которого панель не создавала, исчез. Нашла приёмка 10.10.2026:
+            // проверка «архив не разобрался» перестала добывать отказ, её случай стал успешным.
+            // ⚠️ И КЛЮЧ У ЭТОГО СЛУЧАЯ СВОЙ (замечание владельца, 10.10.2026): раньше он
+            // показывался ключом про РАЗОБРАННЫЙ АРХИВ и английской фразой внутри русского
+            // сообщения. Архив здесь цел — занять нечем ПУТЬ, и слова об этом свои, на трёх языках.
+            if (File.Exists(folder))
+                return UpdateUnpack.Fail(UpdateRefusal.UnpackFolderOccupied);
+
+            // Папка распаковки готовится ЗАРАНОВЕ, и прежнее её содержимое снимается помощником
+            // уборки — его итог возвращается наружу: папка, которую держит чужой процесс, остаётся
+            // на диске, и об этом человеку говорят словами, а не молчанием.
+            var removal = TreeDeletion.Remove(folder);
+
             Directory.CreateDirectory(folder);
             ZipFile.ExtractToDirectory(archivePath, folder, overwriteFiles: true);
 
-            return UpdateUnpack.Done;
+            return removal.Ok ? UpdateUnpack.Done : UpdateUnpack.Done with { Cleanup = removal };
         }
         catch (Exception error)
         {

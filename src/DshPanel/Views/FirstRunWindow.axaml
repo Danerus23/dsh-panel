@@ -1,0 +1,49 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.FirstRunWindow"
+        Width="560" SizeToContent="Height"
+        MinWidth="440"
+        CanResize="False"
+        ShowInTaskbar="True"
+        WindowStartupLocation="CenterScreen">
+  <!--
+    ТЕКСТОВ В РАЗМЕТКЕ НЕТ: всё, что здесь увидит человек, ставится из PanelStrings
+    (`Views\FirstRunWindow.axaml.cs`). Правило то же, что у четырёх существующих диалогов панели
+    (`Views\ConfirmEngineWindow.axaml:4–16`) — и размеры взяты у них: 560 / мин. 440,
+    высота по содержимому, отступ 24, промежуток 16, ряд кнопок 12 справа.
+
+    ⚠️ Окно НЕ модальное и без владельца: оно ничего не спрашивает и не имеет права запирать панель
+    (нормы «модальное или нет» для информационного окна нет — это наше решение, названо в спеке Д1).
+    Поэтому `CenterScreen`/`ShowInTaskbar="True"`, в отличие от диалогов с `CenterOwner`/`False`.
+  -->
+  <StackPanel Margin="24" Spacing="16">
+    <TextBlock x:Name="IntroText" TextWrapping="Wrap" FontSize="14" />
+
+    <!-- СТРОКА 1: сервер DSH (нет / не поднялся). Заголовок, следствие для человека и подсказка. -->
+    <StackPanel x:Name="RowOnePanel" Spacing="4">
+      <TextBlock x:Name="RowOneTitle" TextWrapping="Wrap" FontSize="14" FontWeight="SemiBold" />
+      <TextBlock x:Name="RowOneBody" TextWrapping="Wrap" />
+      <TextBlock x:Name="RowOneHint" Classes="hint" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <!-- СТРОКА 2: ключ модели (нет / не прочитан). -->
+    <StackPanel x:Name="RowTwoPanel" Spacing="4">
+      <TextBlock x:Name="RowTwoTitle" TextWrapping="Wrap" FontSize="14" FontWeight="SemiBold" />
+      <TextBlock x:Name="RowTwoBody" TextWrapping="Wrap" />
+      <TextBlock x:Name="RowTwoHint" Classes="hint" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <!-- РЕЗУЛЬТАТ «ПРОВЕРИТЬ СНОВА»: объявляется читалке (LiveSetting=Polite) и только он. -->
+    <TextBlock x:Name="RecheckLine" TextWrapping="Wrap"
+               AutomationProperties.LiveSetting="Polite" />
+
+    <!-- ЧТО НУЖНО ДО ЗАПУСКА — тихая строка внизу. -->
+    <TextBlock x:Name="NeedsNote" Classes="hint" TextWrapping="Wrap" />
+
+    <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+      <Button x:Name="DoorButton" />
+      <Button x:Name="RecheckButton" />
+      <Button x:Name="CloseButton" IsCancel="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>

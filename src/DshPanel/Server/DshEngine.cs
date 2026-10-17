@@ -25,6 +25,22 @@ public sealed record DshEngine(string NodePath, string BinPath)
         return node is null || bin is null ? null : new DshEngine(node, bin);
     }
 
+    /// <summary>
+    /// НАЙТИ ТОЛЬКО NODE, без движка. Нужно решению о своём Node (этап E3.1): на чистой машине
+    /// движка ещё нет, а вопрос «какой у человека Node и годится ли он» уже стоит — и ответ на него
+    /// решает, скачивать ли свой. Возвращает <c>null</c>, если Node не нашёлся.
+    ///
+    /// ⚠️ **Подмена <c>DSH_PANEL_NODE</c> уважается и здесь** — как в <see cref="Locate"/>: без этого
+    /// проба не увидела бы подставленный старый Node и проверяла бы не то состояние (живой прогон
+    /// 10.10.2026: проба сказала «системный Node не найден», хотя старый Node был подставлен).
+    /// </summary>
+    public static string? FindNode(Func<string, string?>? environment = null)
+    {
+        environment ??= Environment.GetEnvironmentVariable;
+
+        return Exist(environment(NodeOverrideVariable)) ?? LocateNode(environment);
+    }
+
     private static string? LocateNode(Func<string, string?> environment)
     {
         var candidates = new List<string?>();
@@ -59,6 +75,20 @@ public sealed record DshEngine(string NodePath, string BinPath)
         return candidates.Select(Exist).FirstOrDefault(found => found is not null);
     }
 
+    /// <summary>
+    /// ГДЕ ИСКАЛИ — ЯРЛЫКАМИ, ДЛЯ ЖУРНАЛЬНОЙ СТРОКИ (S-11, пачка B).
+    ///
+    /// **Зачем.** Строка «сервер DSH не найден» говорила человеку нашу кухню: пути поиска и имя
+    /// пакета. Человеку это не нужно (база, п. 13), а журналу — нужно: без него отказ нечем
+    /// разобрать. Поэтому места названы здесь ОДИН раз и уходят строкой в журнал.
+    ///
+    /// ⚠️ Ярлыки, а не пути этой машины: журнал уезжает в копию и в чужой отчёт, и настоящие пути
+    /// в нём — личные данные (красная линия 7). Человек по ярлыку поймёт, где смотреть.
+    /// </summary>
+    public static IReadOnlyList<string> SearchPlaces { get; } = new[]
+    {
+        "PATH", @"%APPDATA%\npm", @"Program Files\nodejs",
+    };
     private static string? NpmPrefix() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm");
 

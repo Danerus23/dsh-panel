@@ -73,7 +73,7 @@ public static class PanelMenu
 
         var lines = status() ?? throw new InvalidOperationException("строки состояния трея не собрались");
 
-        return new TrayMenu(new[]
+        var items = new List<TrayMenuItem>
         {
             // Шапка — состояние. Порядок: сервер (работает ли DSH вообще), агент (за кем следим
             // и сколько на нём денег), тариф (дорого ли сейчас), обновление (не пора ли обновиться).
@@ -83,9 +83,21 @@ public static class PanelMenu
             TrayMenuItem.Info(lines.Agent.Text, lines.Agent.Tone),
             TrayMenuItem.Info(lines.Peak.Text, lines.Peak.Tone),
             TrayMenuItem.Info(lines.Update.Text, lines.Update.Tone),
+        };
 
-            TrayMenuItem.Separator(),
+        // СТРОКА ТЕЛЕФОНА — ТОЛЬКО КОГДА ОНА ЕСТЬ (F1.d). Решение «есть ли она» принимает
+        // не меню, а <see cref="Server.PhoneDecisions.TrayLineShown"/>: у пустой строки в меню
+        // места нет вовсе, и это требование владельца, а не оформление.
+        //
+        // ⚠️ Порядок строк сохранён: телефон встаёт ПОСЛЕ обновления, а не перед ним, и пятым
+        // по счёту, а не вторым. Иначе у человека, который привык, что вторая строка — про агента
+        // с балансом, меню читалось бы заново.
+        if (lines.HasPhone) items.Add(TrayMenuItem.Info(lines.Phone.Text, lines.Phone.Tone));
 
+        items.Add(TrayMenuItem.Separator());
+
+        items.AddRange(new[]
+        {
             // Жирный по умолчанию: двойной щелчок по значку делает то же самое.
             TrayMenuItem.Command(PanelStrings.ShowPanelText, show, isDefault: true),
 
@@ -110,5 +122,7 @@ public static class PanelMenu
             TrayMenuItem.Separator(),
             TrayMenuItem.Command(PanelStrings.ExitText, exit),
         });
+
+        return new TrayMenu(items);
     }
 }

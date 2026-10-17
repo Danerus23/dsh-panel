@@ -206,7 +206,14 @@ public class UpdateRefusalLanguageTests
             if (EnvironmentMessage.Contains(preparation.Refusal)) continue;
 
             var key = preparation.RefusalKey;
-            Assert.NotEqual(string.Empty, key);
+
+            // ⚠️ Утверждение НАЗЫВАЕТ СЛУЧАЙ, а не только «строка пуста»: без имени случая
+            // падение здесь не говорит, какой из настоящих путей перестал отказывать
+            // (на этом пришлось гадать 10.10.2026 — правил эту проверку уже после рабочего).
+            Assert.True(
+                key.Length > 0,
+                $"{name}: отказ без ключа — Refusal={preparation.Refusal}, Ok={preparation.Ok}; "
+                    + "строка человека по пустому ключу не собирается");
 
             foreach (var language in Languages)
             {
@@ -447,7 +454,11 @@ public class UpdateRefusalLanguageTests
 
             found.Add(("архива нет", FromUnpack(UpdateStaging.Unpack(Path.Combine(stand.Root, "нет.zip"), Path.Combine(stand.Root, "куда")))));
             found.Add(("папка распаковки не названа", FromUnpack(UpdateStaging.Unpack(archive, "   "))));
-            found.Add(("архив не разобрался", FromUnpack(UpdateStaging.Unpack(archive, occupied))));
+
+            // ⚠️ ПРЕДМЕТ ЭТОГО ОТКАЗА — ПУТЬ, А НЕ АРХИВ: занят путь, а архив цел. Раньше случай
+            // звался «архив не разобрался» и показывался ключом про разобранный архив с английской
+            // фразой внутри русского сообщения — замечание владельца 10.10.2026, заведён свой ключ.
+            found.Add(("папку обновления занять не удалось", FromUnpack(UpdateStaging.Unpack(archive, occupied))));
         }
 
         return found;
@@ -534,7 +545,12 @@ public class UpdateRefusalLanguageTests
             return this;
         }
 
-        public void Save(string url, string path, Action<long, long>? progress)
+        public UpdateDownloadResult Save(
+            string url,
+            string path,
+            string? expectedSum,
+            Action<long, long>? progress,
+            UpdateDownloadPolicy? policy = null)
         {
             if (FailUrl.Length > 0 && string.Equals(url, FailUrl, StringComparison.OrdinalIgnoreCase))
             {
@@ -546,7 +562,19 @@ public class UpdateRefusalLanguageTests
                 throw new InvalidOperationException("подстановки для адреса нет: " + url);
             }
 
+            // Сумма — СВОИМ счётом: сверять панель с нею же значило бы ничего не сверять.
+            var got = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+            var wanted = (expectedSum ?? string.Empty).Trim();
+
+            progress?.Invoke(0, bytes.Length);
+
+            if (wanted.Length > 0 && !string.Equals(wanted, got, StringComparison.OrdinalIgnoreCase))
+                return new UpdateDownloadResult(UpdateDownloadOutcome.SumMismatch, string.Empty, wanted, got);
+
             File.WriteAllBytes(path, bytes);
+            progress?.Invoke(bytes.Length, bytes.Length);
+
+            return UpdateDownloadResult.Done;
         }
     }
 

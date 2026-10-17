@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using DshPanel.Backup;
 using Xunit;
+using DshPanel.Shell;
 
 namespace DshPanel.Tests;
 
@@ -129,7 +130,7 @@ public class BackupReaderTests
             Assert.Equal(ManifestState.Missing, read.State);
             Assert.Null(read.Manifest);
             Assert.Contains("manifest.json", read.Note);
-            Assert.Contains("описи нет", read.Summary());
+            Assert.Contains(PanelStrings.ZipManifestMissing, read.Summary(), StringComparison.Ordinal);
         }
         finally
         {
@@ -225,7 +226,7 @@ public class BackupReaderTests
             Assert.Null(read.Manifest);
             Assert.Contains("не разбирается", read.Note);
             Assert.DoesNotContain("мусор", read.Note);
-            Assert.Contains("опись не разбирается", read.Summary());
+            Assert.Contains(PanelStrings.ZipManifestUnreadable, read.Summary(), StringComparison.Ordinal);
         }
         finally
         {

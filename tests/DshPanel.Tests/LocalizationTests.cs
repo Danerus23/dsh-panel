@@ -337,7 +337,7 @@ public class LocalizationTests
         Assert.Equal("ru", Loc.Language);
         Assert.Equal("ru", Loc.Preference);
         Assert.True(Loc.KeyCount > 0);
-        Assert.Equal("Свой сервер панели: работает", Loc.T(nameof(PanelStrings.ServerRunning)));
+        Assert.Equal("Сервер панели: работает", Loc.T(nameof(PanelStrings.ServerRunning)));
     }
 
     // ---- словари -------------------------------------------------------------------------

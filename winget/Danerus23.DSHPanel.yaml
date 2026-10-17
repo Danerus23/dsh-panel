@@ -4,17 +4,16 @@
 # Comments are in English because these files are submitted verbatim to
 # microsoft/winget-pkgs, where the pull request is read in English.
 #
-# PackageVersion and the installer hash are filled in by tools\winget-manifest.ps1:
+# PackageVersion, the installer hash and ReleaseDate are filled in by tools\winget-manifest.ps1
+# (offline, idempotent: the version comes from DshPanel.csproj, the hash from SHA256SUMS.txt):
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\winget-manifest.ps1 -ReleaseTag v2.0.2
+#   pwsh -NoProfile -File .\tools\winget-manifest.ps1 -Sums .\upd-build\dist-next\SHA256SUMS.txt -ReleaseDate 2026-10-17
 #
-# Take the hash from the published release (SHA256SUMS.txt), not from a local build:
-# the release is built by CI and its bytes differ from a locally built installer. The
-# script refuses to write a locally computed hash unless -AllowLocalSum is passed, and
-# it refuses to combine a release tag with a different project version.
+# Take the hash from the release build's SHA256SUMS.txt, not from a local rebuild: the bytes of
+# a rebuild differ from the bytes that were signed off for the release (docs\RELEASE-V2.md §3.11).
 
 PackageIdentifier: Danerus23.DSHPanel
-PackageVersion: 2.0.2
+PackageVersion: 2.1.0
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.12.0

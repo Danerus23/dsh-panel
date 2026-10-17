@@ -66,6 +66,32 @@ public static class CredentialsKey
         }
     }
 
+    /// <summary>
+    /// ФАЙЛ КЛЮЧЕЙ ЧИТАЕТСЯ? — ОТДЕЛЬНЫЙ ФАКТ, и это не то же, что «ключа нет».
+    ///
+    /// **Зачем отдельно (A5, окно первого запуска).** У отказа чтения и у «ключа не нашли» один
+    /// и тот же текст для человека (<see cref="KeyLookup.Problem"/>), а окно обязано различить их
+    /// СЛОВАМИ: «прочиталось ≠ нет» (`60-states.md` §0). Здесь проверяется ровно читаемость файла —
+    /// его содержимое НЕ читается, и значение ключа через эту дверь пройти не может.
+    ///
+    /// Файла нет — это не «не читается», а «ключа не нашли»: <c>true</c>.
+    /// </summary>
+    public static bool Readable(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return true;
+
+        try
+        {
+            using var probe = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>Кавычки вокруг значения — часть синтаксиса YAML, а не ключа.</summary>
     private static string Unquote(string value)
     {

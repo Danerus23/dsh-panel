@@ -208,12 +208,12 @@ public class UpdateLinesTests
         var state = UpdateLines.PrepareState(new FakeInstall(), ok: true, newer: true, ReleaseAssets.None);
 
         Assert.False(state.Ready);
-        Assert.Equal(PanelStrings.UpdateNeedCheckHint, state.Hint);
+        Assert.Equal(PanelStrings.UpdateNeedCheckNote, state.Hint);
 
         var ready = UpdateLines.PrepareState(new FakeInstall(), ok: true, newer: true, Ready());
 
         Assert.True(ready.Ready);
-        Assert.Equal(PanelStrings.UpdatePrepareHint, ready.Hint);
+        Assert.Equal(PanelStrings.UpdatePrepareNote, ready.Hint);
 
         // Выпуска нет вовсе — готовить нечего, и это тот же честный ответ.
         Assert.False(UpdateLines.PrepareState(new FakeInstall(), ok: false, newer: false, Ready()).Ready);

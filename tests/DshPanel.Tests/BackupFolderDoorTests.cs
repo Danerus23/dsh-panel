@@ -91,6 +91,7 @@ public class BackupFolderDoorTests
             AppPaths.Under(root),
             () => new PanelSettings { BackupFolder = folder },
             allowed: false,
+            mayTakeMachineEngineData: false,
             locateEngine: () => null);
 
     /// <summary>
@@ -117,6 +118,7 @@ public class BackupFolderDoorTests
             paths,
             () => owner.Settings,
             allowed: true,
+            mayTakeMachineEngineData: false,
             locateEngine: () => null,
             log: _ => { },
             settingsOwner: owner);
@@ -156,7 +158,7 @@ public class BackupFolderDoorTests
             // СЛОВА — ПРО ПАПКУ КОПИЙ. Сверка идёт с настоящими словами соседней двери, а не
             // с «похоже на правильное»: слей двери в одну — и это сравнение упадёт.
             Assert.NotEqual(PanelStrings.SettingsFolderRefusedLog, error);
-            Assert.Contains(log, line => line.Contains("прогон проверки", StringComparison.Ordinal));
+            Assert.Contains(log, line => line.Contains(PanelStrings.BackupFolderRefusedLog, StringComparison.Ordinal));
 
             // И встречная проверка: шов рабочий — позванный руками, он записывает вызов.
             // Без неё «пусто» означало бы и «не позвали», и «шов сломан».

@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using DshPanel.Isolation;
+using DshPanel.Localization;
 
 namespace DshPanel.Server;
 
@@ -13,7 +15,10 @@ namespace DshPanel.Server;
 /// 2. **панель не съезжает на другой порт молча**: занятый порт — это внятный отказ;
 /// 3. **панель находит сервер, который поднимала не она** — по приметам владения из v1
 ///    (путь к <c>bin.js</c>, подкоманда <c>web</c>, порт в командной строке) и отпечатку;
-/// 4. **без подтверждения встроенный сервер не гасится**, а с подтверждением — гасится.
+/// 4. **без подтверждения встроенный сервер не гасится**, а с подтверждением — гасится;
+/// 5. **поверхность RPC движка не сменилась** — закреплённый список имён сверяется и с описью,
+///    которую движок объявляет у себя, и с живым движком, плюс один настоящий вызов
+///    (см. <see cref="CheckEngineRpc"/>, список — <see cref="EngineRpcSurface"/>).
 ///
 /// Идёт ТОЛЬКО в изоляции и только на своих свободных портах. Это не перестраховка: сервер
 /// пишет в домашний каталог движка (профиль, кэш, состояние), и прогон без изоляции писал бы
@@ -160,6 +165,14 @@ public static class ServerSelfTest
             // берёт её отсюда, а не с диска.
             Check("контроллер отдаёт ту же ссылку", controller.EntryLink == entry.Url);
 
+            // --- (1б) ПОВЕРХНОСТЬ RPC: закреплённый список против объявлений и живого движка ---
+            //
+            // Идёт ПОКА СЕРВЕР ЖИВ и сразу после ссылки входа: вход нужен телу пробы (cookie),
+            // а ссылка живёт ровно столько, сколько живёт сервер (проверка 3 это и стережёт).
+            var rpc = CheckEngineRpc(engine.BinPath, entry.Url, port, context.Paths);
+            report.AddRange(rpc.Lines);
+            if (!rpc.Ok) failed = true;
+
             // --- (2) разведка и встраивание: тот же сервер, но глазами ЧУЖОЙ панели -----
             //
             // «Чужая панель» — это второй контроллер, который сам ничего не поднимал: он ищет
@@ -228,11 +241,29 @@ public static class ServerSelfTest
         report.AddRange(lockRun.Lines);
         if (!lockRun.Ok) failed = true;
 
+        // --- (7) ЗАМКИ ДВИЖКА: мёртвый убран, живой не тронут, без права не трогаем ничего ---
+
+        var engineLocks = CheckEngineLocks(context.Paths.DshHome, workDir, log.Add, freePort, files);
+        report.AddRange(engineLocks.Lines);
+        if (!engineLocks.Ok) failed = true;
+
         Print(report, log);
 
         // Проверяем, что проверка умеет падать: без этого «зелено» ничего не стоит.
         Console.WriteLine(failed ? "СЕРВЕР ПРОВАЛ" : "СЕРВЕР УСПЕХ");
         return failed ? 1 : 0;
+    }
+
+    /// <summary>
+    /// ПОВЕРХНОСТЬ RPC ДВИЖКА — проба вынесена в ОДНУ дверь (<see cref="EngineRpcProbe.Measure"/>):
+    /// её же прогоняет всякий, кто поставил НОВЫЙ движок (<see cref="EngineLiveProbe"/>), и второго
+    /// списка проверок быть не должно. Здесь остался ровно вызов: порядок, тексты и смысл строк
+    /// живут теперь в <see cref="EngineRpcProbe"/>, и вывод прогона от выноса не меняется ни на слово.
+    /// </summary>
+    private static (bool Ok, List<string> Lines) CheckEngineRpc(string binPath, string entryUrl, int port, AppPaths paths)
+    {
+        var result = EngineRpcProbe.Measure(binPath, entryUrl, port, paths);
+        return (result.Ok, result.Lines.ToList());
     }
 
     /// <summary>
@@ -410,6 +441,132 @@ public static class ServerSelfTest
             lines.Add($"держатель погашен: {stopped.Detail}");
 
             if (PortTable.GetListenerPid(port) != 0) ok = false;
+        }
+
+        return (ok, lines);
+    }
+
+    /// <summary>
+    /// ЗАМКИ ДВИЖКА — на НАСТОЯЩИХ файлах в доме движка под корнем прогона: **мёртвый замок убран,
+    /// живой не тронут, без права не трогаем ничего.**
+    ///
+    /// **Откуда правило (замер разведки этапа B, 10.10.2026).** Движок запирает запись файлом-соседом
+    /// `&lt;файл&gt;.lock` с номером процесса внутри и снимает его сам — но только если процесс дожил
+    /// до конца записи. Убитый владелец оставляет замок навсегда, и следующий писатель получает
+    /// отказ по времени; сам движок свой замок не убирает НИКОГДА («a contender never deletes
+    /// a lock… an operator removes it only after verifying that no writer still owns it»).
+    ///
+    /// **Почему проверяется ЗАПУСКОМ контроллера, а не вызовом помощника напрямую.** Уборка стоит
+    /// в начале запуска сервера (<c>ServerController.Start</c>) — том самом месте, где её видит
+    /// человек; помощник, позванный в обход, доказал бы, что умеет убирать, но не что панель это
+    /// делает. Подделок здесь нет ни в чём: файлы настоящие, живость процессов настоящая,
+    /// дом движка — под корнем прогона.
+    /// </summary>
+    private static (bool Ok, List<string> Lines) CheckEngineLocks(
+        string dshHome, Func<string> workDir, Action<string> log, Func<int> freePort, ServerStateFiles files)
+    {
+        var lines = new List<string>();
+        var ok = true;
+
+        // МЁРТВЫЙ владелец — номер, которого не может быть ни у какого процесса. Так замок
+        // «убитого держателя» получается детерминированным, без гонки за переиспользованный номер.
+        var deadPid = int.MaxValue;
+
+        // ЖИВОЙ владелец — свой процесс: он заведомо жив, и замок его неприкосновенен.
+        var livePid = Environment.ProcessId;
+
+        var deadPath = EngineLocks.LockPath(dshHome, "settings.yaml");
+        var livePath = EngineLocks.LockPath(dshHome, ".credentials.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(deadPath)!);
+
+        var deadNumber = deadPid.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var liveNumber = livePid.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+        lines.Add($"мёртвый владелец замка: номер {deadNumber} (жив = {ProcessFacts.LivenessOf(deadPid)})");
+        lines.Add($"живой владелец замка: номер {liveNumber} (жив = {ProcessFacts.LivenessOf(livePid)})");
+
+        try
+        {
+            // --- С ПРАВОМ: мёртвый убран, живой не тронут -------------------------------------
+            File.WriteAllText(deadPath, deadNumber);
+            File.WriteAllText(livePath, liveNumber);
+
+            var allowed = new List<string>();
+
+            using (var controller = new ServerController(
+                       dshHome, workDir, allowed.Add, mayOccupyOwnerPort: false, requestedPort: freePort,
+                       stopWait: TimeSpan.Zero, scanInterval: TimeSpan.Zero, files: files,
+                       allowParallelStart: true, mayClearEngineLocks: true))
+            {
+                controller.Start(TimeSpan.FromSeconds(3));
+                controller.Stop(confirmed: true);
+            }
+
+            var deadGone = !File.Exists(deadPath);
+            var liveKept = File.Exists(livePath)
+                           && File.ReadAllText(livePath).Trim() == liveNumber;
+
+            // ⚠️ СЛОВА БЕРУТСЯ ИЗ СЛОВАРЯ, А НЕ ЛИТЕРАЛОМ (дефект «проверка не может пройти», пачка D
+            // цикла C2). Здесь стояли строки «замок движка снят» и «замок движка не тронут», а
+            // словарь давно говорит «проверенный набор версий сервера DSH снят / не тронут» — то
+            // есть проверка сверяла фразу, КОТОРОЙ В СЛОВАРЕ НЕТ, и не могла пройти ни на одной
+            // машине. Из-за неё же падала итоговая строка «проба на поставленном движке прошла»,
+            // хотя сама установка и проба 84/8 проходили. Теперь сверяется НАЧАЛО той строки,
+            // которой продукт и говорит (`EngineLockStaleRemovedLogFormat` / `EngineLockLiveLogFormat`):
+            // поменяются слова — проверка пойдёт за ними, а не разойдётся с ними молча.
+            var removedHead = Shell.PanelStrings.EngineLockStaleRemovedLogFormat.Split("{0}")[0].Trim().TrimEnd(':', '—').Trim();
+            var liveHead = Shell.PanelStrings.EngineLockLiveLogFormat.Split("{0}")[0].Trim().TrimEnd(':', '—').Trim();
+
+            var deadNamed = allowed.Any(line =>
+                line.Contains(removedHead, StringComparison.Ordinal)
+                && line.Contains(deadPath, StringComparison.Ordinal)
+                && line.Contains(deadNumber, StringComparison.Ordinal));
+            var liveNamed = allowed.Any(line =>
+                line.Contains(liveHead, StringComparison.Ordinal)
+                && line.Contains(livePath, StringComparison.Ordinal)
+                && line.Contains(liveNumber, StringComparison.Ordinal));
+
+            lines.Add($"  мёртвый замок УБРАН = {deadGone}");
+            lines.Add($"  живой замок НЕ ТРОНУТ (в нём тот же номер) = {liveKept}");
+            lines.Add($"  о мёртвом сказано словами: путь и номер = {deadNamed}");
+            lines.Add($"  о живом сказано словами: путь и номер = {liveNamed}");
+
+            if (!deadGone || !liveKept || !deadNamed || !liveNamed) ok = false;
+
+            // --- БЕЗ ПРАВА: не трогаем ничего, и об этом сказано ------------------------------
+            File.WriteAllText(deadPath, deadNumber);
+
+            var blind = new List<string>();
+
+            using (var controller = new ServerController(
+                       dshHome, workDir, blind.Add, mayOccupyOwnerPort: false, requestedPort: freePort,
+                       stopWait: TimeSpan.Zero, scanInterval: TimeSpan.Zero, files: files,
+                       allowParallelStart: true, mayClearEngineLocks: false))
+            {
+                controller.Start(TimeSpan.FromSeconds(3));
+                controller.Stop(confirmed: true);
+            }
+
+            var keptWithoutRight = File.Exists(deadPath)
+                                   && File.ReadAllText(deadPath).Trim() == deadNumber;
+            var saidNoRight = blind.Any(line =>
+                line.Contains("права на данные панели", StringComparison.Ordinal));
+
+            lines.Add($"  без права мёртвый замок ОСТАВЛЕН на месте = {keptWithoutRight}");
+            lines.Add($"  без права об этом сказано строкой = {saidNoRight}");
+
+            if (!keptWithoutRight || !saidNoRight) ok = false;
+        }
+        catch (Exception error)
+        {
+            lines.Add($"  опыт не состоялся: {error.GetType().Name} — {error.Message}");
+            ok = false;
+        }
+        finally
+        {
+            // Прибрать за собой: файлы замков — наши, и держать их после проверки незачем.
+            try { File.Delete(deadPath); } catch { }
+            try { File.Delete(livePath); } catch { }
         }
 
         return (ok, lines);

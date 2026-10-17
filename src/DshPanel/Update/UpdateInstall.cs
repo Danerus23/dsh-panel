@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using DshPanel.Files;
 using DshPanel.Isolation;
 using DshPanel.Shell;
 
@@ -100,6 +101,18 @@ public enum UpdateRefusal
 
     /// <summary>Сценарий замены или шапку журнала записать не удалось. Значение — причина от исключения.</summary>
     WriteFailed,
+
+    /// <summary>
+    /// ПУТЬ ПАПКИ ОБНОВЛЕНИЯ ЗАНЯТ ФАЙЛОМ. Случай отдельный от «архив не разобран»: архив цел,
+    /// а папку занять нечем. Значений нет — человеку и так всё сказано.
+    ///
+    /// ⚠️ Заведён 10.10.2026 по замечанию владельца: до него случай показывался ключом про
+    /// разобранный архив и **нашей же английской фразой внутри русского сообщения**
+    /// («the unpack folder path is occupied by a file») — предмет не тот, язык смешанный.
+    /// Сам отказ как таковой сделан правильно (файл не сносится, вместо ложного успеха) —
+    /// это не менялось.
+    /// </summary>
+    UnpackFolderOccupied,
 }
 
 /// <summary>
@@ -109,6 +122,15 @@ public enum UpdateRefusal
 /// </summary>
 public static class UpdateRefusals
 {
+    /// <summary>
+    /// КЛЮЧ СТРОКИ ПРО НЕУДАВШУЮСЯ УБОРКУ. Он не привязан к значению <see cref="UpdateRefusal"/>:
+    /// уборка не удаётся ПОСЛЕ ответа движка (и после удачного тоже), поэтому отказ уборки —
+    /// отдельная строка рядом с ответом, а не ещё одно значение перечисления. Строку берут
+    /// и страница отказа (<see cref="UpdateRefusalLines.Line"/>), и итог замены
+    /// (<c>UpdateOutcomeLines</c>).
+    /// </summary>
+    public const string CleanupFailedKey = "UpdateCleanupFailedFormat";
+
     /// <summary>
     /// Ключ строки для человека. Пусто — отказа нет. Строки, у которых в имени нет <c>Format</c>,
     /// показываются как есть; у остальных в текст подставляются значения отказа
@@ -138,6 +160,7 @@ public static class UpdateRefusals
         UpdateRefusal.ArchiveEmpty => "UpdateArchiveEmpty",
         UpdateRefusal.ArchiveUnsafe => "UpdateArchiveUnsafeFormat",
         UpdateRefusal.ArchiveBroken => "UpdateArchiveBrokenFormat",
+        UpdateRefusal.UnpackFolderOccupied => "UpdateUnpackFolderOccupied",
         UpdateRefusal.NoExe => "UpdateNoExe",
         UpdateRefusal.VersionMismatch => "UpdateVersionMismatchFormat",
         UpdateRefusal.SetupDownloadFailed => "UpdateSetupDownloadFailedFormat",
@@ -210,6 +233,27 @@ public sealed record UpdatePreparation(
 
     /// <summary>Ключ строки отказа ("" — отказа нет).</summary>
     public string RefusalKey => UpdateRefusals.Key(Refusal);
+
+    /// <summary>
+    /// ИТОГ УБОРКИ ЗА СОБОЙ: <c>Ok</c> — мусора не осталось. <see cref="TreeRemoval.Reason"/>
+    /// называет причину словами среды.
+    ///
+    /// ⚠️ Это НЕ украшение и не «на всякий случай». Прежний вызов уборки игнорировал её итог,
+    /// и папка, которую держал антивирус, оставалась на диске, а человек об этом не узнавал
+    /// вовсе. Отказ уборки обязан быть виден словами: в журнал — всегда, а человеку — строкой
+    /// <see cref="PanelStrings.UpdateCleanupFailedFormat"/> (см. <see cref="UpdateRefusalLines"/>
+    /// и <c>UpdateOutcomeLines</c>).
+    /// </summary>
+    public TreeRemoval Cleanup { get; init; } = TreeRemoval.Nothing;
+
+    /// <summary>Уборка не удалась: папка обновления осталась на диске и её придётся убрать руками.</summary>
+    public bool CleanupFailed => !Cleanup.Ok;
+
+    /// <summary>Ключ строки про неудавшуюся уборку ("" — уборка удалась).</summary>
+    public string CleanupKey => Cleanup.Ok ? string.Empty : UpdateRefusals.CleanupFailedKey;
+
+    /// <summary>Причина отказа уборки словами среды (для журнала; пусто — уборка удалась).</summary>
+    public string CleanupReason => Cleanup.Ok ? string.Empty : Cleanup.Reason;
 
     /// <summary>Отказ без пути и без версии — так выглядят ответы до первого касания диска.</summary>
     public static UpdatePreparation Refuse(UpdateRefusal refusal, string detail, string more = "") =>
@@ -325,50 +369,91 @@ public static class UpdateInstall
         var client = download ?? new HttpUpdateDownload();
         var now = request.At ?? DateTimeOffset.Now;
 
+        // Итог уборки ПАПКИ СБОРКИ, снятой распаковкой. Объявлен до `Fail`, потому что отказ
+        // обязан назвать и эту причину: папку, которую держит чужой процесс, распаковка снять
+        // не смогла, и молчать об этом нельзя.
+        var unpacked = TreeRemoval.Nothing;
+
         // За отказом убираем за собой: без этого в состоянии панели копились бы обрезанные
         // загрузки, скачанный архив и файл сумм от неудавшихся обновлений. Страховочную копию
         // не трогаем: её могло не быть вовсе, а если она есть — это готовый откат.
+        //
+        // ⚠️ ИТОГ УБОРКИ НЕ ГЛОТАЕТСЯ. Папка, которую держит антивирус или чужой процесс,
+        // остаётся на диске, и раньше об этом не узнавал никто: вызов уборки стоял без разбора
+        // ответа. Теперь отказ уборки едет наружу в `Cleanup` и называется человеку словами.
         UpdatePreparation Fail(UpdateRefusal refusal, string detail, string more = "")
         {
-            TryDeleteFolder(staged);
+            var removal = Keep(unpacked, TreeDeletion.Remove(staged));
+
             TryDeleteFile(archivePath);
             TryDeleteFile(sumsPath);
 
-            return UpdatePreparation.Refuse(refusal, detail, more);
+            return UpdatePreparation.Refuse(refusal, detail, more) with { Cleanup = removal };
         }
 
-        string Fetch(string url, string path, UpdateStage stage, string name)
+        UpdateDownloadResult Fetch(string url, string path, string expectedSum, UpdateStage stage, string name)
         {
             progress?.Invoke(new UpdateProgress(stage, name, 0, -1));
 
             try
             {
-                client.Save(url, path, (done, total) => progress?.Invoke(new UpdateProgress(stage, name, done, total)));
-                return string.Empty;
+                // ВИД ОТКАЗА ВОЗВРАЩАЕТСЯ ЦЕЛИКОМ, а не строкой: «скачался не тот файл» (сумма
+                // не сошлась) и «скачать не удалось» — разные отказы с разными словами, и
+                // превращать первый во второй значит сказать человеку неправду. Нашла приёмка
+                // 10.10.2026: до этой правки несовпавшая сумма выглядела как отказ скачивания.
+                return client.Save(
+                    url,
+                    path,
+                    expectedSum,
+                    (done, total) => progress?.Invoke(new UpdateProgress(stage, name, done, total)));
             }
             catch (Exception error)
             {
-                return $"{error.GetType().Name}: {error.Message}";
+                // Подстановка вправе бросить — живой уговор этого не делает, и причина от неё
+                // всё равно обязана стать ЗНАЧЕНИЕМ отказа, а не исключением наружу.
+                return new UpdateDownloadResult(
+                    UpdateDownloadOutcome.Interrupted, $"{error.GetType().Name}: {error.Message}");
             }
         }
 
+        // Отказ загрузки → отказ подготовки: несовпавшая сумма называется СВОИМ ключом (у него
+        // есть ожидаемое и полученное), остальное — ключом отказа скачивания.
+        UpdatePreparation DownloadFailed(UpdateDownloadResult result, UpdateRefusal sumMismatch, UpdateRefusal download)
+            => result.Outcome == UpdateDownloadOutcome.SumMismatch
+                ? Fail(sumMismatch, result.Expected, result.Actual)
+                : Fail(download, DownloadDetail(result));
+
         try
         {
-            if (Directory.Exists(staged)) Directory.Delete(staged, recursive: true);
+            TreeDeletion.Remove(staged);
             Directory.CreateDirectory(staged);
 
             // --- суммы ------------------------------------------------------------------------
 
-            var failure = Fetch(request.Assets.SumsUrl, sumsPath, UpdateStage.Sums, UpdateAssets.SumsName);
-            if (failure.Length > 0) return Fail(UpdateRefusal.SumsDownloadFailed, failure);
+            // ⚠️ Файл контрольных сумм качается БЕЗ СУММЫ, и это ЗАКОННЫЙ случай, а не дыра
+            // в проверке: взять сумму этого файла неоткуда — он сам источник сумм. Такой файл
+            // тоже занимает рабочий путь только собранным ЦЕЛИКОМ (см. `IUpdateDownload`).
+            var sumsResult = Fetch(
+                request.Assets.SumsUrl, sumsPath, string.Empty, UpdateStage.Sums, UpdateAssets.SumsName);
+
+            if (!sumsResult.Ok) return Fail(UpdateRefusal.SumsDownloadFailed, DownloadDetail(sumsResult));
 
             var sums = UpdateSums.Parse(File.ReadAllLines(sumsPath));
             if (sums.Count == 0) return Fail(UpdateRefusal.SumsUnreadable, string.Empty);
 
             // --- архив и его сумма ------------------------------------------------------------
 
-            failure = Fetch(request.Assets.ArchiveUrl, archivePath, UpdateStage.Archive, UpdateAssets.ArchiveName);
-            if (failure.Length > 0) return Fail(UpdateRefusal.ArchiveDownloadFailed, failure);
+            // Сумма ищется ДО загрузки: во-первых, без неё панель не станет занимать место
+            // сорокамегабайтным файлом (в файле сумм нет строки — обновляться нечем), а
+            // во-вторых, сумма уходит В САМУ ЗАГРУЗКУ, и та сверяет её до занятия рабочего пути.
+            if (!sums.TryGetValue(UpdateAssets.ArchiveName, out var archiveSum))
+                return Fail(UpdateRefusal.ArchiveSumMissing, UpdateAssets.ArchiveName);
+
+            var archiveResult = Fetch(
+                request.Assets.ArchiveUrl, archivePath, archiveSum, UpdateStage.Archive, UpdateAssets.ArchiveName);
+
+            if (!archiveResult.Ok)
+                return DownloadFailed(archiveResult, UpdateRefusal.ArchiveSumMismatch, UpdateRefusal.ArchiveDownloadFailed);
 
             progress?.Invoke(new UpdateProgress(UpdateStage.Verify, UpdateAssets.ArchiveName, 0, -1));
 
@@ -387,6 +472,10 @@ public static class UpdateInstall
             var unpack = UpdateStaging.Unpack(archivePath, staged);
             if (!unpack.Ok) return Fail(unpack.Refusal, unpack.Detail, unpack.More);
 
+            // Распаковка снимает прежнее содержимое папки сборки сама: её итог — ИТОГ УБОРКИ,
+            // и потерять его значит промолчать о папке, которую держит чужой процесс.
+            unpacked = unpack.Cleanup;
+
             if (!File.Exists(Path.Combine(staged, UpdateStaging.PanelExeName)))
                 return Fail(UpdateRefusal.NoExe, UpdateStaging.PanelExeName);
 
@@ -398,9 +487,16 @@ public static class UpdateInstall
 
             if (request.Assets.HasSetup)
             {
+                if (!sums.TryGetValue(UpdateAssets.SetupName, out var setupSum))
+                    return Fail(UpdateRefusal.SetupSumMissing, UpdateAssets.SetupName);
+
                 var setupPath = Path.Combine(staged, UpdateAssets.SetupName);
-                failure = Fetch(request.Assets.SetupUrl, setupPath, UpdateStage.Setup, UpdateAssets.SetupName);
-                if (failure.Length > 0) return Fail(UpdateRefusal.SetupDownloadFailed, failure);
+
+                var setupResult = Fetch(
+                    request.Assets.SetupUrl, setupPath, setupSum, UpdateStage.Setup, UpdateAssets.SetupName);
+
+                if (!setupResult.Ok)
+                    return DownloadFailed(setupResult, UpdateRefusal.SetupSumMismatch, UpdateRefusal.SetupDownloadFailed);
 
                 var setup = UpdateSums.Verify(sums, UpdateAssets.SetupName, UpdateSums.Sha256(setupPath));
 
@@ -417,8 +513,23 @@ public static class UpdateInstall
             progress?.Invoke(new UpdateProgress(UpdateStage.Backup, backup, 0, -1));
 
             var copy = CopyCurrent(target, backup);
-            if (copy.Length == 0)
-                return Fail(UpdateRefusal.NoBackup, target);
+
+            // Отказ уборки СТАРОЙ копии — единственная причина, по которой человеку стоит
+            // сказать о папке обновления. Если места нет, ответ остаётся отказом по существу,
+            // и тогда о причине уборки говорит ветка отказа, а не эта.
+            if (copy.Folder.Length == 0)
+            {
+                // Папка подготовки убирается И ЗДЕСЬ, через тот же `Fail(...)`, что и остальные
+                // отказы: этот путь возвращает отказ НАПРЯМУЮ (он минует `Fail`), и без уборки
+                // пустая папка обновления оставалась на диске — регрессия, найденная приёмкой
+                // 10.10.2026 сравнением с прежним поведением. Причина уборки не теряется: она
+                // едет в `Cleanup`, а причина от копии присоединяется к ней.
+                var refusal = Fail(UpdateRefusal.NoBackup, target);
+
+                return copy.Cleanup.Ok
+                    ? refusal
+                    : refusal with { Cleanup = Keep(refusal.Cleanup, copy.Cleanup) };
+            }
 
             // --- сценарий и шапка журнала -----------------------------------------------------
 
@@ -446,7 +557,10 @@ public static class UpdateInstall
                 target,
                 UpdateScript.SafePath(scriptPath),
                 logSafe,
-                commandLine);
+                commandLine)
+            {
+                Cleanup = Keep(unpacked, copy.Cleanup),
+            };
         }
         catch (Exception error)
         {
@@ -460,17 +574,45 @@ public static class UpdateInstall
     }
 
     /// <summary>
+    /// ЗНАЧЕНИЕ ПРИЧИНЫ, КОТОРОЕ ЧИТАЕТ ЧЕЛОВЕК, — из ответа ЗАГРУЗКИ. Здесь причина загрузки
+    /// превращается в строку подстановки: <c>sum-mismatch: ожидалось …, получено …</c>,
+    /// <c>interrupted: IOException: …</c>, <c>http-refused: HTTP 404</c>, <c>no-length: HTTP 200</c>.
+    ///
+    /// Случай остаётся РАЗЛИЧИМЫМ (это <see cref="UpdateDownloadResult.Outcome"/>, а не текст),
+    /// а человеческая фраза берётся строкой по ключу отказа: второй набор подписей в движке
+    /// разошёлся бы со словарём на первой же правке перевода.
+    /// </summary>
+    private static string DownloadDetail(UpdateDownloadResult result)
+    {
+        var report = result.Report();
+
+        if (result.Outcome != UpdateDownloadOutcome.SumMismatch) return report;
+
+        // У несовпавшей суммы значения — это ДВА ХЕША, и оба нужны человеку: по ним видно, что
+        // скачался не тот файл, а не что «что-то пошло не так». Имя исключения сюда не попадает.
+        return string.IsNullOrWhiteSpace(result.Expected) || string.IsNullOrWhiteSpace(result.Actual)
+            ? report
+            : string.Format(CultureInfo.InvariantCulture, "{0}: {1} / {2}", report, result.Expected, result.Actual);
+    }
+
+    /// <summary>
     /// Страховочная копия прежней панели. **Копия без собранной панели внутри стирается**: это
     /// не «путь назад», а мусор, и оставить её значило бы предложить человеку откат в никуда.
     /// Путь назад нужен до записи сценария: без него сценарий не готовят вовсе.
+    ///
+    /// Итог уборки прежнего каталога копии возвращается наружу, а не глотается: папка, которую
+    /// держит чужой процесс, остаётся на диске, и человеку об этом говорят словами.
     /// </summary>
-    private static string CopyCurrent(string appDir, string backup)
+    private static (string Folder, TreeRemoval Cleanup) CopyCurrent(string appDir, string backup)
     {
+        // Прежняя копия сносится ДО создания новой: иначе файлы двух копий смешались бы,
+        // и «путь назад» стал бы смесью двух версий панели.
+        var removal = TreeDeletion.Remove(backup);
+
         try
         {
-            if (!Directory.Exists(appDir)) return string.Empty;
+            if (!Directory.Exists(appDir)) return (string.Empty, removal);
 
-            if (Directory.Exists(backup)) Directory.Delete(backup, recursive: true);
             Directory.CreateDirectory(backup);
 
             foreach (var file in Directory.GetFiles(appDir, "*", SearchOption.AllDirectories))
@@ -483,19 +625,24 @@ public static class UpdateInstall
                 File.Copy(file, destination, overwrite: true);
             }
 
-            if (File.Exists(Path.Combine(backup, UpdateStaging.PanelExeName))) return backup;
+            if (File.Exists(Path.Combine(backup, UpdateStaging.PanelExeName))) return (backup, removal);
 
-            TryDeleteFolder(backup);
-            return string.Empty;
+            return (string.Empty, Keep(removal, TreeDeletion.Remove(backup)));
         }
         catch
         {
             // Копию сделать не удалось — обновление не готовим: откатываться будет некуда,
             // и об этом человеку говорит ключ отказа.
-            TryDeleteFolder(backup);
-            return string.Empty;
+            return (string.Empty, Keep(removal, TreeDeletion.Remove(backup)));
         }
     }
+
+    /// <summary>
+    /// Два итога уборки — ОДИН ответ: причину назвать важнее, чем «сколько чего снято».
+    /// Пустое имя причины означает, что уборка удалась.
+    /// </summary>
+    private static TreeRemoval Keep(TreeRemoval first, TreeRemoval second) =>
+        first.Ok && !second.Ok ? second : first;
 
     /// <summary>
     /// Имя замка одной копии для сценария. По умолчанию — имя панели
@@ -531,18 +678,12 @@ public static class UpdateInstall
         return words.Length > 0 ? words[0] : string.Empty;
     }
 
-    private static void TryDeleteFolder(string path)
-    {
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(path) && Directory.Exists(path)) Directory.Delete(path, recursive: true);
-        }
-        catch
-        {
-            // Не убралось — не повод падать: место освободит следующее обновление.
-        }
-    }
-
+    /// <summary>
+    /// Уборка — ОДНИМ местом: <c>Files\TreeDeletion.cs</c>. Прежний вызов
+    /// <c>Directory.Delete(path, recursive: true)</c> в пустом <c>catch</c> оставлял дерево
+    /// на месте сразу в двух случаях — junction внутри дерева и файл «только для чтения» внутри
+    /// него, — и отвечал на это успехом (замер 10.10.2026, разбор — в самом помощнике).
+    /// </summary>
     private static void TryDeleteFile(string path)
     {
         try

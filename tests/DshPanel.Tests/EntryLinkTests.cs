@@ -257,6 +257,87 @@ public class OwnServerRecordTests
     }
 
     /// <summary>
+    /// ЗАПИСЬ НАЗЫВАЕТ ДВИЖОК (этап E3): путь к <c>bin.js</c> и версию. Без этого панель после
+    /// обновления движка не сказала бы, что именно работает, и откат (E3.3) не знал бы, куда
+    /// возвращаться. Ядро записи (порт · процесс · время) при этом остаётся неприкосновенным.
+    /// </summary>
+    [Fact]
+    public void Запись_называет_движок_и_переживает_чтение()
+    {
+        const string bin = @"C:\Проба\панель\engine\0.1.5-rc.2\node_modules\@deepseek-ai\dsh\lib\bin.js";
+
+        var record = new OwnServerRecord(3081, 4242, Ticks, bin, "0.1.5-rc.2");
+
+        Assert.Equal($"3081;4242;{Ticks};{bin};0.1.5-rc.2", record.Format());
+        Assert.True(record.NamesEngine);
+
+        var parsed = OwnServerRecord.Parse(record.Format());
+
+        Assert.Equal(record, parsed!.Value);
+
+        // Движок не назван — строка ОСТАЁТСЯ ПРЕЖНЕЙ: записи до этапа E3 не переписываются зря.
+        var bare = new OwnServerRecord(3081, 4242, Ticks);
+
+        Assert.False(bare.NamesEngine);
+        Assert.Equal($"3081;4242;{Ticks}", bare.Format());
+        Assert.Equal(bare, OwnServerRecord.Parse(bare.Format())!.Value);
+    }
+
+    /// <summary>
+    /// ИСПОРЧЕННЫЙ ХВОСТ НЕ СТОИТ ПАНЕЛИ ПРИЗНАНИЯ СВОЕГО СЕРВЕРА. Путь с точкой с запятой
+    /// в имени (в Windows это законное имя) рвётся на части — но три первых поля читаются,
+    /// и владение живо. А мусор в хвосте не становится «именем движка»: панель не пишет
+    /// в журнал того, чего не понимает.
+    /// </summary>
+    [Fact]
+    public void Испорченный_хвост_не_ломает_запись()
+    {
+        // Путь с точкой с запятой: движок назван не полностью — и это честно.
+        var mangled = OwnServerRecord.Parse($"3081;4242;{Ticks};C:\\папка;с\\bin.js;версия");
+
+        Assert.NotNull(mangled);
+        Assert.Equal(3081, mangled!.Value.Port);
+        Assert.Equal(4242, mangled.Value.Pid);
+        Assert.Equal(Ticks, mangled.Value.StartTicks);
+        Assert.False(mangled.Value.NamesEngine);
+
+        // Хвост не похож на движок — он не читается вовсе, а ядро записи цело.
+        foreach (var tail in new[] { "лишнее", "C:\\temp\\bin.js.old", ";" })
+        {
+            var parsed = OwnServerRecord.Parse($"3081;4242;{Ticks};{tail}");
+
+            Assert.NotNull(parsed);
+            Assert.Equal(new OwnServerRecord(3081, 4242, Ticks), parsed!.Value);
+        }
+    }
+
+    /// <summary>
+    /// СВОЙ ЛИ ЭТО СЕРВЕР — ПО ПУТИ ЗАПУСКА (третья примета владения). Она не зависит ни от номера
+    /// процесса, ни от версии движка, и именно она спасает признание после обновления движка.
+    /// </summary>
+    [Fact]
+    public void Свой_сервер_узнаётся_по_пути_движка()
+    {
+        const string engineDir = @"C:\Проба\панель\engine";
+        const string ownBin = @"C:\Проба\панель\engine\0.1.5-rc.2\node_modules\@deepseek-ai\dsh\lib\bin.js";
+
+        var record = new OwnServerRecord(3081, 4242, Ticks, ownBin, "0.1.5-rc.2");
+
+        Assert.True(record.LaunchedFromOwnEngine(ownBin, engineDir));
+        Assert.True(record.LaunchedFromOwnEngine(
+            @"C:\Проба\панель\engine\0.2.0-rc.2\node_modules\@deepseek-ai\dsh\lib\bin.js", engineDir));
+
+        Assert.False(record.LaunchedFromOwnEngine(
+            @"C:\Users\Public\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\lib\bin.js", engineDir));
+        Assert.False(record.LaunchedFromOwnEngine(ownBin, string.Empty));
+
+        // Версия для отчёта: сперва из записи, а если её там нет — из имени папки движка.
+        Assert.Equal("0.1.5-rc.2", record.EngineVersionOrFolder(engineDir));
+        Assert.Equal("0.1.5-rc.2", new OwnServerRecord(3081, 4242, Ticks, ownBin).EngineVersionOrFolder(engineDir));
+        Assert.Equal(string.Empty, new OwnServerRecord(3081, 4242, Ticks).EngineVersionOrFolder(engineDir));
+    }
+
+    /// <summary>
     /// «Тот же процесс» — это совпавшие НОМЕР и ВРЕМЯ СОЗДАНИЯ. Номер один — по нему сын чужой
     /// работы признавался бы своим; время одно — по нему запись пережила бы перезапуск.
     /// </summary>

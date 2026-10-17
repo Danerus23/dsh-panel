@@ -64,7 +64,7 @@ public static class AgentBrowser
 
         if (string.IsNullOrWhiteSpace(url))
         {
-            error = PanelStrings.OpenAgentNoLinkHint;
+            error = PanelStrings.OpenAgentNoLinkNote;
             log(error);
             return false;
         }

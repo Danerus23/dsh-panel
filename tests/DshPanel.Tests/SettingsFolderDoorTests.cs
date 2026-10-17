@@ -65,7 +65,7 @@ public class SettingsFolderDoorTests
         Assert.False(opened);
         Assert.Empty(opener.Calls);
         Assert.Equal(PanelStrings.SettingsFolderRefusedLog, error);
-        Assert.Contains(log, line => line.Contains("прогон проверки", StringComparison.Ordinal));
+        Assert.Contains(log, line => line.Contains(PanelStrings.SettingsFolderRefusedLog, StringComparison.Ordinal));
     }
 
     /// <summary>
