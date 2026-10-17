@@ -38,6 +38,12 @@ public partial class PeakWindow : Window
     private IPricingControl? _pricing;
     private IReadOnlyList<PeakTableRow> _rows = Array.Empty<PeakTableRow>();
 
+    /// <summary>Момент кадра: съёмка и проверки передают его явно; живой путь — <c>null</c> (машина).</summary>
+    private DateTimeOffset? _at;
+
+    /// <summary>Смещение на момент UTC для строк состояния; <c>null</c> — пояс машины (живой путь).</summary>
+    private Func<DateTime, int>? _offsetAtUtc;
+
     /// <summary>
     /// InitializeComponent, а не AvaloniaXamlLoader.Load(this): только первый прописывает поля
     /// <c>x:Name</c> (та же грабля, что у главного окна, настроек и копий, `docs\STACK.md` §6).
@@ -95,7 +101,21 @@ public partial class PeakWindow : Window
     /// Повторный вызов (связка переехала на другой контроллер) отписывает прежний: иначе окно
     /// держало бы его живым до конца процесса и рисовалось бы дважды на каждое изменение.
     /// </summary>
-    public void Attach(IBalanceControl balance, IPricingControl? pricing = null)
+    /// <param name="at">
+    /// МОМЕНТ, от которого окно считает всё: смещение пояса, заголовок, таблицу, источник,
+    /// сегодняшний день и состояние. Съёмка и проверки передают его явно, чтобы ожидание и окно
+    /// считались от ОДНОГО мгновения; живой путь оставляет <c>null</c> — тогда момент берётся
+    /// у машины, как раньше (t24, 18.10.2026).
+    /// </param>
+    /// <param name="offsetAtUtc">
+    /// Смещение на момент UTC для строк состояния. Функция, а не число: за границей перевода
+    /// часов смещение другое. Живой путь — <c>null</c> (пояс машины).
+    /// </param>
+    public void Attach(
+        IBalanceControl balance,
+        IPricingControl? pricing = null,
+        DateTimeOffset? at = null,
+        Func<DateTime, int>? offsetAtUtc = null)
     {
         ArgumentNullException.ThrowIfNull(balance);
 
@@ -108,6 +128,9 @@ public partial class PeakWindow : Window
         _pricing = pricing;
         if (_pricing is not null) _pricing.Changed += OnBalanceChanged;
 
+        _at = at;
+        _offsetAtUtc = offsetAtUtc;
+
         Render();
     }
 
@@ -117,7 +140,8 @@ public partial class PeakWindow : Window
         // Момент спрашивается ОДИН раз и на всё: и смещение часового пояса, и сегодняшний день
         // считаются от него. Двух «сейчас» в одном построении быть не должно — на границе суток
         // подсветка уехала бы на соседний день, а часы остались бы прежними.
-        var now = DateTimeOffset.Now;
+        // Момент — параметр кадра, если он назван; иначе машина (живой путь).
+        var now = _at ?? DateTimeOffset.Now;
         var offset = PeakDecisions.OffsetMinutes(now);
 
         // Заголовки и пояснения есть ВСЕГДА: часовой пояс, «где дороже» и название таблицы
@@ -147,7 +171,12 @@ public partial class PeakWindow : Window
         }
 
         var agent = _balance.Agent;
-        var state = _balance.Peak;
+
+        // ⚠️ СОСТОЯНИЕ — ОТ ТОГО ЖЕ МОМЕНТА, что и таблица (t24, 18.10.2026). Раньше оно всегда
+        // приходило от связки (`_balance.Peak`): у образцовой двери оно посчитано от её момента
+        // (+03:00), а таблица брала смещение МАШИНЫ — в CI (UTC) два пути к «местному времени»
+        // расходились. Живой путь (`_at` пуст) берёт готовое состояние связки — не меняется.
+        var state = _at is null ? _balance.Peak : PeakDecisions.State(agent, _at.Value, _offsetAtUtc);
 
         NowText.Text = PeakTable.NowText(state);
         NextText.Text = PeakTable.NextText(state);

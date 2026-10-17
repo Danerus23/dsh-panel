@@ -24,7 +24,15 @@ public readonly record struct PeakState(
     PeakMoment NextKind,
     int MinutesUntilNext,
     string ScheduleText,
-    string Checked)
+    string Checked,
+
+    /// <summary>
+    /// СМЕЩЕНИЕ НА МОМЕНТ ПЕРЕКЛЮЧЕНИЯ (в минутах), посчитанное провайдером состояния.
+    /// Зачем отдельно от момента: за границей перевода часов смещение другое, и показывать
+    /// час переключения надо по тому смещению, которое будет НА ЧАСАХ в тот момент
+    /// (t24, 18.10.2026: иначе единственным источником оставался пояс машины).
+    /// </summary>
+    int NextOffsetMinutes)
 {
     public bool HasNext => NextSwitchUtc is not null;
 }
@@ -60,9 +68,23 @@ public static class PeakDecisions
     /// <summary>Насколько вперёд ищем переключения: неделя с запасом в сутки.</summary>
     private const int SearchDaysAhead = 8;
 
-    public static PeakState State(AgentProfile agent, DateTimeOffset now)
+    /// <param name="offsetAtUtc">
+    /// СМЕЩЕНИЕ НА КОНКРЕТНЫЙ МОМЕНТ UTC — параметр, а не <see cref="TimeZoneInfo.Local"/> внутри.
+    /// Это ФУНКЦИЯ, а не число, потому что за границей перевода часов смещение другое
+    /// (см. <see cref="OffsetMinutesAt"/>): переключение через границу надо показать по тому
+    /// смещению, которое будет на часах ТОГДА. Живой путь передаёт <c>null</c> — берётся пояс
+    /// машины, как всегда; проверки и съёмка передают явную функцию и от пояса не зависят
+    /// (t24, 18.10.2026: литерал «04:00–07:00, 09:00–13:00» был верен только в UTC+3, а в CI
+    /// (UTC) окно показывало «01:00–04:00, 06:00–10:00» — два пути к «местному» расходились).
+    /// </param>
+    public static PeakState State(
+        AgentProfile agent,
+        DateTimeOffset now,
+        Func<DateTime, int>? offsetAtUtc = null)
     {
         ArgumentNullException.ThrowIfNull(agent);
+
+        offsetAtUtc ??= OffsetMinutesAt;
 
         var utc = now.UtcDateTime;
         var offset = OffsetMinutes(now);
@@ -98,7 +120,11 @@ public static class PeakDecisions
             NextKind: kind,
             MinutesUntilNext: minutes,
             ScheduleText: ScheduleText(agent, offset),
-            Checked: agent.PricingChecked);
+            Checked: agent.PricingChecked,
+
+            // Смещение считается НА МОМЕНТ ПЕРЕКЛЮЧЕНИЯ (а если его нет — на переданный момент):
+            // так строка «до 07:00» не соврёт через границу перевода часов.
+            NextOffsetMinutes: offsetAtUtc(next ?? utc));
     }
 
     /// <summary>
@@ -212,7 +238,9 @@ public static class PeakDecisions
             ? PanelStrings.PeakNextStartFormat
             : PanelStrings.PeakNextEndFormat;
 
-        var at = LocalClock(next.Value, OffsetMinutesAt(next.Value));
+        // ⚠️ Смещение берётся У САМОГО СОСТОЯНИЯ (t24, 18.10.2026): оно посчитано провайдером
+        // НА МОМЕНТ ПЕРЕКЛЮЧЕНИЯ, поэтому живой путь и съёмка показывают ОДИН пояс, а не два.
+        var at = LocalClock(next.Value, state.NextOffsetMinutes);
 
         return string.Format(
             CultureInfo.CurrentCulture, what, FormatSpan(state.MinutesUntilNext), at);

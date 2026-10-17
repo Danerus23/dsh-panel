@@ -56,15 +56,15 @@ AppsAndFeaturesEntries:
   Publisher: Danerus23
   ProductCode: '{7F3C6A21-9D4E-4B8A-9C1F-2E5D8B7A4C11}_is1'
 # ReleaseDate and InstallerSha256 below are the RELEASE's numbers, not a revision's:
-#   * InstallerSha256 — the 2.1.0 installer of the release build (44 884 567 bytes), taken from
+#   * InstallerSha256 — the 2.1.0 installer of the release build (44 884 314 bytes), taken from
 #     that build's SHA256SUMS.txt; never recomputed from a local rebuild (bytes differ);
-#   * ReleaseDate     — the day the release goes out: 2026-10-17 is the cycle's date and must be
+#   * ReleaseDate     — the day the release goes out: 2026-10-18 is the cycle's date and must be
 #     CONFIRMED AT THE TAG — if the release slips to another day, this is the one line to change.
 # Both are rewritten by tools\winget-manifest.ps1 (offline, idempotent) from the sums file.
-ReleaseDate: 2026-10-17
+ReleaseDate: 2026-10-18
 Installers:
 - Architecture: x64
   InstallerUrl: https://github.com/Danerus23/dsh-panel/releases/download/v2.1.0/dsh-panel-setup.exe
-  InstallerSha256: 441FA1FA95C38B71FA4B38BF7170AFA49DB52F7AFB8524D41C1ACA2A20E96A39
+  InstallerSha256: CC692F7CEF79C2A2BB8E7C9FD60F9C35C7A3D72D1E20B08DE0B970524ECBB33F
 ManifestType: installer
 ManifestVersion: 1.12.0

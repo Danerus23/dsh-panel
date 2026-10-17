@@ -1037,7 +1037,9 @@ internal static class Program
         string kind,
         AppPaths paths,
         ServerController server,
-        IAutostartControl? autostart = null)
+        IAutostartControl? autostart = null,
+        DateTimeOffset? peaksAt = null,
+        Func<DateTime, int>? peaksOffsetAtUtc = null)
     {
         // ОБРАЗЦОВЫЕ ДАННЫЕ ДЛЯ КАДРА — ПОДСТАВНЫЕ ДВЕРИ (фаза 3, `Shell\ShotDrawers.cs`).
         //
@@ -1177,7 +1179,14 @@ internal static class Program
             // в карточке баланса. С образцовыми дверями в нём видны и таблица дней, и строки цен:
             // без них кадр показывал бы «баланс не читается» — то, на что владелец и жаловался.
             var peaks = new PeakWindow();
-            peaks.Attach(sample ? drawers.Balance : RealShotBalance(), ShotPricing(paths));
+
+            // t24: момент и смещение «на момент UTC» передаются ОКНУ явно — тогда кадр
+            // и его ожидание считаются от одного мгновения, а не от часов машины.
+            peaks.Attach(
+                sample ? drawers.Balance : RealShotBalance(),
+                ShotPricing(paths),
+                peaksAt,
+                peaksOffsetAtUtc);
             if (sample) doors.Add("balance");
             window = peaks;
         }

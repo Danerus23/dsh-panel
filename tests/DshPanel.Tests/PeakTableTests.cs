@@ -287,16 +287,27 @@ public class PeakTableTests
     {
         var agent = AgentCatalog.DeepSeek;
 
-        var inPeak = PeakDecisions.State(agent, new DateTimeOffset(2026, 9, 21, 2, 0, 0, TimeSpan.Zero));
+        // ⚠️ СМЕЩЕНИЕ — ПАРАМЕТР (t24, 18.10.2026). Раньше здесь стоял `OffsetMinutesAt`, то есть
+        // ПОЯС МАШИНЫ, и проверка на машине с поясом ≠ UTC ждала другой час — она держала ровно
+        // тот двухисточниковый дефект, из-за которого конвейер падал в UTC. Теперь ДВА явных
+        // смещения (0 и +180) и оба ожидания посчитаны от них, без смены пояса машины.
+        var endUtc = new DateTime(2026, 9, 21, 4, 0, 0, DateTimeKind.Utc);
+
+        var inPeak = PeakDecisions.State(
+            agent, new DateTimeOffset(2026, 9, 21, 2, 0, 0, TimeSpan.Zero), _ => 0);
         var inPeakLine = PeakTable.NowLine(inPeak);
 
         Assert.Contains(PanelStrings.PeakShortInPeak, inPeakLine, StringComparison.Ordinal);
         Assert.DoesNotContain(PanelStrings.PeakShortOffPeak, inPeakLine, StringComparison.Ordinal);
+        Assert.Contains(PeakDecisions.LocalClock(endUtc, 0), inPeakLine, StringComparison.Ordinal);
 
-        // Конец первого окна — 04:00 UTC; при нулевом смещении это и есть 04:00 на стенке.
-        var zone = PeakDecisions.OffsetMinutesAt(new DateTime(2026, 9, 21, 4, 0, 0, DateTimeKind.Utc));
-        Assert.Contains(PeakDecisions.LocalClock(new DateTime(2026, 9, 21, 4, 0, 0, DateTimeKind.Utc), zone),
-            inPeakLine, StringComparison.Ordinal);
+        // Тот же момент, другое смещение: на стенке +03:00 тот же конец окна — «07:00».
+        var shifted = PeakDecisions.State(
+            agent, new DateTimeOffset(2026, 9, 21, 5, 0, 0, TimeSpan.FromHours(3)), _ => 180);
+        var shiftedLine = PeakTable.NowLine(shifted);
+
+        Assert.Contains(PeakDecisions.LocalClock(endUtc, 180), shiftedLine, StringComparison.Ordinal);
+        Assert.NotEqual(inPeakLine, shiftedLine);
 
         var offPeak = PeakDecisions.State(agent, new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero));
         var offPeakLine = PeakTable.NowLine(offPeak);

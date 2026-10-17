@@ -196,7 +196,10 @@ public static class PeakTable
             return string.Format(CultureInfo.CurrentCulture, PanelStrings.PeakNowLineNoTimeFormat, what);
         }
 
-        var at = PeakDecisions.LocalClock(next.Value, PeakDecisions.OffsetMinutesAt(next.Value));
+        // ⚠️ Смещение — из состояния (t24, 18.10.2026): оно посчитано НА МОМЕНТ ПЕРЕКЛЮЧЕНИЯ,
+        // поэтому строка под таблицей и таблица выше говорят об одном поясе. Раньше здесь
+        // спрашивался пояс МАШИНЫ — и на раннере (UTC) строка расходилась с таблицей.
+        var at = PeakDecisions.LocalClock(next.Value, state.NextOffsetMinutes);
 
         return string.Format(CultureInfo.CurrentCulture, PanelStrings.PeakNowLineFormat, what, at);
     }

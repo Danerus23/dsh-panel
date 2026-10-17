@@ -6,8 +6,10 @@ using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
+using DshPanel.Agents;
 using DshPanel.Isolation;
 using DshPanel.Localization;
+using DshPanel.Peak;
 using DshPanel.Server;
 using DshPanel.Settings;
 using DshPanel.Shell;
@@ -214,10 +216,44 @@ public class ShotWiringTests
         // (`ShotPricingWithHistory`), а не дверью; число денег живёт в главном окне и в разделе
         // «Баланс и тариф». Пики же приходят ИМЕННО дверью баланса: пропади она — и таблица дней
         // осталась бы одной шапкой.
-        Assert.Contains(
-            "04:00–07:00, 09:00–13:00",
-            ShowAndRead(StartModes.ShotPeaks, "04:00–07:00, 09:00–13:00"),
-            StringComparison.Ordinal);
+        // ⚠️ **КЛАСС ДЕФЕКТА (t24, 18.10.2026): проверка зависела от ЧАСОВОГО ПОЯСА машины.**
+        // Здесь стоял литерал «04:00–07:00, 09:00–13:00», и он верен ТОЛЬКО в UTC+3: окно
+        // показывает МЕСТНОЕ время, а пояс у машины свой — на раннере GitHub (UTC) проверка
+        // падала ВСЕГДА (в CI она до этого не прогонялась ни разу).
+        //
+        // Теперь момент и смещение — ПАРАМЕТРЫ (решение владельца, инъекция): два прогона на
+        // ОДНОМ И ТОМ ЖЕ мгновении (02:00Z), смещения явные 0 и +180, пояс машины не участвует
+        // НИ В ОДНОМ ожидании. Смещение передаётся функцией на момент UTC, а не числом: за
+        // границей перевода часов оно другое (см. `PeakDecisions.State`).
+        foreach (var run in new[]
+        {
+            (Moment: new DateTimeOffset(2026, 9, 21, 2, 0, 0, TimeSpan.Zero), Offset: 0),
+            (Moment: new DateTimeOffset(2026, 9, 21, 5, 0, 0, TimeSpan.FromHours(3)), Offset: 180),
+        })
+        {
+            Func<DateTime, int> offsetAtUtc = _ => run.Offset;
+
+            // (а) строка понедельника в таблице — ровно та, что даёт таблица при этом смещении;
+            var monday = PeakTable.Rows(AgentCatalog.DeepSeek, run.Offset)[0].PeakWindows;
+            var state = PeakDecisions.State(AgentCatalog.DeepSeek, run.Moment, offsetAtUtc);
+
+            // (в) заголовок называет пояс: «UTC+00:00» / «UTC+03:00».
+            var heading = PeakTable.Heading(run.Offset);
+
+            // (б) строки состояния называют час переключения с ТЕМ ЖЕ смещением.
+            var next = state.NextSwitchUtc!.Value;
+            var clock = PeakDecisions.LocalClock(next, run.Offset);
+            var nowLine = PeakTable.NowLine(state);
+
+            Assert.Contains(clock, nowLine, StringComparison.Ordinal);
+
+            var text = ShowAndRead(StartModes.ShotPeaks, monday, run.Moment, offsetAtUtc);
+
+            Assert.Contains(monday, text, StringComparison.Ordinal);
+            Assert.Contains(heading, text, StringComparison.Ordinal);
+            Assert.Contains(PeakTable.NowText(state), text, StringComparison.Ordinal);
+            Assert.Contains(nowLine, text, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>
@@ -348,11 +384,14 @@ public class ShotWiringTests
     /// (`autostart: null`) — в съёмке он берётся из контекста прогона, а у проверки контекста нет
     /// и быть не должно. Автозапуск к дверям данных не относится: он показывает одну галочку.
     /// </summary>
-    private static (Window Window, IReadOnlyList<string> Doors) Build(string kind)
+    private static (Window Window, IReadOnlyList<string> Doors) Build(
+        string kind,
+        DateTimeOffset? peaksAt = null,
+        Func<DateTime, int>? peaksOffsetAtUtc = null)
     {
         var paths = AppPaths.Under(PanelTestStand.TempDir());
 
-        return Program.ShotWindowWithDoors(kind, paths, ShotServer(kind, paths));
+        return Program.ShotWindowWithDoors(kind, paths, ShotServer(kind, paths), null, peaksAt, peaksOffsetAtUtc);
     }
 
     /// <summary>
@@ -375,9 +414,13 @@ public class ShotWiringTests
     /// ⚠️ <paramref name="mustFind"/> — строка, которой в тексте быть обязано: пустое окно
     /// не должно проходить проверку «образцового в нём нет».
     /// </summary>
-    private static string ShowAndRead(string kind, string mustFind)
+    private static string ShowAndRead(
+        string kind,
+        string mustFind,
+        DateTimeOffset? peaksAt = null,
+        Func<DateTime, int>? peaksOffsetAtUtc = null)
     {
-        var window = Build(kind).Window;
+        var window = Build(kind, peaksAt, peaksOffsetAtUtc).Window;
 
         window.Show();
 
