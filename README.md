@@ -6,8 +6,9 @@
 
 <p align="center">
   A control panel for the local <b>DeepSeek Harness</b> server on Windows:<br>
-  it starts the server and watches it from the tray, shows balance and peak windows, makes and
-  restores copies, and updates itself.
+  it runs the server and watches it from the tray, installs and updates DSH itself from a verified
+  set of versions, shows balance and peak windows, makes and restores copies, answers the agent's
+  question from your phone, and updates itself.
 </p>
 
 <p align="center">
@@ -19,6 +20,8 @@
 </p>
 
 <p align="center">
+  <a href="#whats-new-in-210">What's new in 2.1.0</a> ·
+  <a href="#how-to-update">How to update</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#what-it-does">What it does</a> ·
   <a href="#what-is-missing">What is missing</a> ·
@@ -35,18 +38,50 @@
 installed into your user profile, no administrator rights, no separate .NET install — the runtime is
 inside. This panel version is **2.1.0**.
 
-Start and stop the server, a tray icon that shows its state, your balance, peak windows and price
-history, copies of your data with restore, and the panel updating itself — all of it **in three
+Start and stop the server, install, update and roll back DSH from a verified set, a tray icon that
+shows its state, your balance, peak windows and price history, copies of your data with restore, the
+agent's question answered from your phone, and the panel updating itself — all of it **in three
 languages: Russian, English and Chinese**.
 
 Peak windows are shown in **your local time**, prices come with a history of changes rather than from
 memory, and the sign-in link opens only when you click it.
 
-You only need your own installed DSH: the panel manages your server, it does not bring one. For what
-the panel does not do, see [“What is missing”](#what-is-missing).
+Nothing to unpack by hand: the panel installs DSH from npm by a verified set of versions, and it
+needs the network for that. What it does not do is in [“What is missing”](#what-is-missing).
 
 Russian is the original. **English and Chinese are machine translations:** the meaning is right, but
 some wording may not sound native.
+
+## What's new in 2.1.0
+
+* **The phone answers the agent's question.** The settings have a “Phone” section: the switch, the
+  port, a six-digit code with a lifetime and a **QR code** that opens the phone page in a camera.
+  The page is the agent's question in words, with answer choices, and a “Cancel the agent's run”
+  button that says plainly the work of that run will not continue.
+* **The panel installs the DSH server itself — from a verified set of versions:** exact versions and
+  sums of every package, and the installed tree is checked against the set path by path.
+* **It updates and rolls back that server too.** Before replacing a version the panel asks, takes a
+  safety copy of the profile, stops **only its own** server and **checks the new version live**;
+  failed — the previous one comes back. The system Node does not fit — the panel downloads its own.
+* **The “Server” section says what the panel can do with this server**, skill by skill, in words:
+  checked · does not work · not checked. A feature without the skill it needs refuses in words
+  instead of staying silent.
+* **The panel updates itself from this release:** files are downloaded in chunks, the overall
+  SHA-256 is checked **before** a file takes its working place, and a failed check no longer looks
+  like “never checked”.
+
+## How to update
+
+Open the **“Update”** section and press **“Check now”**. The panel finds 2.1.0, downloads
+`DshPanel.zip` from this release, checks its SHA-256 and replaces its files **after the panel
+exits**; a safety copy of the previous version is taken first. Nothing to unpack or uninstall by
+hand.
+
+`dsh-panel-setup.exe` from the files below is for a **closed** panel: it stops a running panel
+itself, so leave the panel from the tray menu first — “Exit”, not “Stop”: “Stop” shuts down the DSH
+server together with the agent's work.
+
+Whom this update is not for and what the panel does not do — [“What is missing”](#what-is-missing).
 
 ## Installation
 
@@ -57,12 +92,15 @@ some wording may not sound native.
    nothing on the system.
 3. Then press **Start** — the panel brings up your DSH server and shows its state. The entry link
    opens in your browser from a separate button.
+4. No DSH server at all — the “Update” section installs it from a verified set; the panel says
+   itself what is missing on the first run.
 
 If you already have an **earlier panel**, the installer goes over it: both use the same package
-identity, so the tray keeps one panel, not two.
+identity, so the tray keeps one panel, not two. An earlier panel can also update itself — see
+[“How to update”](#how-to-update).
 
-**What it needs:** Windows 10 or 11, x64. No .NET install. It also needs your own installed DSH —
-the engine is not bundled (see “What is missing”).
+**What it needs:** Windows 10 or 11, x64. No .NET install. It also needs the network: DSH is
+installed from npm by a verified set (see “What is missing”).
 
 ## What it does
 
@@ -78,7 +116,47 @@ what the server printed while starting.
 If a DSH server is already up, the panel finds it on port 3080 or on another port, shows you the
 finding and asks whether to take it under control. Your answer is **remembered**, so from the next
 start the same server is taken automatically. While a foreign server answers, the panel does not
-start its own — no second engine on the same data.
+start its own — no second engine on the same data. If more than one DSH runs on the machine, the
+panel shows a row for each, marked “the panel's server” or “a found server”, and each has its own
+“Take over” button.
+
+### The DSH server: install, update, roll back
+
+The panel installs the DSH server **from a verified set of versions** — exact versions and sums of
+every package — and after the install the tree is checked against the set path by path. The
+“Update” section has a “DSH server” block: the first line is **your own** version, then the
+**recommended** (verified) one and the **fresh** one from the npm registry, with words about how
+they differ. The main button installs the verified version only; the fresh one is a separate action
+with a confirmation; when there is no server at all, the button is called “Install”.
+
+Before replacing a version the panel always asks: “will stop the DSH server, take a copy, install
+{version}; agent work will be interrupted”. It takes a safety copy of the profile (a failed copy
+refuses the update — there is no such thing as half an archive), stops **only its own** server,
+installs the verified version and **checks what was installed live**: raises it on a free port in
+its own temporary home and runs the probe. Passed — the server comes back up on the new version;
+failed or broken — the **previous** one comes back. Words before the deed, one line after it.
+
+The “Return to version {X}…” line under the buttons is visible only when there is somewhere to
+return to. The panel always asks and speaks about sessions **plainly**: their journal is newer and
+the old server will not open them. If the system Node does not fit by version, the panel downloads
+**its own** — from the official source and with the sum checked.
+
+### The phone
+
+The settings have a “Phone” section: the “Allow the phone” switch, the port, the “Show the code” button —
+**six digits** with a lifetime, the list of connected devices with “Unlink” next to each, and the
+address the panel waits on for the phone. Next to it is a **QR code** with the address and port: a
+camera opens the phone page straight away, no need to type the code by hand. The tray menu carries a
+“Phone: connected” or “Phone: waiting to connect” line.
+
+The phone page is the agent's question in words, with answer choices: you can answer by choosing or
+in your own words if none of the choices fits, and the answer goes **once**. A separate “Cancel the
+agent's run” button says plainly that the work of that run will not continue. The firewall rule for
+the phone is placed **only when you click**, and it is narrow: private profile only, the panel's
+port only, this program only and your own subnet only.
+
+The phone works on your own network and makes no external connections. Setting tasks and managing
+agents from the phone are in development.
 
 ### The tray
 
@@ -140,18 +218,24 @@ the balance and the entry link never get into the report.
 Start with Windows, theme (light, dark, or as in Windows), the port of the panel's own server, and
 the server working folder. The “Server” section carries an environment report: what the panel
 looked for, what it found, which versions of DSH, Node, npm and pnpm are installed and where exactly
-— with paths.
+— with paths. The same section carries the table of skills: what the panel can do with this DSH
+server, each skill in words.
 
 ## What is missing
 
-* **Phone.** Works on your own network: sign in by QR and answer the agent's question; setting tasks and managing agents are in development; it makes no external connections.
-* **You need your own installed DSH.** No engine and no Node come with the download: the panel
-  manages your server, it does not bring one. Your own DSH is what makes the server start and what
-  fills the environment report.
+* **The phone answers the agent's question and nothing else yet.** Setting tasks and managing agents
+  from the phone are in development. Its traffic goes over your network **unencrypted** — the
+  sign-in is protected by the six-digit code and the device pass — and it makes no external
+  connections.
+* **No engine and no Node come with the download.** The installer and the archive carry neither: the
+  panel installs DSH **from npm** by a verified set, so the network is needed. The system Node is
+  used when it fits; otherwise the panel downloads its own.
 * **There is no code signing — SmartScreen will warn you.** On the first run it will say the
   publisher is unknown: no signing certificate was bought. That is expected; you can still run the
   installer through “More info” → “Run anyway”.
-* **The panel updates only itself.** It does not update DSH itself — DSH updates on its own.
+* **The panel installs and updates only ITS OWN DSH server.** It never touches a foreign
+  installation: it shows the version and what it can do with it. A fresh version from the registry
+  is shown but not installed until a verified set has been taken for it.
 * **The peak schedule is weekly.** The table runs by days of the week, the same as on the pricing
   page, and knows no Chinese holidays.
 
@@ -171,6 +255,9 @@ Several panel windows at once.
 | Settings | [settings](docs/screenshots/en/settings.png) | [настройки](docs/screenshots/ru/settings.png) | [设置](docs/screenshots/zh/settings.png) |
 | About | [about](docs/screenshots/en/about.png) | [о программе](docs/screenshots/ru/about.png) | [关于](docs/screenshots/zh/about.png) |
 | Panel update (settings section) | [update](docs/screenshots/en/update.png) | [обновление](docs/screenshots/ru/update.png) | [更新](docs/screenshots/zh/update.png) |
+| Phone (settings section) | [phone](docs/screenshots/en/phone.png) | [телефон](docs/screenshots/ru/phone.png) | [手机](docs/screenshots/zh/phone.png) |
+| DSH server (settings section) | [server](docs/screenshots/en/server.png) | [сервер](docs/screenshots/ru/server.png) | [服务器](docs/screenshots/zh/server.png) |
+| First run | [first run](docs/screenshots/en/first-run.png) | [первый запуск](docs/screenshots/ru/first-run.png) | [首次启动](docs/screenshots/zh/first-run.png) |
 
 ## Building from source
 
