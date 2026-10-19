@@ -34,7 +34,7 @@
 # Version and hash are rewritten by tools\winget-manifest.ps1.
 
 PackageIdentifier: Danerus23.DSHPanel
-PackageVersion: 2.2.1
+PackageVersion: 2.3.0
 InstallerType: inno
 Scope: user
 UpgradeBehavior: install
@@ -56,8 +56,8 @@ AppsAndFeaturesEntries:
   Publisher: Danerus23
   ProductCode: '{7F3C6A21-9D4E-4B8A-9C1F-2E5D8B7A4C11}_is1'
 # ReleaseDate and InstallerSha256 below are the RELEASE's numbers, not a revision's:
-#   * InstallerSha256 — the 2.2.1 installer of the release build (44 979 490 bytes, B5400ED0…D138),
-#     taken from the assets of the GitHub release v2.2.1 (created 2026-10-19T18:47:06Z); never
+#   * InstallerSha256 — the 2.3.0 installer of the release build (44 982 373 bytes, BB3FA0AA…98B8),
+#     taken from the assets of the GitHub release v2.3.0 (created 2026-10-19T22:36:54Z); never
 #     recomputed from a local rebuild — the pipeline and this machine build in different trees, so
 #     bytes and sums differ by construction;
 #   * ReleaseDate     — the day the release went out: 2026-10-19 (GitHub release creation date, UTC;
@@ -66,7 +66,7 @@ AppsAndFeaturesEntries:
 ReleaseDate: 2026-10-19
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/Danerus23/dsh-panel/releases/download/v2.2.1/dsh-panel-setup.exe
-  InstallerSha256: B5400ED09030EB45877194EC82F977FC9105CE48354EFAE7F19A48ECC750D138
+  InstallerUrl: https://github.com/Danerus23/dsh-panel/releases/download/v2.3.0/dsh-panel-setup.exe
+  InstallerSha256: BB3FA0AA8E2FA943C49E2B56D47AB8A36E748284631146F1E544DA59AF2098B8
 ManifestType: installer
 ManifestVersion: 1.12.0

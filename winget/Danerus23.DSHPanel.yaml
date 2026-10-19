@@ -13,7 +13,7 @@
 # a rebuild differ from the bytes that were signed off for the release (docs\RELEASE-V2.md §3.11).
 
 PackageIdentifier: Danerus23.DSHPanel
-PackageVersion: 2.2.1
+PackageVersion: 2.3.0
 DefaultLocale: en-US
 ManifestType: version
 ManifestVersion: 1.12.0
