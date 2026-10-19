@@ -42,7 +42,13 @@ public static class EngineUpdateNotice
 
     /// <summary>
     /// ГОВОРИТЬ ЛИ. Три условия, и все три обязательны: рекомендованная известна, она **новее**
-    /// поставленной (сравнение по правилу панели — числовая часть) и про неё **ещё не говорили**.
+    /// поставленной и про неё **ещё не говорили**.
+    ///
+    /// ⚠️ **«Новее» здесь — ПО ЧИСЛАМ, без предрелизной части** (<see cref="EngineUpdateDecisions.
+    /// FreshIsNewerByNumber"/>), и это отдельное решение, а не забытая половина задачи F-1b: слова
+    /// владельца — «новее значит старшая часть версии больше, а решает всё равно проба, а не хвост
+    /// номера». Кнопку непроверенной версии с 20.10.2026 сравнивают по SemVer, а объявление — нет:
+    /// оно зовёт человека к проверенной версии, и номер хвоста тут ничего не решает.
     /// </summary>
     public static bool ShouldAnnounce(string? installed, string? recommended, string? announced)
     {
@@ -59,7 +65,7 @@ public static class EngineUpdateNotice
         if (string.Equals(version, (announced ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase))
             return false;
 
-        return EngineUpdateDecisions.FreshIsNewer(version, standing);
+        return EngineUpdateDecisions.FreshIsNewerByNumber(version, standing);
     }
 
     /// <summary>Слова шарика: что нашлось и где это ставить. Без «нажмите здесь» — нажимать нечего.</summary>

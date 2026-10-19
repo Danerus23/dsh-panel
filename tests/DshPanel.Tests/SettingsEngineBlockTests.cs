@@ -336,6 +336,109 @@ public class SettingsEngineBlockTests
     }
 
     /// <summary>
+    /// СВЕЖАЯ ТА ЖЕ, ЧТО СТОЯЩАЯ, — КНОПКИ НЕТ (находка F-1, слово владельца 20.10.2026).
+    ///
+    /// **Это дефект с его скрина:** стояла `0.2.1-rc.2`, свежая в реестре была ТА ЖЕ `0.2.1-rc.2`,
+    /// рекомендованная — `0.1.5-rc.2`. Кнопка «Поставить непроверенную…» была видна и «что-то
+    /// делала», хотя ставить было нечего: правило сравнивало свежую только с рекомендуемой.
+    ///
+    /// **Мутация, которая обязана упасть:** «убрать сравнение со стоящей».
+    /// </summary>
+    [AvaloniaFact]
+    public void Свежая_та_же_что_стоящая_отдельной_кнопки_нет()
+    {
+        var (window, _, _) = Stand(tune: section =>
+        {
+            section.Installed = "0.2.1-rc.2";
+            section.Recommended = "0.1.5-rc.2";
+            section.Fresh = "0.2.1-rc.2";
+        });
+
+        try
+        {
+            Assert.False(
+                FindButton(window, "EngineInstallFreshButton").IsVisible,
+                "свежая та же, что стоящая, — ставить нечего, а кнопка видна");
+
+            // И подсказки про неё нет: правило F-1 — «подсказка про кнопки, которые человек видит».
+            Assert.Equal(PanelStrings.EngineUpdateMainHint, Text(window, "EngineHintText"));
+        }
+        finally
+        {
+            window.CloseQuietly();
+        }
+    }
+
+    /// <summary>
+    /// СТОЯЩАЯ НОВЕЕ СВЕЖЕЙ — КНОПКИ НЕТ: это понижение, а понижение — решение владельца, а не щелчок
+    /// панели (слово владельца 14.10.2026, подтверждено находкой F-1).
+    ///
+    /// **Мутация, которая обязана упасть:** «убрать сравнение со стоящей».
+    /// </summary>
+    [AvaloniaFact]
+    public void Свежая_старее_стоящей_отдельной_кнопки_нет()
+    {
+        var (window, _, _) = Stand(tune: section =>
+        {
+            section.Installed = "0.2.2-rc.2";
+            section.Recommended = "0.1.5-rc.2";
+            section.Fresh = "0.2.1-rc.2";
+        });
+
+        try
+        {
+            Assert.False(
+                FindButton(window, "EngineInstallFreshButton").IsVisible,
+                "стоящая новее свежей — предлагать понижение нельзя");
+        }
+        finally
+        {
+            window.CloseQuietly();
+        }
+    }
+
+    /// <summary>
+    /// СВЕЖАЯ НОВЕЕ И СТОЯЩЕЙ, И РЕКОМЕНДУЕМОЙ — КНОПКА ЕСТЬ, А ПОДСКАЗКА ПРО НЕЁ — ОТДЕЛЬНОЙ
+    /// СТРОКОЙ (находка F-1, слово владельца 20.10.2026).
+    ///
+    /// **Чего не должно быть.** Прежняя подсказка склеивала две фразы ПРОБЕЛОМ: «…панель проверила
+    /// сама непроверенная версия ставится только этой кнопкой…» — одно предложение из двух.
+    ///
+    /// **Мутации, которые обязаны упасть:** «склеить подсказку обратно пробелом» · «убрать сравнение
+    /// со стоящей» (кнопка исчезнет — и этой проверке нечего будет мерить).
+    /// </summary>
+    [AvaloniaFact]
+    public void Свежая_новее_обеих_кнопка_есть_и_подсказка_двумя_строками()
+    {
+        var (window, section, _) = Stand();
+
+        try
+        {
+            Assert.True(FindButton(window, "EngineInstallFreshButton").IsVisible, "свежая новее обеих — кнопки нет");
+
+            var hint = Text(window, "EngineHintText");
+            var lines = hint.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0).ToList();
+
+            Assert.Equal(2, lines.Count);
+            Assert.Equal(PanelStrings.EngineUpdateMainHint, lines[0]);
+            Assert.Equal(PanelStrings.EngineUpdateFreshHint, lines[1]);
+
+            // И склейки нет: прежде две фразы шли через пробел одним предложением.
+            Assert.DoesNotContain(
+                PanelStrings.EngineUpdateMainHint + " " + PanelStrings.EngineUpdateFreshHint,
+                hint,
+                StringComparison.Ordinal);
+
+            // Строка про свежую версию на месте: она рассказывает о том, что человек ВИДИТ.
+            Assert.Contains(section.Fresh, Text(window, "EngineFreshLineText"), StringComparison.Ordinal);
+        }
+        finally
+        {
+            window.CloseQuietly();
+        }
+    }
+
+    /// <summary>
     /// ⚠️ ГЛАВНОЕ: ГЛАВНАЯ КНОПКА СПРАШИВАЕТ ЧЕЛОВЕКА **ВСЕГДА** — и вопрос называет версию,
     /// которую панель поставит. Отказ человека не начинает работы вовсе.
     /// </summary>

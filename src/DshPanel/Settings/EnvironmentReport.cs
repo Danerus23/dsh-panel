@@ -149,11 +149,17 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
         string portState,
         IReadOnlyList<SkillVerdict>? skills = null,
         EngineHints? hints = null,
-        SkillFacts? skillFacts = null)
+        SkillFacts? skillFacts = null,
+        ToolPlaces? places = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
 
         var culture = CultureInfo.CurrentCulture;
+
+        // ГДЕ ИСКАТЬ npm И pnpm (задача F-3, слово владельца 20.10.2026). Один список мест на весь
+        // отчёт: и «найден», и версия отвечают по нему, и второго списка быть не должно — иначе
+        // строка однажды скажет «найден», а версия не прочитается из другого места.
+        var tools = places ?? ToolPlaces.For(engine);
 
         // --- УМЕНИЯ ПАНЕЛИ С ЭТИМ СЕРВЕРОМ DSH -----------------------------------------------
         //
@@ -239,14 +245,23 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
         });
 
         found.Add(Versioned(PanelStrings.EnvNode, nodeVersion, found: engine is not null, culture));
-        found.Add(Versioned(PanelStrings.EnvNpm, npmVersion, found: NpmFound(engine, "npm"), culture));
 
-        found.Add(new EnvironmentLine(PanelStrings.EnvPnpm)
+        // ⚠️ npm И pnpm ИЩУТСЯ ПО ВСЕМ МЕСТАМ, А НЕ ПО ОДНОМУ (задача F-3, слово владельца
+        // 20.10.2026). Прежде «найден» значило «лежит пакетом в node_modules движка панели»,
+        // и отчёт показывал «не найден» при живом npm рядом с Node и живом pnpm в %APPDATA%\npm.
+        found.Add(Versioned(PanelStrings.EnvNpm, npmVersion, found: ToolFound(tools, "npm"), culture));
+
+        var pnpmFound = ToolFound(tools, "pnpm");
+
+        // ⚠️ pnpm ПАНЕЛИ НЕ НУЖЕН, и это НЕ беда машины: нет его — строка СЕРАЯ с подписью
+        // «панель им не пользуется» (чинить нечего). Нашёлся, а версия не прочиталась — жёлтая
+        // «версия не прочитана»: ложного зелёного не бывает, зелёный — только «найден» С версией.
+        var pnpmLine = Versioned(PanelStrings.EnvPnpm, pnpmVersion, pnpmFound, culture);
+
+        found.Add(pnpmLine with
         {
-            State = PnpmFound(engine, pnpmVersion) ? EnvLineState.Ok : EnvLineState.Grey,
-            Word = PnpmFound(engine, pnpmVersion) ? PanelStrings.EnvFound : PanelStrings.EnvNotFound,
             Detail = pnpmVersion.Length > 0 ? pnpmVersion : PanelStrings.EnvPnpmUnused,
-            Result = pnpmVersion.Length > 0 ? pnpmVersion : PanelStrings.EnvNotFound,
+            Result = pnpmVersion.Length > 0 ? pnpmVersion : (pnpmFound ? string.Empty : PanelStrings.EnvNotFound),
         });
 
         // ПАПКИ: путь — МАСКОЙ, а действие строки открывает саму папку общей дверью панели
@@ -340,15 +355,108 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
         };
     }
 
-    /// <summary>Лежит ли пакет рядом с Node (теми же путями, что у копий) — второй раз не выдумываем.</summary>
-    private static bool NpmFound(DshEngine? engine, string package)
+    /// <summary>
+    /// ГДЕ ИСКАТЬ npm И pnpm (задача F-3, слово владельца 20.10.2026).
+    ///
+    /// **От какого случая.** Отчёт показывал npm и pnpm «не найден», хотя `npm.cmd` лежал рядом
+    /// с Node (`C:\Program Files\nodejs\npm.cmd`) — панель этим npm ставит движок, — а `pnpm.cmd`
+    /// в `%APPDATA%\npm`. Прежний поиск смотрел ОДНО место: `node_modules\npm` в каталоге пакетов,
+    /// выведенном из пути движка панели, а у движка, поставленного панелью, npm там не лежит вовсе.
+    ///
+    /// **Места, и все три обязательны:** рядом с Node (там `node_modules\npm` и `npm.cmd`),
+    /// `%APPDATA%\npm` (там живут команды-обёртки, в том числе pnpm) и PATH. «Не найден» — только
+    /// когда нет НИ В ОДНОМ месте: ложное «не найден» и ложное «версия не прочитана» одинаково врут.
+    ///
+    /// ⚠️ Строки для проверок ПОДСТАВЛЯЮТСЯ (подставные корни): проверка не имеет права зависеть
+    /// от PATH и `%APPDATA%` машины, на которой идёт, — иначе она проверяла бы машину, а не правило.
+    /// </summary>
+    public sealed record ToolPlaces(string NextToNode, string AppDataNpm, IReadOnlyList<string> PathDirectories)
     {
-        var root = engine is null ? null : Backup.BackupPlanner.NpmDirectory(engine);
+        /// <summary>
+        /// Места для ЭТОЙ машины: каталог Node — у найденного движка, `%APPDATA%` и PATH — у машины
+        /// (или подставленные доводами). Пустая строка — «места нет»: она не место поиска.
+        /// </summary>
+        public static ToolPlaces For(DshEngine? engine, string? appDataDirectory = null, string? pathVariable = null)
+        {
+            var node = string.Empty;
 
-        return root is not null && Directory.Exists(Path.Combine(root, "node_modules", package));
+            try
+            {
+                node = engine is null ? string.Empty : Path.GetDirectoryName(engine.NodePath) ?? string.Empty;
+            }
+            catch
+            {
+                // Путь Node бывает каким угодно (переменные, кавычки) — «не знаю каталога» честнее
+                // падения отчёта из-за одной строки.
+                node = string.Empty;
+            }
+
+            var appData = (appDataDirectory ?? Environment.GetEnvironmentVariable("APPDATA") ?? string.Empty).Trim();
+            var path = pathVariable ?? Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+            var directories = new List<string>();
+
+            foreach (var part in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmed = part.Trim().Trim('"');
+                if (trimmed.Length == 0) continue;
+                if (!directories.Contains(trimmed, StringComparer.OrdinalIgnoreCase)) directories.Add(trimmed);
+            }
+
+            return new ToolPlaces(
+                node,
+                appData.Length == 0 ? string.Empty : Path.Combine(appData, "npm"),
+                directories);
+        }
     }
 
-    /// <summary>pnpm панели не нужен, но его наличие — факт машины: показываем как есть.</summary>
-    private static bool PnpmFound(DshEngine? engine, string version) =>
-        version.Length > 0 || NpmFound(engine, "pnpm");
+    /// <summary>
+    /// ГДЕ МОЖЕТ ЛЕЖАТЬ ПАКЕТ: `node_modules\<package>` рядом с Node и в `%APPDATA%\npm`.
+    /// Пустые места не выдумываются: пустая строка — не место поиска.
+    /// </summary>
+    private static IEnumerable<string> PackageDirectories(ToolPlaces places, string package)
+    {
+        foreach (var root in new[] { places.NextToNode, places.AppDataNpm })
+        {
+            if (root.Length == 0) continue;
+
+            yield return Path.Combine(root, "node_modules", package);
+        }
+    }
+
+    /// <summary>
+    /// ГДЕ МОЖЕТ ЛЕЖАТЬ КОМАНДА: `<package>.cmd` / `<package>.exe` / `<package>` — рядом с Node,
+    /// в `%APPDATA%\npm` и в каждом каталоге PATH. pnpm панель ставит не пакетом, а командой-обёрткой
+    /// в `%APPDATA%\npm`, и без этого списка он «не находился».
+    /// </summary>
+    private static IEnumerable<string> CommandFiles(ToolPlaces places, string package)
+    {
+        var names = new[] { package + ".cmd", package + ".exe", package };
+
+        foreach (var directory in new[] { places.NextToNode, places.AppDataNpm }.Concat(places.PathDirectories))
+        {
+            if (directory.Length == 0) continue;
+
+            foreach (var name in names) yield return Path.Combine(directory, name);
+        }
+    }
+
+    /// <summary>
+    /// НАЙДЕН ЛИ npm/pnpm — ПО ПРАВДЕ И ВО ВСЕХ МЕСТАХ СРАЗУ (задача F-3). Установка бывает и пакетом
+    /// (`node_modules\npm`), и одной командой-обёрткой (`npm.cmd`/`pnpm.cmd`, как у pnpm в
+    /// `%APPDATA%\npm`); «не найден» — только когда нет ни того, ни другого ни в одном месте.
+    /// </summary>
+    public static bool ToolFound(ToolPlaces places, string package) =>
+        PackageDirectories(places, package).Any(Directory.Exists)
+        || CommandFiles(places, package).Any(File.Exists);
+
+    /// <summary>
+    /// ВЕРСИЯ npm/pnpm — из их `package.json`, и только если он ЧИТАЕТСЯ. Найдено одной командой
+    /// (пакета рядом нет) — версия пустая: вызывающий скажет «версия не прочитана» словами, а не
+    /// выдумает номер. Чужой версии (например, версии Node) здесь не бывает.
+    /// </summary>
+    public static string ToolVersion(ToolPlaces places, string package) =>
+        PackageDirectories(places, package)
+            .Select(VersionOf)
+            .FirstOrDefault(version => version.Length > 0) ?? string.Empty;
 }

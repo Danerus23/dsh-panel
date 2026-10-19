@@ -298,6 +298,114 @@ public class BalanceTests
         Assert.Equal("обычный текст", HttpBalanceClient.Redact("обычный текст", key));
     }
 
+    // ---------------------------------------------------------------- подпись валюты (F-4)
+
+    /// <summary>
+    /// ДВЕ ВАЛЮТЫ — КАЖДАЯ ГРУППА ПОДПИСАНА СВОЕЙ (задача F-4, слово владельца 20.10.2026).
+    ///
+    /// **От какого случая — скрин владельца.** Ниже суммы «3.86 USD + 4.73 CNY» шла строка
+    /// «пополнено 2.78 · бонус 1.08 | пополнено 0.00 · бонус 4.73»: обе половины БЕЗ валюты,
+    /// и человек угадывал, где USD, а где CNY.
+    ///
+    /// ⚠️ Проверка ловит не только «подписи нет», но и ПЕРЕПУТАННЫЕ подписи: группы сравниваются
+    /// со СВОИМИ числами, поэтому «USD: пополнено 12.34» (число CNY под чужой подписью) — красная.
+    ///
+    /// **Мутации, которые обязаны упасть:** «вернуть строку без валюты» · «подписать первой валютой
+    /// все группы» · «подписать только при двух валютах».
+    /// </summary>
+    [Fact]
+    public void Две_валюты_подписаны_каждая_своей()
+    {
+        using var document = JsonDocument.Parse("""
+        {"is_available":true,"balance_infos":[
+          {"currency":"CNY","total_balance":"4.73","granted_balance":"0.00","topped_up_balance":"4.73"},
+          {"currency":"USD","total_balance":"3.86","granted_balance":"1.08","topped_up_balance":"2.78"}]}
+        """);
+
+        var parsed = HttpBalanceClient.Parse(document.RootElement, AgentCatalog.DefaultId, DateTimeOffset.Now);
+
+        var groups = parsed.Detail.Split(" | ", StringSplitOptions.None);
+
+        Assert.Equal(2, groups.Length);
+
+        Assert.StartsWith("CNY: ", groups[0], StringComparison.Ordinal);
+        Assert.Contains("4.73", groups[0], StringComparison.Ordinal);
+
+        Assert.StartsWith("USD: ", groups[1], StringComparison.Ordinal);
+        Assert.Contains("2.78", groups[1], StringComparison.Ordinal);
+        Assert.Contains("1.08", groups[1], StringComparison.Ordinal);
+
+        // Ни одна группа не подписана ЧУЖОЙ валютой.
+        Assert.DoesNotContain("USD: пополнено 4.73", parsed.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("CNY: пополнено 2.78", parsed.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ОДНА ВАЛЮТА — ПОДПИСЬ ВСЁ РАВНО ЕСТЬ: правило не зависит от числа валют, иначе при одной
+    /// валюте строка выглядела бы иначе, и правило пришлось бы объяснять человеку.
+    ///
+    /// **Мутация, которая обязана упасть:** «подписывать только когда валют две».
+    /// </summary>
+    [Fact]
+    public void Одна_валюта_тоже_подписана()
+    {
+        using var document = JsonDocument.Parse("""
+        {"is_available":true,"balance_infos":[
+          {"currency":"USD","total_balance":"3.86","granted_balance":"1.08","topped_up_balance":"2.78"}]}
+        """);
+
+        var parsed = HttpBalanceClient.Parse(document.RootElement, AgentCatalog.DefaultId, DateTimeOffset.Now);
+
+        Assert.StartsWith("USD: ", parsed.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(" | ", parsed.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ПУСТЫЕ ПОДРОБНОСТИ — ПУСТАЯ СТРОКА, без висящей валюты «USD: »: подпись ставится только
+    /// к тому, что она подписывает. И «?» в сумме (нет данных) остаётся «?», а не выдуманным числом.
+    ///
+    /// **Мутация, которая обязана упасть:** «подписывать группу всегда, даже пустую» (`?: `).
+    /// </summary>
+    [Fact]
+    public void Пустые_подробности_не_подписываются()
+    {
+        using var document = JsonDocument.Parse("""
+        {"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"?"}]}
+        """);
+
+        var parsed = HttpBalanceClient.Parse(document.RootElement, AgentCatalog.DefaultId, DateTimeOffset.Now);
+
+        Assert.Equal(string.Empty, parsed.Detail);
+        Assert.DoesNotContain("USD:", parsed.Detail, StringComparison.Ordinal);
+        Assert.Contains("?", parsed.Summary, StringComparison.Ordinal);
+        Assert.Null(parsed.Total);
+    }
+
+    /// <summary>
+    /// ПОДПИСЬ ЧИТАЕТСЯ НА ВСЕХ ТРЁХ ЯЗЫКАХ: ключ есть в каждом словаре и подстановка даёт
+    /// «валюта: подробности». Это подпись-разделитель, а не фраза, — но двоеточие в ней СВОЁ
+    /// у каждого языка: в китайском стоит китайское `：`, как во всех zh-строках панели.
+    ///
+    /// **Мутации, которые обязаны упасть:** «ключ только в ru» · «в en/zh двоеточие потеряно» ·
+    /// «в zh латинское двоеточие вместо китайского».
+    /// </summary>
+    [Fact]
+    public void Подпись_валюты_есть_на_трёх_языках()
+    {
+        foreach (var language in new[] { "ru", "en", "zh" })
+        {
+            var line = DshPanel.Localization.Loc.TIn(
+                language,
+                nameof(PanelStrings.BalanceCurrencyDetailsFormat),
+                "USD",
+                "пополнено 2.78");
+
+            var expected = language == "zh" ? "USD：пополнено 2.78" : "USD: пополнено 2.78";
+
+            Assert.Equal(expected, line);
+        }
+    }
+
     [Fact]
     public void Пустой_ответ_и_недоступный_счёт_не_ломают_разбор()
     {

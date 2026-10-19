@@ -45,20 +45,11 @@ public static class UpdateDecisions
     /// Хеш коммита к <c>ProductVersion</c> дописывает сам .NET, и человеку он ничего не говорит.
     /// Буква <c>v</c> спереди — обычай тегов GitHub: <c>v1.21.0</c> и <c>1.21.0</c> одна версия.
     ///
-    /// ⚠️ **Единственная реализация в панели.** Её зовут и окно «О программе», и сравнение
-    /// версий, и разбор ответа GitHub: второе такое правило однажды разошлось бы с первым.
+    /// ⚠️ **Реализация ОДНА на всю панель** — <see cref="Server.EngineVersionOrder.Numeric"/> (задача
+    /// F-1b, слово владельца 20.10.2026). Здесь только имя, которым её зовут окно «О программе»,
+    /// сравнение версий и разбор ответа GitHub: второе такое правило однажды разошлось бы с первым.
     /// </summary>
-    public static string Numeric(string? version)
-    {
-        var text = (version ?? string.Empty).Trim();
-
-        if (text.StartsWith("v", StringComparison.OrdinalIgnoreCase)) text = text[1..];
-
-        var plus = text.IndexOf('+');
-        if (plus >= 0) text = text[..plus];
-
-        return text.Trim();
-    }
+    public static string Numeric(string? version) => Server.EngineVersionOrder.Numeric(version);
 
     /// <summary>
     /// НОВЕЕ ли предложенная версия, чем текущая.
@@ -77,32 +68,12 @@ public static class UpdateDecisions
     /// ⚠️ Хвост — решение, принятое здесь осознанно (в задаче названы «три числа»): панель 2.0
     /// выпускается предрелизами, и без этого правила предрелиз и финал считались бы одной
     /// версией. Числа остаются главными: без их равенства хвост не смотрится вовсе.
+    /// ⚠️ **Шаги 1–3 живут ОДНИМ местом** — <see cref="Server.EngineVersionOrder"/>: с 20.10.2026 им
+    /// же сравниваются версии ДВИЖКА (`EngineUpdateDecisions`), а до этого движок сравнивался по
+    /// числу, и `rc.3` против `rc.2` считалось «то же самое» (задача F-1b).
     /// </summary>
-    public static bool IsNewer(string? candidate, string? current)
-    {
-        var left = Numeric(candidate);
-        var right = Numeric(current);
-
-        var leftNumbers = Numbers(left);
-        var rightNumbers = Numbers(right);
-
-        for (var index = 0; index < Math.Max(leftNumbers.Length, rightNumbers.Length); index++)
-        {
-            var a = index < leftNumbers.Length ? leftNumbers[index] : 0;
-            var b = index < rightNumbers.Length ? rightNumbers[index] : 0;
-
-            if (a != b) return a > b;
-        }
-
-        var leftPre = PreRelease(left);
-        var rightPre = PreRelease(right);
-
-        if (leftPre.Length == 0 && rightPre.Length == 0) return false;
-        if (leftPre.Length == 0) return true;
-        if (rightPre.Length == 0) return false;
-
-        return ComparePreRelease(leftPre, rightPre) > 0;
-    }
+    public static bool IsNewer(string? candidate, string? current) =>
+        Server.EngineVersionOrder.IsNewer(candidate, current);
 
     /// <summary>
     /// ПОРА ЛИ СПРАШИВАТЬ ВЫПУСКИ. Решение владельца: при запуске панели, но НЕ чаще раза
@@ -307,72 +278,6 @@ public static class UpdateDecisions
             "zh" or "zh-cn" or "zh-hans" or "chinese" => "zh",
             _ => string.Empty,
         };
-    }
-
-    /// <summary>
-    /// Числовая часть версии, разобранная на числа: «2.10.0-rc.1» → 2, 10, 0. Текст до хвоста
-    /// читается по кускам до первой нецифры: «2.0.0» и «2.0» дают одно и то же начало, а
-    /// «2.0.beta» — только два числа (дальше разбирать нечего).
-    /// </summary>
-    private static int[] Numbers(string version)
-    {
-        var head = version;
-        var dash = head.IndexOf('-');
-        if (dash >= 0) head = head[..dash];
-
-        var parts = head.Split('.');
-        var result = new List<int>();
-
-        foreach (var part in parts)
-        {
-            var digits = new string(part.TakeWhile(char.IsDigit).ToArray());
-            if (digits.Length == 0) break;
-            if (!int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var value)) break;
-
-            result.Add(value);
-        }
-
-        return result.ToArray();
-    }
-
-    /// <summary>Предрелизный хвост версии: «2.0.0-rc.2» → «rc.2»; у финальной версии пусто.</summary>
-    private static string PreRelease(string version)
-    {
-        var dash = version.IndexOf('-');
-        return dash < 0 ? string.Empty : version[(dash + 1)..].Trim();
-    }
-
-    /// <summary>
-    /// Сравнение хвостов по правилам SemVer: числа сравниваются как числа («rc.10» новее
-    /// «rc.2»), слова — по алфавиту, короткий список младше длинного. Числовой кусок младше
-    /// буквенного — так требует SemVer, и это ровно тот случай, ради которого правило и нужно.
-    /// </summary>
-    private static int ComparePreRelease(string left, string right)
-    {
-        var a = left.Split('.');
-        var b = right.Split('.');
-
-        for (var index = 0; index < Math.Max(a.Length, b.Length); index++)
-        {
-            if (index >= a.Length) return -1;
-            if (index >= b.Length) return 1;
-
-            var leftIsNumber = int.TryParse(a[index], NumberStyles.None, CultureInfo.InvariantCulture, out var leftValue);
-            var rightIsNumber = int.TryParse(b[index], NumberStyles.None, CultureInfo.InvariantCulture, out var rightValue);
-
-            if (leftIsNumber && rightIsNumber)
-            {
-                if (leftValue != rightValue) return leftValue.CompareTo(rightValue);
-                continue;
-            }
-
-            if (leftIsNumber != rightIsNumber) return leftIsNumber ? -1 : 1;
-
-            var compare = string.Compare(a[index], b[index], StringComparison.OrdinalIgnoreCase);
-            if (compare != 0) return compare;
-        }
-
-        return 0;
     }
 
     /// <summary>

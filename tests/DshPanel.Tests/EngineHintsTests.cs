@@ -466,10 +466,12 @@ public sealed class EngineHintsTests
     /// правят его одним коммитом БЕЗ выпуска панели, поэтому поймать в нём опечатку больше нечем —
     /// только этой проверкой до коммита.
     ///
-    /// ⚠️ Проверяются ТРИ свойства, и все три — обещания владельцу: файл объявляет **версию схемы**
-    /// (`format`), говорит про ту версию движка, на которой панель мерилась
-    /// (`EngineRpcSurface.MeasuredOnVersion`), и у КАЖДОЙ заметки есть ru, en и zh: заметка
-    /// на одном языке читалась бы двумя третями людей как пустое место.
+    /// ⚠️ Проверяются ЧЕТЫРЕ свойства, и все — обещания владельцу: файл объявляет **версию схемы**
+    /// (`format`); называет **две проверенные** версии — текущую (`EngineRpcSurface.KnownOnVersion`,
+    /// по умолчанию) и прежнюю (`EngineRpcSurface.MeasuredOnVersion`, к ней возвращает откат);
+    /// **текущая стоит первой** (главная кнопка ставит первую проверенную запись — порядок строк и есть
+    /// «версия по умолчанию»); у КАЖДОЙ заметки есть ru, en и zh: заметка на одном языке читалась бы
+    /// двумя третями людей как пустое место.
     /// </summary>
     [Fact]
     public void Наш_собственный_файл_подсказок_разбирается_и_трёхъязычен()
@@ -504,8 +506,18 @@ public sealed class EngineHintsTests
             }
         }
 
-        // Непроверенная версия обязана быть названа непроверенной: файл — не реклама.
-        Assert.All(hints.Versions, hint => Assert.Equal(hint.Version == EngineRpcSurface.MeasuredOnVersion, hint.Verified));
+        // ⚠️ ПРОВЕРЕННЫХ ВЕРСИЙ ТЕПЕРЬ ДВЕ (выпуск 2.3.0): текущая 0.2.1 — по умолчанию, прежняя
+        // 0.1.5 — к ней возвращает откат. Никакая другая версия проверенной быть не может: файл — не реклама.
+        var verified = hints.Versions.Where(hint => hint.Verified).Select(hint => hint.Version).ToArray();
+
+        Assert.Equal(new[] { EngineRpcSurface.KnownOnVersion, EngineRpcSurface.MeasuredOnVersion }, verified);
+
+        // ⚠️ И ПОРЯДОК — ЧАСТЬ ОТВЕТА, а не оформление: главная кнопка ставит ПЕРВУЮ проверенную
+        // запись файла (`EngineUpdateDecisions.Recommended`). Разъедется порядок — карточка назовёт
+        // рекомендуемой одну версию, а кнопка поставит другую; поэтому он проверяется здесь, а не
+        // глазами того, кто правит файл.
+        Assert.Equal(EngineRpcSurface.KnownOnVersion, hints.Versions[0].Version);
+        Assert.Equal(EngineRpcSurface.KnownOnVersion, EngineUpdateDecisions.Recommended(hints));
     }
 
     /// <summary>
@@ -513,7 +525,9 @@ public sealed class EngineHintsTests
     /// и без выпуска панели, поэтому разойтись с кодом он может молча — здесь это ловится до коммита:
     ///
     ///   * запись про `0.2.1-rc.2` есть (её читает человек, у которого этот движок стоит);
-    ///   * она НЕ выдаёт версию проверенной;
+    ///   * с выпуска 2.3.0 она **выдаёт версию проверенной** (метка `latest` = `0.2.1-rc.2`,
+    ///     проба 77 из 77 и 8 из 8, телефон в изоляции 74 из 74) — до этого она была непроверенной,
+    ///     и именно эта строка переключает главную кнопку на 0.2.x;
     ///   * в её бедах названы ВСЕ семь имён из `EngineRpcSurface.Retired` — по одному месту в коде;
     ///   * в её заметках названы числа замера: 77 нужных имён и 67 новых.
     ///
@@ -522,12 +536,12 @@ public sealed class EngineHintsTests
     [Fact]
     public void Запись_про_линию_0_2_x_называет_потери_и_числа_замера()
     {
-        var hints = EngineHints.Parse(File.ReadAllText(Path.Combine(RepositoryRoot(), "engine-hints.json")));
+        var hints = RealHints();
 
         var line = hints.Find(EngineRpcSurface.KnownOnVersion);
 
         Assert.True(line is not null, $"в файле нет записи про версию {EngineRpcSurface.KnownOnVersion}");
-        Assert.False(line!.Verified, "запись про 0.2.x выдаёт её проверенной");
+        Assert.True(line!.Verified, "запись про 0.2.x НЕ выдаёт её проверенной — а с 2.3.0 должна");
 
         var troubles = string.Join("\n", EngineHints.TroublesFor(line, "ru"));
         var notes = string.Join("\n", EngineHints.NotesFor(line, "ru"));
@@ -537,6 +551,83 @@ public sealed class EngineHintsTests
         Assert.Contains(EngineRpcSurface.KnownAddedCount.ToString(System.Globalization.CultureInfo.InvariantCulture), notes, StringComparison.Ordinal);
         Assert.Contains("v4", troubles, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// ПОРЯДОК ЗАПИСЕЙ — ЭТО «ВЕРСИЯ ПО УМОЛЧАНИЮ»: главная кнопка ставит ПЕРВУЮ проверенную запись
+    /// файла. Проверка связывает четыре места, которые обязаны сходиться, иначе карточка обещает одно,
+    /// а кнопка ставит другое: файл подсказок (рекомендует 0.2.1) · набор замков (замок для 0.2.1
+    /// в сборке есть) · план обновления (называет 0.2.1) · развилка дорог (0.2.1 идёт СВОЕЙ дорогой,
+    /// а не главной, где стоит 0.1.5).
+    ///
+    /// ⚠️ Роняют её: мутация «вернуть 0.2.1 verified:false», мутация «поставить 0.1.5 первой»
+    /// и мутация развилки «выбирать дорогу по отметке в подсказках».
+    /// </summary>
+    [Fact]
+    public void Главная_кнопка_ставит_0_2_1_по_его_собственному_замку()
+    {
+        var hints = RealHints();
+        var locks = EngineTreeLocks.Load();
+
+        Assert.Equal(EngineRpcSurface.KnownOnVersion, EngineUpdateDecisions.Recommended(hints));
+
+        var plan = EngineUpdateFlow.Plan(hints, freshVersion: null, freshWanted: false, ownPort: 3081);
+
+        Assert.True(plan.Any, plan.RefusalKey);
+        Assert.Equal(EngineRpcSurface.KnownOnVersion, plan.Version);
+
+        var requested = EngineInstallDecisions.RequestedFor(locks.Primary, plan.Version);
+
+        Assert.Equal(plan.Version, requested);
+
+        var own = EngineInstallDecisions.DecideFor(locks, requested, @"C:\Проба\панель\engine");
+
+        Assert.True(own.Any, own.RefusalKey);
+        Assert.Equal(EngineRpcSurface.KnownOnVersion, own.Version);
+    }
+
+    /// <summary>
+    /// ПЯТЬ ОГОВОРОК ПРО 0.2.1 — НА ВСЕХ ТРЁХ ЯЗЫКАХ (требование выпуска 2.3.0). Файл читают люди
+    /// на трёх языках, а «известные беды» — то, ради чего он и существует: оговорка, которая есть
+    /// только по-русски, для двух третей читателей не существует.
+    ///
+    /// Оговорки и их признаки: (1) это предрелиз — слово «предрелиз»/«pre-release»/«预发布»;
+    /// (2) журнал v4 и молчаливая пропажа сессий при откате — `v4`; (3) подчинённые сессии телефону
+    /// не показываются — слово про подчинённых; (4) телефон работает только в своей сети — слово
+    /// про сеть; (5) риск перехода на `timed` — `attachWait` и `answer`.
+    ///
+    /// ⚠️ Признак каждой оговорки — СВОЙ, а не «rc» вообще: строкой `0.1.5-rc.2` в соседней беде
+    /// проверка проходила бы и с вычищенной оговоркой про предрелиз (на этом мутация и попалась бы).
+    ///
+    /// ⚠️ Роняют её: мутация «убрать строку про v4» (на любом языке) и мутация «вычистить все пять».
+    /// </summary>
+    [Theory]
+    [InlineData("ru", "предрелиз", "подчинённые", "своей сети")]
+    [InlineData("en", "pre-release", "Subordinate", "own network")]
+    [InlineData("zh", "预发布", "从属会话", "局域网")]
+    public void Пять_оговорок_про_0_2_1_есть_на_всех_трёх_языках(
+        string language, string prerelease, string subordinate, string network)
+    {
+        var line = RealHints().Find(EngineRpcSurface.KnownOnVersion);
+
+        Assert.True(line is not null);
+
+        var lines = EngineHints.TroublesFor(line, language);
+
+        Assert.True(lines.Count >= 5, $"у версии 0.2.1 на языке «{language}» меньше пяти бед: {lines.Count}");
+
+        var text = string.Join("\n", lines);
+
+        Assert.Contains(prerelease, text, StringComparison.OrdinalIgnoreCase);       // (1) предрелиз
+        Assert.Contains("v4", text, StringComparison.OrdinalIgnoreCase);            // (2) журнал v4
+        Assert.Contains(subordinate, text, StringComparison.OrdinalIgnoreCase);     // (3) подчинённые
+        Assert.Contains(network, text, StringComparison.OrdinalIgnoreCase);         // (4) своя сеть
+        Assert.Contains("attachWait", text, StringComparison.OrdinalIgnoreCase);    // (5) риск timed
+        Assert.Contains("userQuestions/answer", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Настоящий файл репозитория — ОДНИМ чтением на все проверки файла.</summary>
+    private static EngineHints RealHints() =>
+        EngineHints.Parse(File.ReadAllText(Path.Combine(RepositoryRoot(), "engine-hints.json")));
 
     /// <summary>Корень репозитория — вверх от каталога сборки по файлу <c>DshPanel.slnx</c>.</summary>
     private static string RepositoryRoot()

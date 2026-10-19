@@ -149,6 +149,34 @@ public class EngineUpdateServiceTests
         Assert.False(unknown.FreshIsNewer);
     }
 
+    /// <summary>
+    /// МУСОРНАЯ ВЕРСИЯ — НЕ «НОВЕЕ», И ПРИЧИНА НАЗВАНА В ЖУРНАЛЕ (задача F-1b, слово владельца
+    /// 20.10.2026). «Не версия» — это не «старая версия»: без разбора мусорная строка без дефиса
+    /// выглядела бы финальным выпуском и оказалась бы новее любого rc — успех из опечатки.
+    ///
+    /// ⚠️ Строка журнала — ОДНА на значение, а не на каждую перерисовку окна: `Refresh` зовут часто.
+    ///
+    /// **Мутации, которые обязаны упасть:** «мусор считать версией» · «молчать о нечитаемой версии» ·
+    /// «писать строку на каждый Refresh».
+    /// </summary>
+    [Fact]
+    public void Мусорная_версия_не_новее_и_названа_в_журнале()
+    {
+        var log = new List<string>();
+        var stand = new Stand { Fresh = "не-версия" };
+
+        var service = stand.Service(log);
+
+        Assert.False(service.FreshIsNewer, "мусорная версия не может быть «новее» рекомендованной");
+
+        var line = Assert.Single(log, entry => entry.Contains("не-версия", StringComparison.Ordinal));
+        Assert.Contains("кнопка", line, StringComparison.OrdinalIgnoreCase);
+
+        // Повторный Refresh — второй такой строки нет.
+        service.Refresh();
+        Assert.Single(log, entry => entry.Contains("не-версия", StringComparison.Ordinal));
+    }
+
     /// <summary>ГЛАВНАЯ КНОПКА СТАВИТ ТОЛЬКО РЕКОМЕНДОВАННУЮ — даже когда свежая новее.</summary>
     [Fact]
     public void Главная_кнопка_ставит_рекомендованную()

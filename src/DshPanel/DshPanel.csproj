@@ -34,7 +34,7 @@
 
     <AssemblyName>DshPanel</AssemblyName>
     <RootNamespace>DshPanel</RootNamespace>
-    <Version>2.2.1</Version>
+    <Version>2.3.0</Version>
     <Product>DSH Panel</Product>
   </PropertyGroup>
 

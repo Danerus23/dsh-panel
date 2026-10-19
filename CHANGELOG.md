@@ -2,6 +2,89 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.3.0 - 2026-10-20
+
+**The default DSH server version is now the 0.2.x line: `0.2.1-rc.2`.** The panel installs it with the
+main button — from its own set and with a probe check — while the previous verified `0.1.5-rc.2` stays
+on disk for a rollback. The version is in "About": it says **2.3.0**.
+
+### Why 0.2.1-rc.2 is the default, and what "verified" means here
+
+* **The set is 683 packages, and the file's sum is pinned in the build.** The install is checked by a
+  real `npm ci`: code 0, **63 639 files / 692.9 MB**, the version in the installed tree is
+  `0.2.1-rc.2`.
+* **The installed tree passes the panel's full probe:** "144 declared; 77 needed — 77 of 77
+  recognised; 7 retired — 7 of 7; 67 known new — 67 of 67; 8 skills — 8 of 8; SERVER SUCCESS". The
+  live poll — the same **77 of 77**.
+* **The surface adds up, and it is named rather than swallowed:** 144 declared names = **77** the
+  panel needs + **67** new in **16** families; seven of our former names are no longer declared by
+  this version, and the panel never calls them. **An unknown name at the engine still fails the
+  probe** — the next version must be noticed before people meet it.
+* **The phone on this pairing is checked in isolation:** the phone self-test — code 0, **74 of 74**,
+  no failures; the `ready` frame of the subscription arrives **13 ms** after the channel opens. The
+  allow-list is still **13 calls** — not one new.
+* **And a live agent question from a real phone went through** (19.10.2026, panel 2.2.1 with this
+  engine): the question was shown to the phone, the answer went to the DSH server under the same
+  event, and the agent's run continued after the answer. One question, one answer, one device. This
+  is the check the 0.2.x line had been missing.
+
+### The main button installs 0.2.1 from its own lock
+
+There are **two** verified versions now, and the hints recommend the new one — so the install road had
+to be chosen differently. The main road (checked against the primary lock, the very one the surface
+snapshot was taken on) is now open **only for the primary lock's version**; any other version,
+including the verified `0.2.1-rc.2`, goes its own road, and the installer checks **its** lock. The old
+rule would have produced exactly the "two truths about one tree" lie: the card says "recommended
+0.2.1-rc.2" while the button installs `0.1.5-rc.2` through the primary lock.
+
+### How to roll back to 0.1.5-rc.2
+
+* **It stays the previous verified version;** its **588-package** set is pinned in the build too, and
+  returning does not mean "installing again": both versions live on disk.
+* **What to read before a rollback:** the session journal of the 0.2.x line is **v4**. Sessions opened
+  under `0.2.1` are **not seen by `0.1.5-rc.2` and it does not say so** — they vanish from the list
+  silently. The panel warns in numbers before a rollback (since 2.2.0) but does not undo the
+  consequence: the history is intact and lies next to it, and visibility comes back with one manual
+  step — remove the new journal file (`session.v4.jsonl.zstd`) from the session folder. The panel does
+  not do this itself.
+
+### What "rc" means and what it does not promise
+
+* **`rc` is a pre-release, and that is said plainly.** Every version DSH publishes is rc or alpha —
+  upstream releases nothing without a pre-release suffix: it expresses "stability" by moving a version
+  to the `latest` tag. On 19.10.2026 both `latest` and `next` pointed at `0.2.1-rc.2` — that is the
+  sign by which the version became the default.
+* **The number does not promise that the set under it stays the same:** upstream may re-release or
+  replace the version. "Verified" means "the panel measured this version and this set", not "upstream
+  will not change anything any more". The set's sum is pinned in the build: a swapped set will not be
+  installed.
+
+### Balance: the amounts now carry their currency
+
+The balance line no longer makes you guess the currency: `USD: topped up … · bonus …` and
+`CNY: topped up … · bonus …` — it says which is which (in the panel's line they are separated by `|`).
+
+### What 2.3 does not have
+
+* **Subagent sessions do not open from the phone** — they need the parent address. The phone does not
+  show them, and the number of hidden ones goes to the panel log.
+* **The phone works only in its own network:** the page opens over a local-network address, the panel
+  does not go outside, and there is no HTTPS.
+* **Question delivery in `timed` mode is not supported.** If upstream switches to it, the old answer
+  door is not enough: `userQuestions/attachWait` and `userQuestions/answer` will be needed — that is
+  an extension of the phone surface (the 13-call allow-list), a separate decision. Today the panel
+  honestly calls such an answer a refusal.
+* **There is no code signature** — SmartScreen will warn on the first run.
+
+**Under the hood (no visible effect):** the version hints (`engine-hints.json`) now name **two**
+verified entries, the current one **first**; `0.2.0-rc.2` stays unverified — there is no set for it,
+and the 0.2.x line is `0.2.1-rc.2`. The 84-name snapshot is still taken on `0.1.5-rc.2`
+(`MeasuredOnVersion` is the version measured on, not "the default version"; the default version is set
+by **one** place — the order of verified entries in the hints file). Checks are now **2153** (was
+2095): "the main button installs 0.2.1 from its own lock" and "five caveats about 0.2.1 exist in all
+three languages" were added. Build — 0 warnings / 0 errors; the personal-data, encoding and dictionary
+guards — 0.
+
 ## 2.2.1 - 2026-10-19
 
 **A background notification can no longer take the panel down, and the panel's own log no longer

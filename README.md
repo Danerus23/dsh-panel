@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="#whats-new-in-220">What's new in 2.2.0</a> ·
+  <a href="#whats-new-in-230">What's new in 2.3.0</a> ·
   <a href="#how-to-update">How to update</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#what-it-does">What it does</a> ·
@@ -36,7 +36,7 @@
 
 **Your DSH server, under control** — and out of the way in the tray. One file, `DshPanel.exe`:
 installed into your user profile, no administrator rights, no separate .NET install — the runtime is
-inside. This panel version is **2.2.0**.
+inside. This panel version is **2.3.0**.
 
 Start and stop the server, install, update and roll back DSH from a verified set, a tray icon that
 shows its state, your balance, peak windows and price history, copies of your data with restore, the
@@ -52,26 +52,26 @@ needs the network for that. What it does not do is in [“What is missing”](#w
 Russian is the original. **English and Chinese are machine translations:** the meaning is right, but
 some wording may not sound native.
 
-## What's new in 2.2.0
+## What's new in 2.3.0
 
-* **The panel keeps two versions of the DSH server side by side** — the current and the previous
-  one — and installs each from its own verified set. The 0.2.x line has its own set: 683 packages,
-  the set file's sum pinned in the build, the install checked by a real `npm ci`, and the installed
-  tree passes the panel's full probe.
-* **A fresh version is installed by a separate button with a confirmation** and an honest line:
-  “newer, but the panel has not verified it”. Verified remains **0.1.5-rc.2**.
-* **Before switching versions the panel counts the sessions on disk and says in numbers** how many
-  of them the old DSH server will not see — and after a rollback it repeats that number. Visibility
-  is returned in one step, and the step is named in words rather than done silently.
-* **The phone shows only the conversations that can be opened:** subagent sessions do not appear in
-  the list, and their number goes to the panel's journal. An answer the server did not accept is no
-  longer passed off as sent.
-* **Backups: the window no longer gets stuck, and the archive no longer flickers** as an unfinished
-  file — it appears in one appearance, already checked.
+* **The default DSH server version is the 0.2.x line: `0.2.1-rc.2`.** The main “Update” button installs
+  it, and installs it from its own set: 683 packages, the file's sum pinned in the build, and the
+  installed tree passes the panel's full probe — **77 of 77** required names and **8 of 8** skills.
+* **The surface adds up:** this version declares **144** names = **77** the panel needs + **67** new
+  in 16 families; seven of our former names are no longer declared, and the panel never calls them —
+  named in a line rather than swallowed.
+* **The phone is checked on this pairing:** in isolation — **74 of 74**, no failures, the allow-list
+  still **13** calls; and a live agent question from a real phone went through — the question was
+  shown, the answer reached the server, the agent's run continued.
+* **The previous verified `0.1.5-rc.2` stays — the rollback returns to it.** But read the caveat
+  before returning: the 0.2.x line's session journal is **v4**, and sessions opened under 0.2.1 are
+  not seen by the old engine and it **does not say so**; the panel names the number before a rollback.
+* **The balance no longer makes you guess the currency:** `USD: topped up … · bonus …` and
+  `CNY: topped up … · bonus …`.
 
 ## How to update
 
-Open the **“Update”** section and press **“Check now”**. The panel finds 2.2.0, downloads
+Open the **“Update”** section and press **“Check now”**. The panel finds 2.3.0, downloads
 `DshPanel.zip` from this release, checks its SHA-256 and replaces its files **after the panel
 exits**; a safety copy of the previous version is taken first. Nothing to unpack or uninstall by
 hand.
@@ -125,8 +125,10 @@ The panel installs the DSH server **from a verified set of versions** — exact 
 every package — and after the install the tree is checked against the set path by path. The
 “Update” section has a “DSH server” block: the first line is **your own** version, then the
 **recommended** (verified) one and the **fresh** one from the npm registry, with words about how
-they differ. The main button installs the verified version only; the fresh one is a separate action
-with a confirmation; when there is no server at all, the button is called “Install”.
+they differ. The main button installs the verified version — today that is **`0.2.1-rc.2`** — and it
+installs it **from its own set**; the previous verified **`0.1.5-rc.2`** stays the version to roll
+back to. The fresh one is a separate action with a confirmation; when there is no server at all, the
+button is called “Install”.
 
 Before replacing a version the panel always asks: “will stop the DSH server, take a copy, install
 {version}; agent work will be interrupted”. It takes a safety copy of the profile (a failed copy
@@ -250,8 +252,17 @@ server, each skill in words.
 * **The panel installs and updates only ITS OWN DSH server.** It never touches a foreign
   installation: it shows the version and what it can do with it. A fresh version from the registry
   is shown, and installed only when its own set exists — by a separate button with a confirmation.
-  “A set exists” does not mean “verified”: verified remains **0.1.5-rc.2**, and the panel says
-  exactly that about 0.2.1.
+  “A set exists” does not mean “verified”: there are **two** verified versions now — `0.2.1-rc.2`
+  (the default) and the previous `0.1.5-rc.2`, which the rollback returns to.
+* **The default version is a pre-release (`rc`), and that is not a hedge for caution.** That is how
+  upstream releases: DSH has no versions without a pre-release suffix, and it expresses “stability”
+  by moving a version to the `latest` tag. “Verified” means “the panel measured this version and this
+  set”, not “upstream will not change anything any more”; the set's sum is pinned in the build, so a
+  swapped set will not be installed.
+* **A rollback to `0.1.5-rc.2` after working under 0.2.1 costs one manual step.** The 0.2.x line's
+  session journal is v4: sessions opened under 0.2.1 are not seen by the old engine and it **does not
+  say so**. The panel names the number before a rollback, but does not do the step for you — the new
+  journal file (`session.v4…`) is removed from the session folder by a human.
 * **Subagent sessions do not open from the phone** — they need the parent's address. The phone does
   not show them, and the number of hidden ones goes to the panel's journal.
 * **The peak schedule is weekly.** The table runs by days of the week, the same as on the pricing

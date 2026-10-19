@@ -429,7 +429,7 @@ public sealed record EngineTreeLock(
             ? value.GetString()?.Trim() ?? string.Empty
             : string.Empty;
 
-    /// <summary>ngines.node записи — из чего видно, какой Node нужен ЭТОМУ пакету.</summary>
+    /// <summary>engines.node записи — из чего видно, какой Node нужен ЭТОМУ пакету.</summary>
     private static string Engines(JsonElement item) =>
         item.TryGetProperty("engines", out var engines) && engines.ValueKind == JsonValueKind.Object
             ? Text(engines, "node")

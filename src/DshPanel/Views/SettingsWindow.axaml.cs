@@ -2500,9 +2500,16 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         // выбор «поставить непроверенную» — вредный совет, а не забота; проверенная версия у него
         // единственная дверь. Заодно это держит подсказку честной: она рассказывает только о том,
         // что человек видит.
+        // ⚠️ И СРАВНЕНИЕ СО СТОЯЩЕЙ (находка F-1, слово владельца 20.10.2026). Прежнее правило
+        // смотрело только на рекомендованную версию — и на скрине владельца кнопка «Поставить
+        // непроверенную…» была видна и «что-то делала», хотя ставить было нечего: стояла 0.2.1-rc.2,
+        // свежая в реестре — ТА ЖЕ 0.2.1-rc.2, рекомендованная — 0.1.5-rc.2. Теперь свежая обязана
+        // быть новее И рекомендуемой, И стоящей: первая половина — готовый ответ двери, вторая —
+        // правило панели (`EngineUpdateDecisions.FreshWorthShowing`). Стоящая не прочитана — «новее»
+        // не доказано, и кнопки нет (главная кнопка при этом остаётся).
         var freshVisible = standing != EngineVersionStanding.Absent
-                           && door.FreshIsNewer
-                           && door.FreshInstallable;
+                           && door.FreshInstallable
+                           && EngineUpdateDecisions.FreshWorthShowing(door.FreshIsNewer, installed, door.Fresh);
 
         EngineFreshLineText.Text = door.FreshIsNewer
             ? string.Format(
@@ -2540,8 +2547,12 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
             ? PanelStrings.EngineInstallHint
             : PanelStrings.EngineUpdateMainHint;
 
+        // ⚠️ ДВЕ ФРАЗЫ — ДВЕ СТРОКИ (находка F-1, слово владельца 20.10.2026). Прежде они
+        // склеивались ПРОБЕЛОМ, и на карточке получалось «…панель проверила сама непроверенная
+        // версия ставится только этой кнопкой…» — две мысли в одном предложении. Вторая строка
+        // видна ТОЛЬКО вместе со своей кнопкой: правило F-1 действует и здесь.
         return freshButtonVisible
-            ? main + " " + PanelStrings.EngineUpdateFreshHint
+            ? main + System.Environment.NewLine + PanelStrings.EngineUpdateFreshHint
             : main;
     }
 

@@ -152,7 +152,20 @@ public sealed class HttpBalanceClient : IBalanceClient
                     CultureInfo.CurrentCulture, PanelStrings.BalanceGrantedFormat, Text(info, "granted_balance", "?")));
             }
 
-            if (parts.Count > 0) details.Add(string.Join(" · ", parts));
+            if (parts.Count > 0)
+            {
+                // ⚠️ ПОДПИСЬ ВАЛЮТЫ У КАЖДОЙ ГРУППЫ — ВСЕГДА (задача F-4, слово владельца 20.10.2026).
+                // Прежде группы «пополнено … · бонус …» склеивались через « | » БЕЗ валюты, и человек
+                // угадывал, где USD, а где CNY (скрин владельца: «пополнено 2.78 · бонус 1.08 |
+                // пополнено 0.00 · бонус 4.73»). Подпись ставится и при ОДНОЙ валюте — правило не
+                // зависит от их числа. Пустая группа не подписывается вовсе (parts.Count == 0 сюда
+                // не доходит): висящей валюты без подробностей не бывает.
+                details.Add(string.Format(
+                    CultureInfo.CurrentCulture,
+                    PanelStrings.BalanceCurrencyDetailsFormat,
+                    infoCurrency,
+                    string.Join(" · ", parts)));
+            }
         }
 
         if (summaries.Count == 0)

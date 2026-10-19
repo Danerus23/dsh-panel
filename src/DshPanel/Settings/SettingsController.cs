@@ -721,7 +721,12 @@ public sealed class SettingsController : ISettingsControl
         WatchServer();
 
         var engine = _locateEngine();
-        var npmRoot = engine is null ? null : Backup.BackupPlanner.NpmDirectory(engine);
+
+        // ⚠️ ГДЕ ИСКАТЬ npm/pnpm (задача F-3, слово владельца 20.10.2026): не только в пакетах
+        // движка панели, но и рядом с Node, в %APPDATA%\npm и в PATH — ТЕМ ЖЕ списком мест, каким
+        // их ищет сам отчёт. Один список на оба вопроса: иначе строка однажды скажет «найден»,
+        // а версия будет прочитана из другого места (или не прочитана вовсе).
+        var tools = EnvironmentReport.ToolPlaces.For(engine);
 
         // ФАКТЫ УМЕНИЙ — ИЗ ДВЕРИ ПРОБЫ, вместе с их моментом (задание владельца 14.10.2026, §2).
         // Дверь по умолчанию пуста: тогда сводка честно говорит «панель сейчас не спрашивала этот
@@ -738,10 +743,8 @@ public sealed class SettingsController : ISettingsControl
             engine,
             dshVersion: DshVersion(engine),
             nodeVersion: engine is null ? string.Empty : Platform.VersionProbe.Run(engine.NodePath, "--version"),
-            npmVersion: EnvironmentReport.VersionOf(
-                npmRoot is null ? null : Path.Combine(npmRoot, "node_modules", "npm")),
-            pnpmVersion: EnvironmentReport.VersionOf(
-                npmRoot is null ? null : Path.Combine(npmRoot, "node_modules", "pnpm")),
+            npmVersion: EnvironmentReport.ToolVersion(tools, "npm"),
+            pnpmVersion: EnvironmentReport.ToolVersion(tools, "pnpm"),
             paths: _paths,
             workDir: WorkDirInUse,
             workDirConfigured: PanelSettings.NormalizeWorkDir(Settings.ServerWorkingDir).Length > 0,
@@ -749,7 +752,8 @@ public sealed class SettingsController : ISettingsControl
             portState: ServerLine(),
             skills: Server.EngineSkills.Measure(skillFacts),
             hints: Hints,
-            skillFacts: skillFacts);
+            skillFacts: skillFacts,
+            places: tools);
     }
 
     /// <summary>
@@ -868,7 +872,18 @@ public sealed class SettingsController : ISettingsControl
         var link = server.EntryLink;
         if (port <= 0 || string.IsNullOrWhiteSpace(link)) return null;
 
-        return new Server.SkillTarget(Server.EngineRpcLogin.BaseUrlOf(link) ?? string.Empty, string.Empty, port, link);
+        // ⚠️ ПРОЦЕСС СЕРВЕРА — ЧАСТЬ ЦЕЛИ (задача F-2, слово владельца 20.10.2026): «тот же это
+        // сервер или новый» живая проба решает процессом (PID + время старта), а не длинами ссылок.
+        // Процесс не назван — нули: проба скажет об этом словами и возьмёт ключом ссылку входа.
+        var process = server.OwnProcess();
+
+        return new Server.SkillTarget(
+            Server.EngineRpcLogin.BaseUrlOf(link) ?? string.Empty,
+            string.Empty,
+            port,
+            link,
+            process?.Pid ?? 0,
+            process?.StartTicks ?? 0);
     }
 
     /// <summary>

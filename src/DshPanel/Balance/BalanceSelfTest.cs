@@ -86,6 +86,10 @@ public static class BalanceSelfTest
                 Check("сумма и валюта взяты", parsed.Total == 12.34m && parsed.Currency == "CNY");
                 Check("сводка собрана", parsed.Summary.Contains("12.34", StringComparison.Ordinal));
                 Check("подробность собрана", parsed.Detail.Contains("пополнено", StringComparison.Ordinal));
+
+                // ⚠️ ПОДПИСЬ ВАЛЮТЫ (F-4): строка подробностей без валюты читалась как одна группа,
+                // хотя валют в ответе бывает две. Живой самотест проверяет то же правило, что и разбор.
+                Check("подробность подписана валютой", parsed.Detail.StartsWith("CNY:", StringComparison.Ordinal));
             }
 
             using (var document = System.Text.Json.JsonDocument.Parse("""{"is_available":false,"balance_infos":[]}"""))

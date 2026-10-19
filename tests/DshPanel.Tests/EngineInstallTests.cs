@@ -120,22 +120,44 @@ public class EngineInstallTests
         Assert.Equal(EngineInstallRefusals.Incomplete, plan.RefusalKey);
     }
     /// <summary>
-    /// РАЗВИЛКА ДОРОГ (блок B): ПРОВЕРЕННУЮ версию ставим главной дорогой (сверка с подсказками
-    /// остаётся), НЕПРОВЕРЕННУЮ — дорогой отдельной просьбы. Это решение, а не строка в двери:
-    /// поэтому оно и проверяется здесь, без окна и без сети.
+    /// РАЗВИЛКА ДОРОГ ИДЁТ ПО ГЛАВНОМУ ЗАМКУ, А НЕ ПО ОТМЕТКЕ «ПРОВЕРЕНА» (выпуск 2.3.0).
+    ///
+    /// **От какого случая.** Проверенных версий стало ДВЕ: `0.2.1-rc.2` — текущая по умолчанию,
+    /// `0.1.5-rc.2` — прежняя, к которой возвращает откат. Прежнее правило («проверена → главная
+    /// дорога») отправило бы главную кнопку на главную дорогу, и та поставила бы по ГЛАВНОМУ замку
+    /// `0.1.5`, хотя подсказки рекомендуют `0.2.1`: карточка говорила бы одно, а ставилось другое.
+    ///
+    /// **Правило теперь.** Главная дорога — ровно тогда, когда названная версия И ЕСТЬ версия
+    /// главного замка (её установщик сверяет с подсказками: «две правды об одном дереве»). Всякая
+    /// другая версия — своей дорогой, со своим замком; так главная кнопка и ставит 0.2.1.
+    ///
+    /// ⚠️ Мутация «вернуть развилку по подсказкам» роняет именно эту проверку.
     /// </summary>
     [Fact]
-    public void Проверенная_версия_идёт_главной_дорогой_а_прочая_отдельной()
+    public void Дорога_выбирается_по_главному_замку_а_не_по_отметке_в_подсказках()
     {
-        var hints = HintsFor("0.1.5-rc.2", verified: true);
+        var primary = LockFor("0.1.5-rc.2");
 
-        Assert.Null(EngineInstallDecisions.RequestedFor(hints, "0.1.5-rc.2"));
-        Assert.Equal("0.2.1-rc.2", EngineInstallDecisions.RequestedFor(hints, "0.2.1-rc.2"));
+        // Версия главного замка — главная дорога; сверка идёт ЧИСЛОВОЙ частью, как везде в панели.
+        Assert.Null(EngineInstallDecisions.RequestedFor(primary, "0.1.5-rc.2"));
+        Assert.Null(EngineInstallDecisions.RequestedFor(primary, " 0.1.5-rc.2 "));
 
-        // Пустая версия — не просьба вовсе; подсказок нет — дорога отдельной просьбы (замок решит).
-        Assert.Null(EngineInstallDecisions.RequestedFor(hints, string.Empty));
-        Assert.Null(EngineInstallDecisions.RequestedFor(hints, null));
-        Assert.Equal("0.1.5-rc.2", EngineInstallDecisions.RequestedFor(EngineHints.Empty, "0.1.5-rc.2"));
+        // ⚠️ ПРЕДРЕЛИЗНЫЙ ХВОСТ ЗНАЧИМ и здесь (правило панели `UpdateDecisions.Numeric`):
+        // `0.1.5` — НЕ версия замка `0.1.5-rc.2`, и набора для финального `0.1.5` в сборке нет.
+        // Такая версия идёт своей дорогой, где замок честно ответит «набора для этой версии нет»,
+        // а не будет принята за предрелиз.
+        Assert.Equal("0.1.5", EngineInstallDecisions.RequestedFor(primary, "0.1.5"));
+
+        // Проверенная 0.2.1 — уже НЕ версия главного замка: у неё свой замок, и она идёт своей
+        // дорогой. Это и есть «главная кнопка ставит 0.2.x» после выпуска 2.3.0.
+        Assert.Equal("0.2.1-rc.2", EngineInstallDecisions.RequestedFor(primary, "0.2.1-rc.2"));
+
+        // Пустая версия — не просьба вовсе. Замка нет — решать нечего: версия идёт своей дорогой,
+        // и там откажет уже замок («ставить не по чему»), а не догадка.
+        Assert.Null(EngineInstallDecisions.RequestedFor(primary, string.Empty));
+        Assert.Null(EngineInstallDecisions.RequestedFor(primary, null));
+        Assert.Equal("0.1.5-rc.2", EngineInstallDecisions.RequestedFor(EngineTreeLock.Empty, "0.1.5-rc.2"));
+        Assert.Equal("0.1.5-rc.2", EngineInstallDecisions.RequestedFor(null, "0.1.5-rc.2"));
     }
     /// <summary>
     /// ⚠️ САМ СЛУЧАЙ ИЗ СЛОВ ВЛАДЕЛЬЦА: подсказки говорят «проверена 0.2.0-rc.2», а замок снят

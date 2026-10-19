@@ -1367,3 +1367,326 @@ public class SettingsTests
         }
     }
 }
+
+/// <summary>
+/// ГДЕ ИЩЕТСЯ npm И pnpm (задача F-3, слово владельца 20.10.2026).
+///
+/// **От какого случая.** Раздел «Сервер» показывал npm и pnpm «не найден», хотя `npm.cmd` лежал
+/// рядом с Node (этим npm панель ставит движок), а `pnpm.cmd` — в `%APPDATA%\npm`. Поиск смотрел
+/// ОДНО место: `node_modules\npm` в каталоге пакетов, выведенном из пути движка панели.
+///
+/// **Что здесь доказано.** Каждое из трёх мест (рядом с Node · `%APPDATA%\npm` · PATH) даёт
+/// «найден»; «не найден» — только когда нет НИ В ОДНОМ; версия берётся из `package.json`, а когда
+/// пакета нет, а команда есть — версия НЕ выдумывается (жёлтая «версия не прочитана», а не зелёная
+/// «найден»); пустой и мусорный PATH не мешает остальным местам и остальным строкам отчёта.
+///
+/// **Мутации, которые обязаны упасть:** «вернуть поиск в одно место (пакеты движка)» ·
+/// «считать найденным только пакет, но не команду» · «выдать версию, когда пакета нет» ·
+/// «пустой PATH ломает поиск».
+///
+/// ⚠️ Пути — ПОДСТАВНЫЕ (<see cref="EnvironmentReport.ToolPlaces.For"/>): проверка не читает PATH
+/// и `%APPDATA%` машины, на которой идёт, — иначе она проверяла бы машину, а не правило.
+/// </summary>
+public sealed class EnvironmentToolTests
+{
+    private static string TempDir() => TempRoots.For("env-tools");
+
+    private static DshEngine Engine(string root) =>
+        new(Path.Combine(root, "nodejs", "node.exe"), Path.Combine(root, "engine", "lib", "bin.js"));
+
+    private static EnvironmentReport.ToolPlaces Places(string root, string path = "") =>
+        EnvironmentReport.ToolPlaces.For(
+            Engine(root),
+            appDataDirectory: Path.Combine(root, "appdata"),
+            pathVariable: path);
+
+    /// <summary>Положить пакет с версией — то, из чего читается `package.json`.</summary>
+    private static void PutPackage(string directory, string version)
+    {
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(
+            Path.Combine(directory, "package.json"),
+            "{\"name\":\"x\",\"version\":\"" + version + "\"}");
+    }
+
+    /// <summary>Положить команду-обёртку (`npm.cmd`/`pnpm.cmd`) — без пакета и без версии.</summary>
+    private static void PutCommand(string directory, string name)
+    {
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, name), "@echo off\r\n");
+    }
+
+    private static EnvironmentLine Line(EnvironmentReport report, string what)
+    {
+        foreach (var group in report.Groups)
+        {
+            foreach (var line in group.Lines)
+            {
+                if (line.What == what) return line;
+            }
+        }
+
+        throw new InvalidOperationException($"в отчёте нет строки «{what}»");
+    }
+
+    /// <summary>Отчёт ТЕМ ЖЕ путём, каким его собирает окно: версии — из тех же мест.</summary>
+    private static EnvironmentReport Report(EnvironmentReport.ToolPlaces places, DshEngine? engine)
+    {
+        var paths = AppPaths.Under(Path.Combine(Path.GetTempPath(), "dsh-env-tools-paths"));
+
+        return EnvironmentReport.Build(
+            engine,
+            dshVersion: "2.3.0",
+            nodeVersion: "22.19.0",
+            npmVersion: EnvironmentReport.ToolVersion(places, "npm"),
+            pnpmVersion: EnvironmentReport.ToolVersion(places, "pnpm"),
+            paths: paths,
+            workDir: paths.DshHome,
+            workDirConfigured: false,
+            serverPort: 3081,
+            portState: "свободен",
+            places: places);
+    }
+
+    /// <summary>
+    /// npm РЯДОМ С NODE — это ровно машина владельца (`C:\Program Files\nodejs\npm.cmd` и
+    /// `node_modules\npm` там же). Прежде этой строки «не найден» и была находка F-3.
+    /// </summary>
+    [Fact]
+    public void Npm_рядом_с_Node_найден_и_версия_из_пакета()
+    {
+        var root = TempDir();
+
+        try
+        {
+            PutPackage(Path.Combine(root, "nodejs", "node_modules", "npm"), "10.9.2");
+
+            var places = Places(root);
+
+            Assert.True(EnvironmentReport.ToolFound(places, "npm"), "npm рядом с Node не найден");
+            Assert.Equal("10.9.2", EnvironmentReport.ToolVersion(places, "npm"));
+
+            var line = Line(Report(places, Engine(root)), PanelStrings.EnvNpm);
+
+            Assert.Equal(EnvLineState.Ok, line.State);
+            Assert.Equal(PanelStrings.EnvFound, line.Word);
+            Assert.Contains("10.9.2", line.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// npm В `%APPDATA%\npm` — второе место, которого прежний поиск не знал вовсе.
+    /// **Мутация «вернуть поиск в одно место» обязана уронить эту проверку.**
+    /// </summary>
+    [Fact]
+    public void Npm_в_AppData_найден_и_версия_из_пакета()
+    {
+        var root = TempDir();
+
+        try
+        {
+            PutPackage(Path.Combine(root, "appdata", "npm", "node_modules", "npm"), "11.1.0");
+
+            var places = Places(root);
+
+            Assert.True(EnvironmentReport.ToolFound(places, "npm"), "npm в %APPDATA%\\npm не найден");
+            Assert.Equal("11.1.0", EnvironmentReport.ToolVersion(places, "npm"));
+
+            var line = Line(Report(places, Engine(root)), PanelStrings.EnvNpm);
+
+            Assert.Equal(EnvLineState.Ok, line.State);
+            Assert.Equal(PanelStrings.EnvFound, line.Word);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// npm НАЙДЕН ПО PATH — третье место: там лежит только команда-обёртка, пакета рядом нет.
+    /// **Мутация «считать найденным только пакет» обязана уронить эту проверку.**
+    /// </summary>
+    [Fact]
+    public void Npm_в_PATH_найден_по_команде()
+    {
+        var root = TempDir();
+
+        try
+        {
+            var bin = Path.Combine(root, "bin");
+            PutCommand(bin, "npm.cmd");
+
+            var places = Places(root, path: bin);
+
+            Assert.True(EnvironmentReport.ToolFound(places, "npm"), "npm в PATH не найден");
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// ПАКЕТА НЕТ, КОМАНДА ЕСТЬ — ВЕРСИЯ НЕ ВЫДУМАНА: строка жёлтая «версия не прочитана»,
+    /// а не зелёная «найден» с чужим номером. Это и есть «ложный зелёный не появляется».
+    /// </summary>
+    [Fact]
+    public void Найден_только_командой_версия_не_выдумывается()
+    {
+        var root = TempDir();
+
+        try
+        {
+            PutCommand(Path.Combine(root, "appdata", "npm"), "npm.cmd");
+
+            var places = Places(root);
+
+            Assert.True(EnvironmentReport.ToolFound(places, "npm"));
+            Assert.Equal(string.Empty, EnvironmentReport.ToolVersion(places, "npm"));
+
+            var line = Line(Report(places, Engine(root)), PanelStrings.EnvNpm);
+
+            Assert.Equal(EnvLineState.Warning, line.State);
+            Assert.Equal(PanelStrings.EnvValueUnknown, line.Word);
+            Assert.DoesNotContain("версия 1", line.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// НИГДЕ НЕТ — «НЕ НАЙДЕН», и НЕ «версия не прочитана»: два разных ответа, и путать их нельзя.
+    /// **Мутации «поиск в одно место» и «найденное = пакет» эту проверку не роняют** — она стережёт
+    /// другую сторону: ложного «не найден» при найденном быть не должно, а «нет нигде» обязано
+    /// остаться честным «не найден».
+    /// </summary>
+    [Fact]
+    public void Ни_в_одном_месте_нет_не_найден()
+    {
+        var root = TempDir();
+
+        try
+        {
+            var places = Places(root);
+
+            Assert.False(EnvironmentReport.ToolFound(places, "npm"), "npm найден там, где его нет");
+            Assert.Equal(string.Empty, EnvironmentReport.ToolVersion(places, "npm"));
+
+            var npm = Line(Report(places, Engine(root)), PanelStrings.EnvNpm);
+
+            Assert.Equal(EnvLineState.Grey, npm.State);
+            Assert.Equal(PanelStrings.EnvNotFound, npm.Word);
+            Assert.NotEqual(PanelStrings.EnvValueUnknown, npm.Word);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// pnpm В `%APPDATA%\npm` — ЕДИНСТВЕННОЕ его место на машине владельца. Пакет с версией даёт
+    /// «найден» и версию; одна команда-обёртка — «найден» без версии.
+    /// **Мутация «pnpm не искать вовсе» обязана уронить эту проверку.**
+    /// </summary>
+    [Fact]
+    public void Pnpm_только_в_AppData_найден()
+    {
+        var root = TempDir();
+        var bare = TempDir();
+
+        try
+        {
+            PutPackage(Path.Combine(root, "appdata", "npm", "node_modules", "pnpm"), "9.12.0");
+
+            var places = Places(root);
+
+            Assert.True(EnvironmentReport.ToolFound(places, "pnpm"), "pnpm в %APPDATA%\\npm не найден");
+            Assert.Equal("9.12.0", EnvironmentReport.ToolVersion(places, "pnpm"));
+
+            var line = Line(Report(places, Engine(root)), PanelStrings.EnvPnpm);
+
+            Assert.Equal(EnvLineState.Ok, line.State);
+            Assert.Equal(PanelStrings.EnvFound, line.Word);
+            Assert.Contains("9.12.0", line.Detail, StringComparison.Ordinal);
+
+            // И одна команда-обёртка (пакета нет) — тоже «найден», но версия не выдумывается.
+            PutCommand(Path.Combine(bare, "appdata", "npm"), "pnpm.cmd");
+
+            var shim = Places(bare);
+
+            Assert.True(EnvironmentReport.ToolFound(shim, "pnpm"), "pnpm-команда не найдена");
+            Assert.Equal(string.Empty, EnvironmentReport.ToolVersion(shim, "pnpm"));
+            Assert.Equal(EnvLineState.Warning, Line(Report(shim, Engine(bare)), PanelStrings.EnvPnpm).State);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+            TempRoots.Remove(bare);
+        }
+    }
+
+    /// <summary>
+    /// pnpm НЕТ — строка СЕРАЯ с подписью «панель им не пользуется»: чинить человеку нечего,
+    /// и «найден» там не появляется.
+    /// </summary>
+    [Fact]
+    public void Pnpm_нет_серый_и_панель_им_не_пользуется()
+    {
+        var root = TempDir();
+
+        try
+        {
+            var line = Line(Report(Places(root), Engine(root)), PanelStrings.EnvPnpm);
+
+            Assert.Equal(EnvLineState.Grey, line.State);
+            Assert.Equal(PanelStrings.EnvNotFound, line.Word);
+            Assert.Equal(PanelStrings.EnvPnpmUnused, line.Detail);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// ПУСТОЙ И МУСОРНЫЙ PATH НЕ ЛОМАЕТ ОСТАЛЬНЫЕ МЕСТА И СТРОКИ: npm рядом с Node находится,
+    /// строки Node и DSH остаются на месте, а кавычки и пустые куски PATH не считаются местами.
+    /// **Мутация «пустой PATH ломает поиск» обязана уронить эту проверку.**
+    /// </summary>
+    [Fact]
+    public void Пустой_PATH_не_ломает_остальные_строки()
+    {
+        var root = TempDir();
+
+        try
+        {
+            PutPackage(Path.Combine(root, "nodejs", "node_modules", "npm"), "10.9.2");
+
+            foreach (var path in new[] { string.Empty, ";;   ;", "\"" + Path.Combine(root, "нет-такой-папки") + "\"" })
+            {
+                var places = Places(root, path);
+
+                Assert.True(EnvironmentReport.ToolFound(places, "npm"), $"npm потерян при PATH = «{path}»");
+                Assert.Equal("10.9.2", EnvironmentReport.ToolVersion(places, "npm"));
+
+                var report = Report(places, Engine(root));
+
+                Assert.Equal(EnvLineState.Ok, Line(report, PanelStrings.EnvNode).State);
+                Assert.Equal(PanelStrings.EnvFound, Line(report, PanelStrings.EnvNpm).Word);
+                Assert.NotEqual(string.Empty, Line(report, PanelStrings.EnvDshHome).What);
+            }
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+}

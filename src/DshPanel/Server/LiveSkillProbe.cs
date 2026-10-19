@@ -16,10 +16,16 @@ namespace DshPanel.Server;
 /// по нужным именам (77) и ходит в сеть — в перерисовке окна это недопустимо: окно замерло бы на секунды.
 /// Поэтому проба идёт в фоне, а отчёт читает ПОСЛЕДНИЕ ГОТОВЫЕ факты и честно называет их момент.
 ///
-/// ⚠️ **Одна проба на один свой сервер.** Заказ запоминается по паре «порт + номер процесса»:
+/// ⚠️ **Одна проба на один свой сервер.** Заказ запоминается по **ПРОЦЕССУ сервера — PID и время
+/// старта** (<see cref="SkillTarget.ProcessKey"/>, задача F-2, слово владельца 20.10.2026):
 /// перерисовка окна зовёт заказ каждую секунду, и без этой памяти панель запускала бы по пробе
-/// в секунду. Сменился сервер (перезапуск, другая версия) — пара другая, и проба идёт заново:
+/// в секунду. Сменился сервер (перезапуск, другая версия) — процесс другой, и проба идёт заново:
 /// ровно этого и требует задание («пересчитать после того, как сервер стал своим»).
+///
+/// ⚠️ **Прежде ключом были ДЛИНЫ cookie и ссылки входа** — и это был дефект F-2: у перезапущенного
+/// сервера те же порт и те же длины, ключ совпадал, и карточка показывала старую пробу как «свежую».
+/// **Процесс не назван** — ключом становится сама ссылка входа (<see cref="SkillTarget.LinkKey"/>),
+/// и об этом говорится СТРОКОЙ В ЖУРНАЛ, а не молчанием.
 ///
 /// ⚠️ Проба НИЧЕГО не предполагает про порт владельца: порт и ссылку входа ей дают снаружи.
 /// </summary>
@@ -29,6 +35,7 @@ public sealed class LiveSkillProbe
     private readonly Func<SkillTarget?> _target;
     private readonly Func<string?> _binPath;
     private readonly Action<string> _log;
+    private readonly Func<SkillTarget, string?, SkillFacts?> _measure;
 
     private readonly object _gate = new();
 
@@ -36,14 +43,32 @@ public sealed class LiveSkillProbe
 
     private SkillFacts _facts = new();
     private string _asked = string.Empty;
+    private string _noProcessKey = string.Empty;
     private bool _running;
 
     public LiveSkillProbe(AppPaths paths, Func<SkillTarget?> target, Func<string?> binPath, Action<string> log)
+        : this(paths, target, binPath, log, null)
+    {
+    }
+
+    /// <summary>
+    /// Дверь измерения — доводом, чтобы проверка могла прогнать заказ дважды и увидеть, ПОВТОРИЛАСЬ
+    /// ли проба (сеть и настоящий движок проверке не нужны). <c>null</c> — настоящая проба
+    /// (<see cref="EngineRpcProbe.Measure"/>), как у панели.
+    /// </summary>
+    public LiveSkillProbe(
+        AppPaths paths,
+        Func<SkillTarget?> target,
+        Func<string?> binPath,
+        Action<string> log,
+        Func<SkillTarget, string?, SkillFacts?>? measure)
     {
         _paths = paths ?? throw new ArgumentNullException(nameof(paths));
         _target = target ?? throw new ArgumentNullException(nameof(target));
         _binPath = binPath ?? throw new ArgumentNullException(nameof(binPath));
         _log = log ?? throw new ArgumentNullException(nameof(log));
+
+        _measure = measure ?? ((wanted, bin) => EngineRpcProbe.Measure(bin, wanted.EntryLink, wanted.Port, _paths).Facts);
 
         // ДВЕРЬ ОДНА НА ВСЮ ЖИЗНЬ ПРОБЫ, а не новая на каждый вопрос: на неё подписывается окно
         // (через владельца настроек), и подписка на свежий объект каждый раз терялась бы молча.
@@ -62,6 +87,19 @@ public sealed class LiveSkillProbe
     }
 
     /// <summary>
+    /// ИДЁТ ЛИ ПРОБА ПРЯМО СЕЙЧАС. Нужно проверкам: заказ, пришедший во время пробы, честно
+    /// ОТБРАСЫВАЕТСЯ (второй пробы по тому же серверу не нужно), поэтому «дождаться, что проба
+    /// прошла» без этого признака значило бы ждать по догадке.
+    /// </summary>
+    public bool Running
+    {
+        get
+        {
+            lock (_gate) return _running;
+        }
+    }
+
+    /// <summary>
     /// ЗАКАЗАТЬ ПРОБУ — если её для ЭТОГО сервера ещё не было и она не идёт прямо сейчас.
     /// Возвращается сразу: проба идёт в фоне, отчёт пока показывает прежние факты.
     /// </summary>
@@ -73,7 +111,29 @@ public sealed class LiveSkillProbe
         // так и говорится словами в сводке («панель сейчас не спрашивала»).
         if (target is null || string.IsNullOrWhiteSpace(target.BaseUrl)) return;
 
-        var key = target.Port + "/" + target.Cookie.Length + "/" + target.EntryLink.Length;
+        // ⚠️ КЛЮЧ — ПРОЦЕСС СЕРВЕРА (PID + время старта), А НЕ ДЛИНЫ ССЫЛОК (задача F-2, слово
+        // владельца 20.10.2026): у перезапущенного сервера те же порт и те же длины, а процесс другой.
+        var key = target.ProcessKey;
+        var announceNoProcess = false;
+
+        if (key.Length == 0)
+        {
+            // Процесс не назван — ключ по САМОЙ ссылке входа (её токен новый после перезапуска),
+            // и об этом говорится СЛОВАМИ. Строка одна на ключ: Ask зовут каждую перерисовку окна,
+            // и повтор той же строки забил бы журнал.
+            key = target.LinkKey;
+
+            lock (_gate)
+            {
+                if (!string.Equals(_noProcessKey, key, StringComparison.Ordinal))
+                {
+                    _noProcessKey = key;
+                    announceNoProcess = true;
+                }
+            }
+        }
+
+        if (announceNoProcess) _log(PanelStrings.EnvSkillsProbeNoProcessLog);
 
         lock (_gate)
         {
@@ -89,9 +149,9 @@ public sealed class LiveSkillProbe
         {
             try
             {
-                var result = EngineRpcProbe.Measure(bin, target.EntryLink, target.Port, _paths);
+                var facts = _measure(target, bin);
 
-                if (result.Facts is not { } facts)
+                if (facts is not { } measured)
                 {
                     // Проба не дошла до умений (отказ входа и т.п.). Прежние факты не подменяем
                     // выдумкой и НЕ подставляем вердикты файла подсказок: пусть живёт честное
@@ -100,7 +160,7 @@ public sealed class LiveSkillProbe
                     return;
                 }
 
-                lock (_gate) _facts = facts with { MeasuredAt = DateTimeOffset.Now };
+                lock (_gate) _facts = measured with { MeasuredAt = DateTimeOffset.Now };
 
                 // ФАКТЫ ПРИШЛИ — СООБЩИТЬ (задание владельца 14.10.2026, §3): раздел «Сервер»
                 // обязан показать правду САМ, без нажатия кнопки. Владелец открыл раздел, увидел

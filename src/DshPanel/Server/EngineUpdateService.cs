@@ -104,6 +104,9 @@ public sealed class EngineUpdateService : IEngineUpdateSection
     private string _installed = string.Empty;
     private bool _present = true;
 
+    /// <summary>О какой нечитаемой версии уже сказали — чтобы строка в журнале была одна, а не в перерисовку.</summary>
+    private string _unreadableLogged = string.Empty;
+
     public EngineUpdateService(EngineUpdateSectionDoors doors, Action<string>? log = null)
     {
         _doors = doors ?? throw new ArgumentNullException(nameof(doors));
@@ -349,6 +352,48 @@ public sealed class EngineUpdateService : IEngineUpdateSection
         }
 
         _recommended = EngineUpdateDecisions.Recommended(_hints);
+
+        LogUnreadableVersions();
+    }
+
+    /// <summary>
+    /// МУСОР ВМЕСТО ВЕРСИИ — СКАЗАТЬ СЛОВАМИ (задача F-1b, слово владельца 20.10.2026).
+    ///
+    /// **От какого случая.** Правило показа кнопки непроверенной версии сравнивает её со стоящей;
+    /// если одна из строк — не версия («не прочиталась», «unknown», обрезанная запись), кнопки нет.
+    /// Молчать об этом нельзя: человек видит, что свежая версия в реестре есть, а кнопки нет, —
+    /// и не знает почему. Строка журнала называет версию и причину.
+    ///
+    /// ⚠️ **Одна строка на значение, а не на перерисовку:** `Refresh` зовётся окном часто, и без
+    /// этой памяти журнал забился бы одинаковыми строками.
+    /// </summary>
+    private void LogUnreadableVersions()
+    {
+        if (_log is null) return;
+
+        var pair = _fresh + "|" + _installed;
+
+        if (string.Equals(pair, _unreadableLogged, StringComparison.Ordinal)) return;
+
+        var format = string.Empty;
+        var value = string.Empty;
+
+        if (_fresh.Length > 0 && !EngineVersionOrder.IsVersion(_fresh))
+        {
+            format = PanelStrings.EngineUpdateFreshUnreadableLogFormat;
+            value = _fresh;
+        }
+        else if (_installed.Length > 0 && !EngineVersionOrder.IsVersion(_installed))
+        {
+            format = PanelStrings.EngineUpdateInstalledUnreadableLogFormat;
+            value = _installed;
+        }
+
+        if (format.Length == 0) return;
+
+        _unreadableLogged = pair;
+
+        _log(string.Format(System.Globalization.CultureInfo.CurrentCulture, format, value));
     }
 
     /// <summary>

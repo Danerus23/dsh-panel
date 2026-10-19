@@ -492,6 +492,15 @@ public static class PanelStrings
     /// <summary>Журнал: свежую версию из реестра узнать не удалось.</summary>
     public static string EngineUpdateFreshUnavailableLog => Loc.T(nameof(EngineUpdateFreshUnavailableLog));
 
+    /// <summary>
+    /// Журнал: СВЕЖАЯ строка — не версия (F-1b). Кнопки непроверенной версии нет, и причина
+    /// названа словами: молчать значило бы оставить человека без кнопки и без объяснения.
+    /// </summary>
+    public static string EngineUpdateFreshUnreadableLogFormat => Loc.T(nameof(EngineUpdateFreshUnreadableLogFormat));
+
+    /// <summary>Журнал: СТОЯЩАЯ строка — не версия (F-1b). Та же причина, другая сторона сравнения.</summary>
+    public static string EngineUpdateInstalledUnreadableLogFormat => Loc.T(nameof(EngineUpdateInstalledUnreadableLogFormat));
+
     /// <summary>Вопрос перед обновлением: панель спрашивает ВСЕГДА (решение владельца 10.10.2026).</summary>
     public static string EngineUpdateAskFormat => Loc.T(nameof(EngineUpdateAskFormat));
 
@@ -918,6 +927,13 @@ public static class PanelStrings
     public static string BalanceToppedUpFormat => Loc.T(nameof(BalanceToppedUpFormat));
 
     public static string BalanceGrantedFormat => Loc.T(nameof(BalanceGrantedFormat));
+
+    /// <summary>
+    /// ПОДПИСЬ ГРУППЫ ПОДРОБНОСТЕЙ ВАЛЮТОЙ (задача F-4, слово владельца 20.10.2026): «USD: пополнено …».
+    /// Ставится у КАЖДОЙ группы и ВСЕГДА — и при одной валюте тоже, чтобы правило не зависело от их
+    /// числа. Знак и порядок одинаковы во всех трёх языках: это не фраза, а подпись-разделитель.
+    /// </summary>
+    public static string BalanceCurrencyDetailsFormat => Loc.T(nameof(BalanceCurrencyDetailsFormat));
 
     /// <summary>Прогон проверки не читает ключ и не ходит в сеть.</summary>
     public static string BalanceLocked => Loc.T(nameof(BalanceLocked));
@@ -3833,6 +3849,14 @@ public static class PanelStrings
 
     /// <summary>Журнал: проба умений не дошла до вердиктов — вход в сервер DSH не состоялся.</summary>
     public static string EnvSkillsProbeNoFactsLog => Loc.T(nameof(EnvSkillsProbeNoFactsLog));
+
+    /// <summary>
+    /// Журнал: ЖИВАЯ ПРОБА НЕ НАЗВАЛА ПРОЦЕСС СВОЕГО СЕРВЕРА (задача F-2) — ключом стала ссылка
+    /// входа. Строка нужна потому, что это ЗАПАСНОЙ путь: в обычной жизни процесс известен
+    /// (PID и время старта), и молчать о том, что его не узнали, значило бы скрыть причину,
+    /// по которой проба после перезапуска может не повториться.
+    /// </summary>
+    public static string EnvSkillsProbeNoProcessLog => Loc.T(nameof(EnvSkillsProbeNoProcessLog));
 
     /// <summary>Журнал: проба умений не вышла — таблица остаётся без свежего ответа.</summary>
     public static string EnvSkillsProbeFailedLogFormat => Loc.T(nameof(EnvSkillsProbeFailedLogFormat));

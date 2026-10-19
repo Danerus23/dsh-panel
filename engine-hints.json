@@ -2,20 +2,70 @@
   "format": 1,
   "versions": [
     {
+      "version": "0.2.1-rc.2",
+      "verified": true,
+      "notes": {
+        "ru": [
+          "Панель проверена на этой версии: набор из 683 пакетов поставлен по замку (сумма закреплена в сборке), проба прошла 77 из 77 нужных имён и 8 из 8 умений, телефон в изоляции — 74 из 74 проверок.",
+          "Сверка поверхности: нужных панели имён 77 из 77 эта версия объявляет и признаёт живьём; семь наших имён она больше не объявляет (панель их не зовёт), зато появилось 67 новых в 16 семействах — панель их не использует.",
+          "Это версия по умолчанию: главная кнопка «Обновить» ставит её, а прежняя проверенная 0.1.5-rc.2 остаётся на диске как версия возврата."
+        ],
+        "en": [
+          "The panel is verified on this version: the 683-package set is installed by its pin (the sum is fixed in the build), the probe passed 77 of 77 required names and 8 of 8 skills, and the phone gate in isolation — 74 of 74 checks.",
+          "Surface check: all 77 names the panel needs are declared and recognised live; seven of our names are no longer declared (the panel never calls them), while 67 new ones appeared in 16 families — the panel does not use them.",
+          "This is the default version: the main Update button installs it, and the previous verified 0.1.5-rc.2 stays on disk as the version to return to."
+        ],
+        "zh": [
+          "面板已在此版本上验证：683 个包按固定集合安装（校验和固定在构建中），检查通过 77/77 个所需名称和 8/8 项能力，手机端在隔离环境中 74/74 项检查通过。",
+          "调用面核对：面板所需的 77 个名称全部被声明并实际确认；我们清单中的七个名称不再声明（面板从不调用），新增 67 个，分布在 16 个家族——面板不使用它们。",
+          "这是默认版本：主按钮「更新」安装的就是它，而此前验证过的 0.1.5-rc.2 保留在磁盘上，作为可回退的版本。"
+        ]
+      },
+      "troubles": {
+        "ru": [
+          "Это предрелизная версия (rc): апстрим может её перевыпустить или сменить — номер версии не обещает, что набор под ним останется тем же.",
+          "Журнал сессий — v4: сессии, открытые под 0.2.1, движок 0.1.5-rc.2 не увидит и НЕ СКАЖЕТ об этом — они исчезнут из списка молча. Предохранитель панели предупреждает об этом до отката (с 2.2.0), но последствие не исправляет.",
+          "Подчинённые сессии телефону не показываются: у них есть родитель, и открыть их телефоном нельзя — ограничение названо, а не спрятано.",
+          "Телефон работает только в своей сети: страница открывается по адресу локальной сети, наружу панель не выходит, и HTTPS в ней нет.",
+          "Если апстрим переключит доставку вопроса агента на режим «timed», прежней двери ответа не хватит: понадобятся вызовы userQuestions/attachWait и userQuestions/answer — это расширение поверхности телефона (белый список 13 вызовов), отдельное решение. Сегодня панель честно отказывает словами, но не решает.",
+          "Пропали семь имён, которые жили ТОЛЬКО в каталоге панели и живьём не звались: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, subagents/list, workspaceFiles/readAll, workspaceFiles/readRelated. Панель их не зовёт — потеря ничего не ломает."
+        ],
+        "en": [
+          "This is a pre-release version (rc): upstream may re-release or replace it — the version number does not promise that the set under it stays the same.",
+          "The session journal is v4: sessions opened under 0.2.1 are not seen by engine 0.1.5-rc.2 and it does NOT say so — they vanish from the list silently. The panel fuse warns about this before a rollback (since 2.2.0), but it cannot undo the consequence.",
+          "Subordinate sessions are not shown to the phone: they have a parent, and the phone cannot open them — the limit is stated, not hidden.",
+          "The phone works only in its own network: the page opens over a local-network address, the panel does not go outside, and there is no HTTPS.",
+          "If upstream switches agent question delivery to the «timed» mode, the old answer door is not enough: the userQuestions/attachWait and userQuestions/answer calls will be needed — that is an extension of the phone surface (the 13-call allowlist), a separate decision. Today the panel refuses honestly in words, but does not solve it.",
+          "Seven names that lived ONLY in the panel catalog and were never called at run time are gone: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, subagents/list, workspaceFiles/readAll, workspaceFiles/readRelated. The panel does not call them — the loss breaks nothing."
+        ],
+        "zh": [
+          "这是预发布版本（rc）：上游可能重新发布或更换它——版本号并不保证其下的包集合保持不变。",
+          "会话日志为 v4：由此版本打开的会话，引擎 0.1.5-rc.2 看不到，也不会说明——它们会从列表中静默消失。面板的保护提示会在回退前提醒（自 2.2.0 起），但无法消除后果。",
+          "从属会话（子会话）不向手机显示：它们有父会话，无法用手机打开——这一限制是明确说明的，而不是隐藏的。",
+          "手机只能在自己的网络（局域网）内工作：页面通过局域网地址打开，面板不向外开放，也不提供 HTTPS。",
+          "如果上游把代理提问的投递切换为 timed 模式，原来的应答通道就不够用了：需要 userQuestions/attachWait 和 userQuestions/answer 这两个调用——这是对手机调用面的扩展（13 个调用的白名单），属于单独的决定。目前面板会如实以文字拒绝，但并未解决。",
+          "面板清单中仅存、运行时不调用的七个名称消失：agentPresets/copy、agentPresets/deletePreset、settings/canOpenAgentPresetDirectory、settings/openAgentPresetDirectory、subagents/list、workspaceFiles/readAll、workspaceFiles/readRelated。面板不调用它们——这一损失不会破坏任何功能。"
+        ]
+      }
+    },
+    {
       "version": "0.1.5-rc.2",
       "verified": true,
       "notes": {
         "ru": [
           "Панель проверена на этой версии целиком: все 8 умений подтверждены живым прогоном в изоляции, список вызовов — 84 из 84.",
-          "Умения панель проверяет сама при работе: запись здесь — подсказка, а не разрешение."
+          "Умения панель проверяет сама при работе: запись здесь — подсказка, а не разрешение.",
+          "Остаётся проверенной прежней версией: к ней возвращает откат, и её набор из 588 пакетов тоже закреплён в сборке."
         ],
         "en": [
           "The panel was verified on this version in full: all 8 skills were confirmed by a live run in isolation, the call inventory — 84 of 84.",
-          "The panel still checks its skills itself while it works: this entry is a hint, not a permission."
+          "The panel still checks its skills itself while it works: this entry is a hint, not a permission.",
+          "Stays the previous verified version: the rollback returns to it, and its 588-package set is pinned in the build as well."
         ],
         "zh": [
           "面板已在此版本上完整验证：8 项能力全部由隔离环境中的实际运行确认，调用清单为 84/84。",
-          "面板在工作时仍会自行检查能力：此处的记录只是提示，而不是许可。"
+          "面板在工作时仍会自行检查能力：此处的记录只是提示，而不是许可。",
+          "它仍是此前验证过的版本：回退会回到它，其 588 个包的集合同样固定在构建中。"
         ]
       },
       "troubles": {
@@ -62,44 +112,6 @@
         "zh": [
           "面板清单中仅存、运行时不调用的七个名称消失：agentPresets/copy、agentPresets/deletePreset、settings/canOpenAgentPresetDirectory、settings/openAgentPresetDirectory、subagents/list、workspaceFiles/readAll、workspaceFiles/readRelated。面板不调用它们——这一损失不会破坏任何功能。",
           "会话日志格式为 v4：此版本创建的会话，引擎 0.1.5-rc.2 无法打开（「log format v4, but this harness reads only v3」）。"
-        ]
-      }
-    },
-    {
-      "version": "0.2.1-rc.2",
-      "verified": false,
-      "notes": {
-        "ru": [
-          "Набор версий для 0.2.1-rc.2 есть: 683 пакета, сумма закреплена в сборке, проба по нему прошла 77/77 имён и 8/8 умений. Ставится отдельной кнопкой с подтверждением. Версией по умолчанию остаётся 0.1.5-rc.2: панель не проверена на 0.2.1 целиком — живой телефон на ней не перемерян приёмкой, живой вопрос на странице телефона не поднимался (нужна правка), установщик и чистая ВМ не прогонялись.",
-          "Сверка поверхности: нужных панели имён 77 из 77 эта версия объявляет и признаёт живьём; семь наших имён она больше не объявляет (панель их не зовёт), зато появилось 67 новых в 16 семействах — панель их не использует.",
-          "Умения панели на этой версии читаются: живой вопрос и ответ на него проверены отдельным прогоном 18.10.2026."
-        ],
-        "en": [
-          "A version set exists for 0.2.1-rc.2: 683 packages, the sum is pinned in the build, and the probe passed on it — 77/77 names and 8/8 skills. It is installed by a separate button with confirmation. 0.1.5-rc.2 stays the default version: the panel is not verified on 0.2.1 in full — the live phone was not re-measured there by acceptance, the live question on the phone page was not raised (a fix is required), and the installer and a clean VM were not run.",
-          "Surface check: all 77 names the panel needs are declared and recognised live; seven of our names are no longer declared (the panel never calls them), while 67 are new in 16 families — the panel does not use them.",
-          "The panel's skills do read on this version: a real question and its answer were verified by a separate run on 18.10.2026."
-        ],
-        "zh": [
-          "0.2.1-rc.2 已有版本集：683 个包，校验和在构建中固定，按该集进行的检查已通过——77/77 个名称和 8/8 项能力。它由单独的按钮并带确认来安装。默认版本仍是 0.1.5-rc.2：面板未在 0.2.1 上完整验证——验收未在该版本上重测实际手机，手机页面的实际提问未发起（需修复），安装程序与干净虚拟机未运行。",
-          "调用面核对：面板需要的 77 个名称全部被声明并实际确认；我们清单中的七个名称不再声明（面板从不调用它们），新增 67 个，分布在 16 个家族——面板不使用它们。",
-          "面板能力在此版本上可读取：真实提问与回答已由 18.10.2026 的单独运行验证。"
-        ]
-      },
-      "troubles": {
-        "ru": [
-          "Пропали семь имён, которые жили ТОЛЬКО в каталоге панели и живьём не звались: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, subagents/list, workspaceFiles/readAll, workspaceFiles/readRelated. Панель их не зовёт — потеря ничего не ломает.",
-          "Журнал сессий — v4. Сессия, открытая под этой версией, для 0.1.5-rc.2 ИСЧЕЗАЕТ ИЗ СПИСКА МОЛЧА (замер 18.10.2026: было видно 197 сессий, после одного открытия — 196; движок не пишет ни строки). Лечится уносом файла session.v4.jsonl.zstd из папки сессии.",
-          "Подчинённые сессии (у кого есть родитель) этой версией напрямую не открываются: session/page отвечает session/agent-busy «subagent Sessions require their durable parent address»."
-        ],
-        "en": [
-          "Seven names that lived ONLY in the panel's catalog and were never called at run time are gone: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, subagents/list, workspaceFiles/readAll, workspaceFiles/readRelated. The panel does not call them — the loss breaks nothing.",
-          "The session log is v4. A session opened by this version DISAPPEARS FROM THE LIST SILENTLY under 0.1.5-rc.2 (measured 18.10.2026: 197 sessions visible, 196 after a single open; the engine writes no line at all). Cure: move session.v4.jsonl.zstd out of the session folder.",
-          "Subagent sessions (those with a parent) cannot be opened directly by this version: session/page answers session/agent-busy \"subagent Sessions require their durable parent address\"."
-        ],
-        "zh": [
-          "面板清单中仅存、运行时不调用的七个名称消失：agentPresets/copy、agentPresets/deletePreset、settings/canOpenAgentPresetDirectory、settings/openAgentPresetDirectory、subagents/list、workspaceFiles/readAll、workspaceFiles/readRelated。面板不调用它们——这一损失不会破坏任何功能。",
-          "会话日志为 v4。由此版本打开的会话在 0.1.5-rc.2 下会从列表中静默消失（18.10.2026 实测：可见 197 个会话，打开一个后为 196；引擎不写任何一行）。处理办法：把 session.v4.jsonl.zstd 移出该会话目录。",
-          "子代理会话（有父会话的）无法由此版本直接打开：session/page 返回 session/agent-busy「subagent Sessions require their durable parent address」。"
         ]
       }
     }

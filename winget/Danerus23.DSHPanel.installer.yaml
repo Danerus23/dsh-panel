@@ -56,11 +56,12 @@ AppsAndFeaturesEntries:
   Publisher: Danerus23
   ProductCode: '{7F3C6A21-9D4E-4B8A-9C1F-2E5D8B7A4C11}_is1'
 # ReleaseDate and InstallerSha256 below are the RELEASE's numbers, not a revision's:
-#   * InstallerSha256 — the 2.1.0 installer of the release build (44 888 043 bytes), taken from
-#     that build's SHA256SUMS.txt of the GitHub release v2.1.0 (2026-10-17 23:34Z); never
-#     recomputed from a local rebuild (bytes differ by the ProductVersion stamp, by construction);
-#   * ReleaseDate     — the day the release went out: 2026-10-17 (GitHub release creation date, UTC;
-#     locally the clock already showed 18.10 — the date is the release's, not the session's).
+#   * InstallerSha256 — the 2.2.1 installer of the release build (44 979 490 bytes, B5400ED0…D138),
+#     taken from the assets of the GitHub release v2.2.1 (created 2026-10-19T18:47:06Z); never
+#     recomputed from a local rebuild — the pipeline and this machine build in different trees, so
+#     bytes and sums differ by construction;
+#   * ReleaseDate     — the day the release went out: 2026-10-19 (GitHub release creation date, UTC;
+#     the date is the release's, not the session's).
 # Both are rewritten by tools\winget-manifest.ps1 (offline, idempotent) from the sums file.
 ReleaseDate: 2026-10-19
 Installers:
