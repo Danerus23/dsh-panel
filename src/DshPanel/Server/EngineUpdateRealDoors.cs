@@ -47,7 +47,8 @@ public static class EngineUpdateRealDoors
 
         // ДОВОДЫ ЗАМКА читаются ОДИН раз на раздел: замок — встроенный ресурс сборки, он не меняется
         // на ходу, а решать «годится ли Node» без него нельзя (порог версии берётся из него).
-        var lockFile = EngineTreeLock.Load();
+        var locks = EngineTreeLocks.Load();
+        var lockFile = locks.Primary;
 
         // СВОЙ NODE ДОБЫВАЕТСЯ ЛЕНИВО и помнится: он нужен и установке, и пробе, а скачивание
         // с официального источника — не то, что стоит делать дважды.
@@ -70,7 +71,7 @@ public static class EngineUpdateRealDoors
                 paths.NodeDir,
                 systemNode,
                 systemVersion,
-                lockFile,
+                EngineNode.StrictestLock(locks),
                 EngineNodeDoors.Real(new Update.HttpUpdateDownload()),
                 log);
 
@@ -104,14 +105,14 @@ public static class EngineUpdateRealDoors
             },
             Install: (version, _) =>
             {
-                var installed = Install(paths, lockFile, hints(), Node, version, log);
+                var installed = Install(paths, locks, hints(), Node, version, log);
 
                 if (!installed.Ok && wasOurs)
                     Restart(server(), log, PanelStrings.EngineUpdateEngineRestoredLog);
 
                 return installed;
             },
-            Probe: (version, _) => Probe(paths, lockFile, Node, version, log, server, wasOurs));
+            Probe: (version, _) => Probe(paths, Node, version, log, server, wasOurs));
     }
 
     /// <summary>Сколько ждём подъёма сервера заново. Замер: холодный запуск движка — 5,0 с.</summary>
@@ -154,7 +155,7 @@ public static class EngineUpdateRealDoors
     /// **«Либо целая, либо её нет».** Неудача упаковки — это `false`, и путь обновления на этом
     /// останавливается: обновление без копии вернуться к прежней работе не даст.
     /// </summary>
-    private static bool Copy(AppPaths paths, string version, Action<string> log)
+    internal static bool Copy(AppPaths paths, string version, Action<string> log)
     {
         var plan = EngineProfileCopy.Decide(paths.DshHome, paths.BackupsDir, DateTimeOffset.Now);
 
@@ -168,15 +169,56 @@ public static class EngineUpdateRealDoors
             CultureInfo.CurrentCulture,
             PanelStrings.EngineUpdateCopyProfileFormat, version) + " → " + Shell.DisplayMask.Path(plan.Target));
 
-        var created = ZipWriter.Write(
-            plan.Target,
-            new[] { new BackupSource(paths.DshHome, string.Empty, Everything: true) },
-            SevenZip.Find(),
-            progress: log);
+        // КОНЕЧНОЕ ИМЯ — ТОЛЬКО ГОТОВЫМ (Н-2, t14): пишем под `<конечное имя>.part` и публикуем одним
+        // переименованием. Прежде архив обновления писался прямо в `plan.Target`, то есть человек
+        // (и панель) видел в папке копий недоделанный архив под именем готовой копии.
+        var partial = plan.Target + ".part";
+        var published = false;
 
-        log(created.Summary());
+        try
+        {
+            var created = ZipWriter.Write(
+                partial,
+                new[] { new BackupSource(paths.DshHome, string.Empty, Everything: true) },
+                SevenZip.Find(),
+                progress: log);
 
-        return created.Ok;
+            log(created.Summary());
+
+            if (!created.Ok) return false;
+
+            try
+            {
+                File.Move(partial, plan.Target, overwrite: true);
+                published = true;
+            }
+            catch (Exception exception)
+            {
+                log(string.Format(
+                    CultureInfo.CurrentCulture, PanelStrings.ZipCreateFailedFormat,
+                    Shell.DisplayMask.Path(plan.Target), exception.Message));
+
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            // ГАРАНТИЯ ПОСТРОЕНИЯ (t14): при любом отказе — упаковка, переименование, исключение —
+            // временного файла не остаётся, а конечного имени без готового архива не появляется.
+            if (!published)
+            {
+                try
+                {
+                    if (File.Exists(partial)) File.Delete(partial);
+                }
+                catch
+                {
+                    // Недописанный архив не предмет обновления: о неудаче уже сказано строкой журнала.
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -186,13 +228,20 @@ public static class EngineUpdateRealDoors
     /// </summary>
     private static EngineInstallResult Install(
         AppPaths paths,
-        EngineTreeLock lockFile,
+        EngineTreeLocks locks,
         EngineHints hints,
         Func<EngineNodeResult> node,
         string version,
-        Action<string> log) =>
-        EngineInstaller.Install(
-            lockFile,
+        Action<string> log)
+    {
+        // ⚠️ ВЕРСИЯ, КОТОРУЮ ЗОВУТ ПОДСКАЗКИ ПРОВЕРЕННОЙ, идёт СТАРОЙ дорогой: установщик сверит её
+        // с замком («две правды об одном дереве»). Прочие версии — дорога отдельной просьбы: у них
+        // есть свой замок, и проверяется он, а не отметка в подсказках (так ставится линия 0.2.x,
+        // пока она не проверена; решение владельца — отдельной кнопкой с подтверждением).
+        var requested = EngineInstallDecisions.RequestedFor(hints, version);
+
+        return EngineInstaller.Install(
+            locks.Primary,
             hints,
             paths.EngineDir,
             DshEngine.FindNode(),
@@ -200,7 +249,10 @@ public static class EngineUpdateRealDoors
             EngineInstallDoors.Real,
             log,
             ownNode: node,
-            recordPath: paths.EngineStateFile);
+            recordPath: paths.EngineStateFile,
+            locks: locks,
+            requested: requested);
+    }
 
     /// <summary>
     /// ПРОВЕРИТЬ ЖИВЬЁМ. Движок поднимается на **свободном** порту в **своём временном доме**
@@ -212,7 +264,6 @@ public static class EngineUpdateRealDoors
     /// </summary>
     private static bool Probe(
         AppPaths paths,
-        EngineTreeLock lockFile,
         Func<EngineNodeResult> node,
         string version,
         Action<string> log,
@@ -309,7 +360,7 @@ public static class EngineUpdateRealDoors
         ArgumentNullException.ThrowIfNull(server);
         ArgumentNullException.ThrowIfNull(log);
 
-        var lockFile = EngineTreeLock.Load();
+        var locks = EngineTreeLocks.Load();
 
         EngineNodeResult? node = null;
 
@@ -324,7 +375,7 @@ public static class EngineUpdateRealDoors
                 paths.NodeDir,
                 systemNode,
                 systemVersion,
-                lockFile,
+                EngineNode.StrictestLock(locks),
                 EngineNodeDoors.Real(new Update.HttpUpdateDownload()),
                 log);
 

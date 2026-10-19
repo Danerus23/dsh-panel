@@ -615,6 +615,15 @@ public sealed class PhoneGate : IDisposable
     public static bool PortAllowed(int port) =>
         ServerDecisions.IsAllowedPort(port, mayOccupyOwnerPort: false) && !PortForbidden(port);
 
+    /// <summary>
+    /// ВСЕСЕТЕВОЙ ЛИ АДРЕС (`0.0.0.0`, `::` и их длинные записи). Отдельным решением, а не строкой
+    /// внутри запуска: это утверждение о безопасности калитки, и его надо уметь проверить само
+    /// по себе — без связывания, порта и сети (B-04 плана 2.2.0).
+    /// </summary>
+    public static bool WildcardAddress(IPAddress? address) =>
+        address is not null
+        && (address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any));
+
     // ---- запуск и остановка -----------------------------------------------------------------
 
     /// <summary>
@@ -663,6 +672,18 @@ public sealed class PhoneGate : IDisposable
         if (!IPAddress.TryParse(wanted, out var address))
         {
             return PhoneGateStart.No(PanelStrings.PhoneGateNoAddressLog, Loc.T(PanelStrings.PhoneGateNoAddressLog));
+        }
+
+        // ⚠️ ВСЕСЕТЕВОЙ АДРЕС НЕ БЕРЁТСЯ НИКОГДА (B-04 плана 2.2.0). `0.0.0.0` и `::` — это не
+        // «адрес машины», а «все адреса сразу»: с ними калитка открылась бы не человеку в его сети,
+        // а любому, кто до неё дотянется, включая чужие сети на этой машине. Прежняя редакция
+        // ОБЕЩАЛА это комментарием, но проверяла только «разбирается ли строка в адрес» — то есть
+        // обещание держалось на слове. Теперь оно держится кодом.
+        if (WildcardAddress(address))
+        {
+            return PhoneGateStart.No(
+                PanelStrings.PhoneGateAnyAddressLogFormat,
+                string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneGateAnyAddressLogFormat, wanted));
         }
 
         // (4) СВЯЗЫВАНИЕ. Здесь и только здесь порт действительно занимается.
@@ -1758,9 +1779,11 @@ public sealed class PhoneGate : IDisposable
 
         // ДВИЖОК ОТВЕЧАЕТ `200` И НА ОТКАЗ: чужой или уже снятый `eventId` приходит как
         // `gateway/internal` «identifies no active event stream» (замер §4). Поэтому «принято»
-        // решает не код HTTP, а отсутствие ошибки в конверте; иначе телефону сказали бы
-        // «ответ отправлен» там, где ответ никуда не пошёл.
-        if (EngineRpcClient.ErrorCode(answer.Body).Length > 0)
+        // решает не код HTTP, а конверт; иначе телефону сказали бы «ответ отправлен» там,
+        // где ответ никуда не пошёл.
+        var judged = PhoneDecisions.JudgeAnswer(answer.Body);
+
+        if (judged == PhoneDecisions.AnswerJudge.EnvelopeError)
         {
             lock (_gate)
             {
@@ -1776,6 +1799,21 @@ public sealed class PhoneGate : IDisposable
             return Say(403, false, !form
                 ? Loc.T(PanelStrings.PhoneGateStaleQuestion)
                 : Loc.T(PanelStrings.PhonePageTaken), "движок не знает такого события");
+        }
+
+        // ⚠️ КОНВЕРТ БЕЗ ОШИБКИ, А ОТВЕТ НЕ ПРИНЯТ (блок D плана 2.2.0, риск назван в L1): движок
+        // может ответить `200 {ok:true, value:false}` — так ведёт себя `userQuestions/answer` при
+        // профиле `mode: legacy`. Сегодня наша дверь (`$events/result`) принимает ответ на обеих
+        // версиях, но если апстрим переключит профиль на `mode: timed`, она начнёт отвечать так же
+        // — и без этой проверки человек прочитал бы «ответ отправлен», а вопрос остался бы висеть.
+        if (judged == PhoneDecisions.AnswerJudge.NotTaken)
+        {
+            _answering = false;
+
+            return Say(
+                502, false,
+                Loc.T(PanelStrings.PhoneGateAnswerNotTaken),
+                "движок ответ не принял");
         }
 
         lock (_gate)
@@ -2167,9 +2205,60 @@ public sealed class PhoneGate : IDisposable
                 string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneGateEngineRefusedFormat, engine.Status));
         }
 
-        // ОТВЕТ ДВИЖКА УХОДИТ ТЕЛЕФОНУ КАК ЕСТЬ: ни разбора, ни обрезки, ни добавления своего.
+        // ОТВЕТ ДВИЖКА УХОДИТ ТЕЛЕФОНУ КАК ЕСТЬ — с ОДНИМ исключением, и оно из ЗАМЕРА (блок D
+        // плана 2.2.0): список разговоров чистится от подчинённых сессий. Из 197 сессий владельца
+        // 179 — подчинённые, и `session/page` по ним отвечает «subagent Sessions require their
+        // durable parent address»: телефон увидел бы список, в котором почти нельзя ничего открыть.
+        if (string.Equals(verdict.Endpoint, PhoneDecisions.SessionListEndpoint, StringComparison.Ordinal))
+            return SessionListAnswer(engine);
+
         return new PhoneHttpResponse(engine.Status, "application/json; charset=utf-8", engine.Body, null);
     }
+
+    /// <summary>
+    /// ОТВЕТ НА СПИСОК РАЗГОВОРОВ: тот же ответ движка, но без подчинённых сессий
+    /// (<see cref="PhoneSessions"/>).
+    ///
+    /// **Не прячем молча, и это два разных «не молча»:**
+    /// * сколько строк убрано — говорится В ЖУРНАЛ панели числом (и только когда число меняется,
+    ///   иначе открытие списка заливало бы журнал одной и той же строкой);
+    /// * если форма ответа не та, какую мы мерили, ответ уходит телефону **КАК ЕСТЬ**, а причина
+    ///   называется в журнале: отфильтровать наугад хуже, чем не отфильтровать.
+    /// </summary>
+    private PhoneHttpResponse SessionListAnswer(PhoneEngineAnswer engine)
+    {
+        var filtered = PhoneSessions.Filter(engine.Body);
+
+        if (filtered.ShapeBroken)
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture, PanelStrings.PhoneSessionsShapeLogFormat, filtered.Shape));
+
+            return new PhoneHttpResponse(engine.Status, "application/json; charset=utf-8", engine.Body, null);
+        }
+
+        if (filtered.Hides && filtered.Dropped != _subordinateSessions)
+        {
+            _subordinateSessions = filtered.Dropped;
+
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.PhoneSessionsHiddenLogFormat,
+                filtered.Dropped,
+                filtered.Dropped + filtered.Kept));
+        }
+
+        return new PhoneHttpResponse(engine.Status, "application/json; charset=utf-8", filtered.Body, null);
+    }
+
+    /// <summary>
+    /// СКОЛЬКО ПОДЧИНЁННЫХ СЕССИЙ УБРАНО ИЗ СПИСКА В ПРОШЛЫЙ РАЗ (-1 — ещё ни разу).
+    ///
+    /// **Зачем помнить.** Журнал панели — не поток: список открывают повторно, и одна и та же строка
+    /// «убрано 179 из 197» на каждое открытие утопила бы в себе остальное. Строка пишется тогда,
+    /// когда число ИЗМЕНИЛОСЬ, — то есть когда у человека действительно что-то поменялось.
+    /// </summary>
+    private int _subordinateSessions = -1;
 
     /// <summary>Доводы из тела <c>{"args":{…}}</c> — СЫРЫМ текстом объекта и без толкования:
     /// панель не знает, что в них, и знать не должна. <c>null</c> — доводов нет вовсе.</summary>

@@ -226,6 +226,13 @@ public static class EngineRollbackSelfTest
         // ВРЕМЕННЫЙ ДОМ ПРОБЫ НЕ ОСТАЛСЯ: обе пробы (прежней версии) убирают за собой.
         Check("временный дом пробы убран", !Directory.Exists(Path.Combine(paths.StateDir, "engine-probe-" + older)));
 
+        // ⚠️ ПОГАСИТЬ СВОЙ СЕРВЕР — ПРОГОН ЗА СОБОЙ УБИРАЕТ. Найдено замером 18.10.2026 (задача `t4`,
+        // блок B): `Dispose()` у контроллера гасит только объект процесса, а НЕ движок, поэтому после
+        // этого самотеста в `%TEMP%` оставался живой `node` (дважды: PID 24016 и PID 32612). Прогон
+        // проверки обязан гасить то, что поднял, — те же правила, что у соседних самотестов.
+        var stopped = controller.Stop(confirmed: true);
+        Check("свой сервер погашен — прогон за собой убрал", !stopped.IsRunning);
+
         controller.Dispose();
 
         Print(report);

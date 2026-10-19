@@ -44,6 +44,37 @@ public class EngineRollbackDecisionsTests
     }
 
     /// <summary>
+    /// ОТКАТ С ЛИНИИ 0.2.x НА НАШУ ВЕРСИЮ (задача `t4`, блок B): на диске ДВЕ версии — `0.2.1-rc.2`
+    /// (стоит сейчас) и `0.1.5-rc.2` (прежняя, её держит уборка «текущая и прежняя»). Возврат —
+    /// это подъём сервера из соседней папки, замок для этого не нужен вовсе.
+    /// </summary>
+    [Fact]
+    public void Откат_с_линии_0_2_x_идёт_на_нашу_версию()
+    {
+        var record = Record("0.2.1-rc.2", "0.1.5-rc.2");
+        var plan = EngineRollbackDecisions.Decide(record, new[] { "0.1.5-rc.2", "0.2.1-rc.2" });
+
+        Assert.True(plan.Any, plan.RefusalKey);
+        Assert.Equal("0.2.1-rc.2", plan.Current);
+        Assert.Equal("0.1.5-rc.2", plan.Target);
+    }
+
+    /// <summary>
+    /// А ЕСЛИ ПРЕЖНЮЮ ПАПКУ УБРАЛИ — честное «возвращаться некуда», а не подъём в пустоту: запись
+    /// про версию пережила папку, и это ровно тот случай, ради которого второе правило и заведено.
+    /// </summary>
+    [Fact]
+    public void Откат_без_прежней_папки_называет_отказ()
+    {
+        var record = Record("0.2.1-rc.2", "0.1.5-rc.2");
+
+        var plan = EngineRollbackDecisions.Decide(record, new[] { "0.2.1-rc.2" });
+
+        Assert.False(plan.Any);
+        Assert.Equal(EngineRollbackRefusal.NoPrevious, plan.Refusal);
+        Assert.Equal(EngineRollbackDecisions.Words.NoPrevious, plan.RefusalKey);
+    }
+    /// <summary>
     /// ⚠️ ЧУЖАЯ ПАПКА В ОТКАТ НЕ ПОПАДАЕТ: панель возвращается только к тому, что СТАВИЛА САМА.
     /// Папка, заведённая человеком (или другой программой), — не наша установка, и трогать её нельзя.
     /// </summary>

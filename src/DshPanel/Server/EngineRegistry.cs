@@ -1,7 +1,14 @@
 namespace DshPanel.Server;
 
-/// <summary>Чем кончилось чтение реестра: версия и причина, если не вышло.</summary>
-public sealed record EngineRegistryFetch(string Version, string Detail)
+/// <summary>Чем кончилось чтение реестра: САМАЯ СВЕЖАЯ известная версия и причина, если не вышло.</summary>
+/// <param name="Version">
+/// Самая свежая из двух меток (`latest` и `next`) по правилу сравнения версий панели. Это НЕ всегда
+/// `latest`: у npm `next` бывает новее (замер 18.10.2026: `latest` = `0.2.0-rc.2`, `next` = `0.2.1-rc.2`),
+/// и показывать человеку `latest` значило бы сказать «новее нет» там, где оно есть.
+/// </param>
+/// <param name="Latest">Что реестр зовёт `latest` — как есть (для честной строки и для проверок).</param>
+/// <param name="Next">Что реестр зовёт `next`; пусто — метки нет или она не строка.</param>
+public sealed record EngineRegistryFetch(string Version, string Detail, string Latest = "", string Next = "")
 {
     /// <summary>Прочиталось ли: версия непустая — да.</summary>
     public bool Ok => Version.Length > 0;
@@ -15,18 +22,24 @@ public sealed record EngineRegistryFetch(string Version, string Detail)
 /// </summary>
 public interface IEngineRegistryClient
 {
-    /// <summary>Прочитать, какую версию реестр зовёт свежей. Исключений не бросает.</summary>
+    /// <summary>
+    /// Прочитать САМУЮ СВЕЖУЮ версию из реестра: старшую из меток `latest` и `next` (см.
+    /// <see cref="EngineRegistry.Parse"/>). Исключений не бросает.
+    /// </summary>
     EngineRegistryFetch Latest();
 }
 
 /// <summary>
-/// «СВЕЖАЯ» ВЕРСИЯ ИЗ РЕЕСТРА — то, что реестр зовёт `latest`. Это **не рекомендация**: панель
-/// показывает её ОТДЕЛЬНОЙ строкой («новее, но нами не проверена»), а ставит только по отдельной
-/// просьбе человека с подтверждением (решения владельца `6565ac9`, `f09da5d`).
+/// САМАЯ СВЕЖАЯ ВЕРСИЯ ИЗ РЕЕСТРА — по ДВУМ меткам (`latest` и `next`), а не по одной. Это
+/// **не рекомендация**: панель показывает её ОТДЕЛЬНОЙ строкой («новее, но нами не проверена»),
+/// а ставит только по отдельной просьбе человека с подтверждением (решения владельца `6565ac9`,
+/// `f09da5d`).
 ///
-/// **Почему реестр, а не наш файл подсказок.** Замер разведки E3.2 (10.10.2026): реестр зовёт свежей
-/// `0.2.0-rc.2` (`latest` = `next`, всего 31 версия), а проверена и рекомендована `0.1.5-rc.2` —
-/// именно поэтому строк ДВЕ, и они честно разные.
+/// **Почему реестр, а не наш файл подсказок.** Замер 18.10.2026 (задача t3 плана 2.2.0): всего
+/// **36** версий, `latest` = **`0.2.0-rc.2`**, `next` = **`0.2.1-rc.2`**, `alpha` = `0.2.1-alpha.5`.
+/// Прежняя редакция этого пояснения говорила «`latest` = `next`, всего 31 версия» — это устарело
+/// (замер E3.2 10.10.2026), и как раз поэтому читать ОДНУ метку нельзя: более свежая версия жила
+/// в `next`, то есть была для панели невидимой.
 ///
 /// ⚠️ **Разбор терпимый, а сеть — отдельно.** Здесь только разбор ответа реестра (чистая функция):
 /// его проверяют подставными ответами. Живое чтение — <see cref="HttpEngineRegistryClient"/>,
@@ -38,9 +51,13 @@ public static class EngineRegistry
     public const string PackageUrl = "https://registry.npmjs.org/@deepseek-ai%2Fdsh";
 
     /// <summary>
-    /// СВЕЖАЯ ВЕРСИЯ ИЗ ОТВЕТА РЕЕСТРА: `dist-tags.latest`. Чего-то нет, ответ не объект, версия
-    /// не строка или пуста — пустая строка, то есть «свежую не узнали»: выдумывать её нельзя,
-    /// по ней человек принимает решение.
+    /// САМАЯ СВЕЖАЯ ВЕРСИЯ ИЗ ОТВЕТА РЕЕСТРА: сравниваются `dist-tags.latest` и `dist-tags.next`
+    /// правилом панели (<see cref="Update.UpdateDecisions.IsNewer"/>) и берётся старшая. Чего-то
+    /// нет, ответ не объект, `latest` не строка или пуста — пустая строка, то есть «свежую не
+    /// узнали»: выдумывать её нельзя, по ней человек принимает решение.
+    ///
+    /// ⚠️ `next` при этом НЕОБЯЗАТЕЛЕН: реестр может его не иметь или назвать не строкой — тогда
+    /// свежая берётся из `latest`, как раньше. Отсутствие `next` — не повод не знать свежую.
     /// </summary>
     public static EngineRegistryFetch Parse(string? json)
     {
@@ -60,13 +77,22 @@ public static class EngineRegistry
             if (!tags.TryGetProperty("latest", out var latest) || latest.ValueKind != System.Text.Json.JsonValueKind.String)
                 return EngineRegistryFetch.Failed("в ответе реестра нет latest");
 
-            var version = latest.GetString()?.Trim() ?? string.Empty;
+            var latestVersion = latest.GetString()?.Trim() ?? string.Empty;
 
             // Хвост вида `0.2.0-rc.2` сохраняется КАК ЕСТЬ: это версия, которую человек увидит
             // в строке, и подменять её «очищенной» значило бы показывать не то, что в реестре.
-            return version.Length == 0
-                ? EngineRegistryFetch.Failed("реестр назвал пустую версию")
-                : new EngineRegistryFetch(version, string.Empty);
+            if (latestVersion.Length == 0)
+                return EngineRegistryFetch.Failed("реестр назвал пустую версию");
+
+            var nextVersion = tags.TryGetProperty("next", out var next) && next.ValueKind == System.Text.Json.JsonValueKind.String
+                ? next.GetString()?.Trim() ?? string.Empty
+                : string.Empty;
+
+            var freshest = nextVersion.Length > 0 && Update.UpdateDecisions.IsNewer(nextVersion, latestVersion)
+                ? nextVersion
+                : latestVersion;
+
+            return new EngineRegistryFetch(freshest, string.Empty, latestVersion, nextVersion);
         }
         catch (Exception error)
         {

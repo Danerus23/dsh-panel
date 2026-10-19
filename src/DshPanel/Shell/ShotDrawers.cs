@@ -91,6 +91,72 @@ public static class ShotDrawers
     /// значило бы, что дверь соврала бы о работе, которой не было.
     /// </summary>
     public static IUpdateInstall Install() => new ShotInstall();
+
+    /// <summary>
+    /// ДВЕРЬ ЦЕН ДЛЯ КАДРА «ПИКИ И ТАРИФЫ» — ОБРАЗЦОВЫЙ СНИМОК, СЕТЬ НЕ СПРАШИВАЕТСЯ ВОВСЕ (t13, 18.10.2026).
+    ///
+    /// **От какого случая.** Кадр «пиков» получал НАСТОЯЩИЙ контроллер цен, а он в прогоне проверки
+    /// прав ходить в сеть не имеет — и блок «Стоимость» выходил ПУСТЫМ со словами «Цены не читались:
+    /// это прогон проверки — в сеть панель не ходит». Владелец увидел на витрине нашу механику
+    /// вместо вида продукта. Лечится образцовой дверью: окно не меняется ни строкой, оно и так
+    /// рисует таблицу по тому, что ему дали.
+    ///
+    /// ⚠️ **Ни одного сетевого выхода и ни одного файла владельца:** строки — литералы
+    /// (<see cref="ShotSamples.PricingSnapshotSample"/>), история — та же строка, что у кадра
+    /// «История цен». Выдаётся только ветви съёмки.
+    /// </summary>
+    public static IPricingControl Pricing() => new ShotPricing();
+}
+
+/// <summary>
+/// ЦЕНЫ НА КАДРЕ «ПИКИ И ТАРИФЫ»: образцовый снимок и слова ЖИВОЙ двери.
+///
+/// ⚠️ **Слова собираются ТЕМИ ЖЕ строками словаря и теми же решениями, что у
+/// <see cref="PricingController"/>** (`PriceSourceFormat`, `PriceTableTitleFormat`,
+/// `PricingDecisions.CheckedText`): иначе кадр показывал бы текст, которого человек не увидит,
+/// и витрина расходилась бы с продуктом. Проверяется это тестом кадров
+/// (`ShotSampleDoorsTests`), а не глазами.
+/// </summary>
+public sealed class ShotPricing : IPricingControl
+{
+    private readonly PricingSnapshot _snapshot = ShotSamples.PricingSnapshotSample();
+
+    /// <summary>Снимок образцовый, но форма — та же, что у удавшегося разбора.</summary>
+    public PricingResult Result =>
+        new(true, string.Empty, _snapshot.SourceUrl, _snapshot.Language, _snapshot.Model, _snapshot.Rows, _snapshot.Windows, _snapshot.At);
+
+    public bool Busy => false;
+
+    /// <summary>На кадре право есть: человек видит рабочую панель, а не запрет прогона.</summary>
+    public bool Allowed => true;
+
+    public string PriceHeadingText =>
+        string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            PanelStrings.PriceTableTitleFormat,
+            _snapshot.Model);
+
+    public string PriceSourceText =>
+        string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            PanelStrings.PriceSourceFormat,
+            _snapshot.SourceUrl,
+            PricingDecisions.CheckedText(PricingDecisions.Stamp(_snapshot.At)));
+
+    /// <summary>Спрашивать нечего: на кадре цены уже есть. Пусто — и это правило, а не заглушка.</summary>
+    public void Refresh()
+    {
+    }
+
+    /// <summary>История — та же образцовая строка, что у кадра «История цен».</summary>
+    public PricingHistory History { get; } = PricingHistoryStore.Decode(ShotSamples.PricingHistoryText());
+
+    /// <summary>Слушателей на кадре нет: цены не меняются.</summary>
+    public event Action? Changed
+    {
+        add { }
+        remove { }
+    }
 }
 
 /// <summary>
@@ -226,6 +292,14 @@ public sealed class ShotEngine : IEngineUpdateSection
     public string RollbackTarget => string.Empty;
 
     public PanelQuestion RollbackQuestion => UpdateQuestion;
+
+    /// <summary>
+    /// ВОПРОС ПОД КОНКРЕТНУЮ ВЕРСИЮ НА КАДРЕ — тот же, что и обычный: образцовая дверь диска не
+    /// имеет, поэтому чисел о журнале сессий здесь не бывает, а выдумывать их нельзя (тем же
+    /// правилом, что у образцового автозапуска: кадр обязан быть воспроизводимым). Кадр кнопку
+    /// не нажимает, а тексты вопроса проверяются на живом пути — `SettingsEngineBlockTests`.
+    /// </summary>
+    public PanelQuestion UpdateQuestionFor(bool freshWanted) => UpdateQuestion;
 
     public string Rollback() => PanelStrings.EngineUpdateNoRecommended;
 }

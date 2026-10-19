@@ -427,6 +427,164 @@ public sealed class PhoneGateTests
         Assert.Equal(PanelStrings.PhoneGateNoAddressLog, start.ReasonKey);
     }
 
+    /// <summary>
+    /// ВСЕСЕТЕВОЙ АДРЕС НЕ БЕРЁТСЯ НИКОГДА (B-04 плана 2.2.0).
+    ///
+    /// **От какого случая.** Калитка обещала это КОММЕНТАРИЕМ («0.0.0.0 здесь не берётся ни при
+    /// каких обстоятельствах»), а код проверял только «разбирается ли строка в адрес» — то есть
+    /// обещание держалось на слове. `0.0.0.0` и `::` значат «все адреса сразу»: с ними калитка
+    /// открылась бы не человеку в его сети, а любому, кто до машины дотянется.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«убрать проверку»** (калитка встанет на `0.0.0.0`)
+    /// и **«проверять только `0.0.0.0`»** (встанет на `::`).
+    /// </summary>
+    [Fact]
+    public void Всесетевой_адрес_не_берётся()
+    {
+        foreach (var address in new[] { "0.0.0.0", "::", "0:0:0:0:0:0:0:0" })
+        {
+            using var stand = NewStand(address: address);
+
+            var start = stand.Gate.Start();
+
+            Assert.False(start.Opened, $"калитка встала на всесетевой адрес {address}");
+            Assert.Equal(PanelStrings.PhoneGateAnyAddressLogFormat, start.ReasonKey);
+            Assert.Contains(address, start.Text, StringComparison.Ordinal);
+            Assert.False(stand.Gate.Listening);
+
+            // И ПОРТ СВОБОДЕН: отказ — не «попробовала и не вышло», а «не пробовала вовсе».
+            Assert.True(CanBind(stand.Port), $"порт {stand.Port} занят, хотя адрес всесетевой");
+        }
+
+        // Само решение тоже проверяется отдельно: оно о безопасности, а не о связывании.
+        Assert.True(PhoneGate.WildcardAddress(System.Net.IPAddress.Parse("0.0.0.0")));
+        Assert.True(PhoneGate.WildcardAddress(System.Net.IPAddress.Parse("::")));
+        Assert.False(PhoneGate.WildcardAddress(System.Net.IPAddress.Parse("127.0.0.1")));
+        Assert.False(PhoneGate.WildcardAddress(System.Net.IPAddress.Parse("192.168.1.10")));
+        Assert.False(PhoneGate.WildcardAddress(null));
+    }
+
+    /// <summary>
+    /// СПИСОК РАЗГОВОРОВ ЧИСТИТСЯ ОТ ПОДЧИНЁННЫХ СЕССИЙ, и об этом сказано ЧИСЛОМ в журнале
+    /// (блок D плана 2.2.0, решение капитана; замер `l2`: 179 из 197 подчинённых, `session/page`
+    /// по ним отвечает «subagent Sessions require their durable parent address»).
+    ///
+    /// ⚠️ Проверка идёт ЖИВЫМ ПУТЁМ калитки: тот же белый список, тот же пропуск устройства, тот же
+    /// ответ — меняется только тело, которое отдаёт подставной движок.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«вернуть ответ движка как есть»** и
+    /// **«фильтровать молча»** (без строки в журнале).
+    /// </summary>
+    [Fact]
+    public async Task Подчинённые_сессии_не_показываются_телефону()
+    {
+        using var stand = NewStand();
+
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        stand.Reply = new PhoneEngineAnswer(
+            200,
+            "{\"type\":\"server-response\",\"rpcId\":\"r1\",\"result\":{\"ok\":true,\"value\":{\"items\":["
+            + "{\"sessionId\":\"s-1\",\"blank\":false},"
+            + "{\"sessionId\":\"s-2\",\"parentSessionId\":\"s-1\",\"blank\":false},"
+            + "{\"sessionId\":\"s-3\",\"origin\":\"subagent\",\"blank\":false}]}}}");
+
+        var reply = await Send(
+            stand.Http, HttpMethod.Post, "/api/session/list", "{\"args\":{\"_request\":{}}}", cookie);
+
+        Assert.Equal(200, reply.Status);
+        Assert.Contains("\"s-1\"", reply.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"s-2\"", reply.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"s-3\"", reply.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("parentSessionId", reply.Body, StringComparison.Ordinal);
+
+        // НЕ ПРЯЧЕМ МОЛЧА: число убрано и сказано.
+        Assert.Contains(
+            stand.Log,
+            line => line.Contains("2", StringComparison.Ordinal) && line.Contains("3", StringComparison.Ordinal)
+                && line.Contains("подчинённые сессии", StringComparison.OrdinalIgnoreCase));
+
+        // А остальные вызовы по-прежнему уходят телефону БЕЗ разбора и обрезки: то же тело байт в байт.
+        stand.Reply = new PhoneEngineAnswer(200, "{\"result\":{\"ok\":true,\"value\":{\"items\":[{\"sessionId\":\"s-9\"}]}}}");
+
+        var other = await Send(
+            stand.Http, HttpMethod.Post, "/api/session/page", "{\"args\":{\"request\":{}}}", cookie);
+
+        Assert.Equal(stand.Reply.Body, other.Body);
+    }
+
+    /// <summary>
+    /// ФОРМА ОТВЕТА НЕ ТА, КАКУЮ МЫ МЕРИЛИ, — ОТВЕТ УХОДИТ КАК ЕСТЬ, и причина названа в журнале.
+    ///
+    /// Это и есть граница фильтра: отфильтровать наугад значило бы однажды выбросить из списка
+    /// живые разговоры. Поэтому «не смогли» здесь честнее, чем «попробовали».
+    /// </summary>
+    [Fact]
+    public async Task Незнакомая_форма_списка_уходит_как_есть()
+    {
+        using var stand = NewStand();
+
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        stand.Reply = new PhoneEngineAnswer(200, "{\"result\":{\"ok\":true,\"sessions\":[{\"id\":1}]}}");
+
+        var reply = await Send(
+            stand.Http, HttpMethod.Post, "/api/session/list", "{\"args\":{\"_request\":{}}}", cookie);
+
+        Assert.Equal(200, reply.Status);
+        Assert.Equal(stand.Reply.Body, reply.Body);
+        Assert.Contains(stand.Log, line => line.Contains("не той формы", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// ОТВЕТ, КОТОРЫЙ ДВИЖОК НЕ ПРИНЯЛ, НЕ ВЫДАЁТСЯ ЗА ОТПРАВЛЕННЫЙ (блок D плана 2.2.0).
+    ///
+    /// **От какого замера (`l1`).** Старая дверь (`$events/result`) принимает ответ на обеих версиях
+    /// (`200 {ok:true}`), а `userQuestions/*` отвечают `200 {ok:true, value:false}` — «не принял».
+    /// Риск назван в задаче: если апстрим переключит профиль на `mode: timed`, старая дверь начнёт
+    /// отвечать молча, и без этой проверки человек прочитал бы «ответ отправлен» там, где вопрос висит.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«считать принятым всё, где нет кода ошибки»** и
+    /// **«снимать вопрос, даже когда ответ не принят»**.
+    /// </summary>
+    [Fact]
+    public async Task Непринятый_ответ_не_выдаётся_за_отправленный()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        events.Emit("{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"ready\",\"clientId\":\"client-42\"}}");
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-7\",\"request\":{\"questions\":[]}}}");
+
+        stand.Reply = new PhoneEngineAnswer(
+            200, "{\"type\":\"server-response\",\"rpcId\":\"r1\",\"result\":{\"ok\":true,\"value\":false}}");
+
+        var reply = await Send(
+            stand.Http, HttpMethod.Post, "/answer",
+            "{\"eventId\":\"event-7\",\"answers\":[{\"id\":\"q1\",\"selected\":[\"Да\"]}]}", cookie);
+
+        // Это НЕ «ответ отправлен»: код отказа и слова, а не 200.
+        Assert.NotEqual(200, reply.Status);
+        Assert.Contains(Loc.T(PanelStrings.PhoneGateAnswerNotTaken), reply.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain(Loc.T(PanelStrings.PhoneGateAnswerSent), reply.Body, StringComparison.Ordinal);
+
+        // ВОПРОС ОСТАЛСЯ: телефон, открыв страницу заново, обязан увидеть тот же вопрос, а не пустоту.
+        var page = await Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie);
+
+        Assert.Equal(200, page.Status);
+        Assert.Contains("\"state\":\"question\"", page.Body, StringComparison.Ordinal);
+    }
+
     /// <summary>ПОСЛЕ ОСТАНОВКИ ПОРТ СВОБОДЕН: «остановилась, а порт держит» выглядело бы как
     /// «калитка не остановилась», и человек не смог бы её поднять заново.</summary>
     [Fact]

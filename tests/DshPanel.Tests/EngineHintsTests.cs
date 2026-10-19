@@ -508,6 +508,36 @@ public sealed class EngineHintsTests
         Assert.All(hints.Versions, hint => Assert.Equal(hint.Version == EngineRpcSurface.MeasuredOnVersion, hint.Verified));
     }
 
+    /// <summary>
+    /// ЗАПИСЬ ПРО ЛИНИЮ 0.2.x НЕ РАСХОДИТСЯ С КАТАЛОГОМ ПОВЕРХНОСТИ. Файл подсказок правится руками
+    /// и без выпуска панели, поэтому разойтись с кодом он может молча — здесь это ловится до коммита:
+    ///
+    ///   * запись про `0.2.1-rc.2` есть (её читает человек, у которого этот движок стоит);
+    ///   * она НЕ выдаёт версию проверенной;
+    ///   * в её бедах названы ВСЕ семь имён из `EngineRpcSurface.Retired` — по одному месту в коде;
+    ///   * в её заметках названы числа замера: 77 нужных имён и 67 новых.
+    ///
+    /// ⚠️ Мутация «вычеркнуть имя из бед» или «поменять число» краснит именно эту проверку.
+    /// </summary>
+    [Fact]
+    public void Запись_про_линию_0_2_x_называет_потери_и_числа_замера()
+    {
+        var hints = EngineHints.Parse(File.ReadAllText(Path.Combine(RepositoryRoot(), "engine-hints.json")));
+
+        var line = hints.Find(EngineRpcSurface.KnownOnVersion);
+
+        Assert.True(line is not null, $"в файле нет записи про версию {EngineRpcSurface.KnownOnVersion}");
+        Assert.False(line!.Verified, "запись про 0.2.x выдаёт её проверенной");
+
+        var troubles = string.Join("\n", EngineHints.TroublesFor(line, "ru"));
+        var notes = string.Join("\n", EngineHints.NotesFor(line, "ru"));
+
+        Assert.Equal(EngineRpcSurface.Retired.Count, EngineRpcSurface.Retired.Count(name => troubles.Contains(name, StringComparison.Ordinal)));
+        Assert.Contains(EngineRpcSurface.RequiredTotal.ToString(System.Globalization.CultureInfo.InvariantCulture), notes, StringComparison.Ordinal);
+        Assert.Contains(EngineRpcSurface.KnownAddedCount.ToString(System.Globalization.CultureInfo.InvariantCulture), notes, StringComparison.Ordinal);
+        Assert.Contains("v4", troubles, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Корень репозитория — вверх от каталога сборки по файлу <c>DshPanel.slnx</c>.</summary>
     private static string RepositoryRoot()
     {

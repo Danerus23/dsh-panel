@@ -73,6 +73,28 @@ public class SettingsEngineBlockTests
         public PanelQuestion UpdateQuestion { get; set; } =
             new("Обновить движок?", "поставим рекомендованную 0.1.5-rc.2?", "Да, обновить", "Отмена", "п.", "п.");
 
+        /// <summary>
+        /// ЧЕМ ОКНО СПРОСИЛО ПРО ОБНОВЛЕНИЕ: `false` — главная кнопка, `true` — отдельная кнопка
+        /// свежей версии. Список нужен, чтобы проверка видела, ЧТО окно спросило у двери: блок C
+        /// перенёс сборку вопроса в дверь, и «окно спросило про свежую версию» стало отдельным
+        /// утверждением о пути, а не о тексте, который окно сложило само.
+        /// </summary>
+        public List<bool> QuestionCalls { get; } = new();
+
+        /// <summary>
+        /// ВОПРОС ПОД ТУ ВЕРСИЮ, КОТОРУЮ ПОСТАВЯТ (блок C). Здесь он собран ТАК ЖЕ, как у живой
+        /// двери: у отдельной кнопки названа свежая версия — иначе проверка «окно спросило про
+        /// свежую» проверяла бы подставной текст, а не путь окна.
+        /// </summary>
+        public PanelQuestion UpdateQuestionFor(bool freshWanted)
+        {
+            QuestionCalls.Add(freshWanted);
+
+            if (!freshWanted || Fresh.Length == 0) return UpdateQuestion;
+
+            return UpdateQuestion with { Text = "поставим непроверенную " + Fresh + "?" };
+        }
+
         public bool RollbackAvailable { get; set; }
         public string RollbackTarget { get; set; } = "0.1.4-rc.2";
 
@@ -530,6 +552,58 @@ public class SettingsEngineBlockTests
         finally
         {
             window.CloseQuietly();
+        }
+    }
+
+    /// <summary>
+    /// ВОПРОС ОТДЕЛЬНОЙ КНОПКИ СОБИРАЕТ ДВЕРЬ, А НЕ ОКНО (блок C плана 2.2.0).
+    ///
+    /// **От какого случая.** Окно складывало текст вопроса САМО: брало `EngineUpdateAskFormat`
+    /// и подставляло свежую версию. Из-за этого всё, что дверь добавляла к вопросу — предупреждение
+    /// о журнале сессий с числом, — до человека не доходило: у отдельной кнопки текст терял
+    /// предупреждение, хотя у главной оно было. Теперь окно спрашивает дверь
+    /// (`UpdateQuestionFor(freshWanted)`), и проверка смотрит именно на ЭТОТ вызов.
+    ///
+    /// Мутация, которая обязана упасть здесь: **«вернуть окну свою сборку текста»**.
+    /// </summary>
+    [AvaloniaFact]
+    public void Отдельная_кнопка_спрашивает_дверь_о_свежей_версии()
+    {
+        var (window, section, asked) = Stand();
+
+        try
+        {
+            var fresh = FindButton(window, "EngineInstallFreshButton");
+
+            Click(fresh);   // первый щелчок — предупреждение словами, без вопроса
+            Click(fresh);   // второй — вопрос человеку
+
+            SettleUntil(() => section.Calls.Count == 1, "отдельная кнопка не дошла до работы");
+
+            Assert.Equal(new[] { true }, section.QuestionCalls);
+            Assert.Single(asked);
+            Assert.Contains(section.Fresh, asked[0], StringComparison.Ordinal);
+        }
+        finally
+        {
+            window.CloseQuietly();
+        }
+
+        // А главная кнопка спрашивает дверь про рекомендованную версию (`false`) — не про свежую.
+        var (main, mainSection, mainAsked) = Stand();
+
+        try
+        {
+            Click(FindButton(main, "EngineUpdateButton"));
+
+            SettleUntil(() => mainSection.Calls.Count == 1, "главная кнопка не дошла до работы");
+
+            Assert.Equal(new[] { false }, mainSection.QuestionCalls);
+            Assert.Equal(mainSection.UpdateQuestion.Text, mainAsked[0]);
+        }
+        finally
+        {
+            main.CloseQuietly();
         }
     }
 

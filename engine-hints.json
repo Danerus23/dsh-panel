@@ -38,30 +38,68 @@
       "verified": false,
       "notes": {
         "ru": [
-          "Проба панели на этой версии НЕ пройдена: поверхность вызовов другая — движок объявляет 140 имён против 84 в списке панели, семь наших имён пропали, 63 появились; живой опрос признаёт 77 из 84.",
-          "Ставить её вместо проверенной нельзя. Умения панели (8 из 8) и версия движка при этом читаются — расхождение именно в списке вызовов."
+          "Панель на этой версии НЕ проверена и не предлагает её ставить: проверенной остаётся 0.1.5-rc.2. Набора нет у самой 0.2.0: линия 0.2.x — это 0.2.1-rc.2.",
+          "Сверка поверхности: 77 нужных панели имён живы, семь наших имён эта версия больше не объявляет (панель их не зовёт), появилось 63 новых. Линия та же, что 0.2.1, но набор имён ДРУГОЙ: три имени есть только у 0.2.0 — terminal/follow, terminal/resize, terminal/write; панель их не знает и назовёт тревогой."
         ],
         "en": [
-          "The panel's probe does NOT pass on this version: the call surface is different — the engine declares 140 names against 84 in the panel's list, seven of our names are gone, 63 are new; the live sweep recognises 77 of 84.",
-          "Do not put it in place of the verified version. The panel's skills (8 of 8) and the engine version do read fine — the mismatch is in the call list itself."
+          "The panel is NOT verified on this version and does not offer to install it: 0.1.5-rc.2 stays the verified one. There is no set for 0.2.0 itself: the 0.2.x line is 0.2.1-rc.2.",
+          "Surface check: all 77 names the panel needs are alive, seven of our names are no longer declared (the panel never calls them), 63 are new. Same line as 0.2.1, but a DIFFERENT set of names: three exist only in 0.2.0 — terminal/follow, terminal/resize, terminal/write; the panel does not know them and will raise the alarm."
         ],
         "zh": [
-          "面板的检查在此版本上未通过：调用面不同——引擎声明 140 个名称，而面板清单为 84 个；我们清单中的七个名称消失，新增 63 个；实际探测确认 77/84。",
-          "不要用它替换已验证版本。面板能力（8/8）与引擎版本都能正常读取——不一致在于调用清单本身。"
+          "面板未在此版本上验证，也不建议安装：已验证版本仍是 0.1.5-rc.2。0.2.0 本身没有版本集：0.2.x 线就是 0.2.1-rc.2。",
+          "调用面核对：面板需要的 77 个名称均存在；我们清单中的七个名称不再声明（面板从不调用它们），新增 63 个。与 0.2.1 同一线，但名称集合不同：三个只在 0.2.0 中存在——terminal/follow、terminal/resize、terminal/write；面板不认识它们，会报出提醒。"
         ]
       },
       "troubles": {
         "ru": [
-          "Пропали вызовы, которыми панель уже пользуется: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, workspaceFiles/readAll, workspaceFiles/readRelated, subagents/list.",
-          "Формат журнала сессий — v4: сессии, созданные этой версией, движок 0.1.5-rc.2 не открывает («log format v4, but this harness reads only v3»). Сессии, созданные раньше, эта версия открывает."
+          "Пропали семь имён, которые жили ТОЛЬКО в каталоге панели и живьём не звались: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, subagents/list, workspaceFiles/readAll, workspaceFiles/readRelated. Панель их не зовёт — потеря ничего не ломает.",
+          "Формат журнала сессий — v4: сессии, созданные этой версией, движок 0.1.5-rc.2 не открывает («log format v4, but this harness reads only v3»)."
         ],
         "en": [
-          "Calls the panel already uses are gone: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, workspaceFiles/readAll, workspaceFiles/readRelated, subagents/list.",
-          "The session log format is v4: sessions created by this version are not opened by engine 0.1.5-rc.2 (\"log format v4, but this harness reads only v3\"). Sessions created earlier are opened by this version."
+          "Seven names that lived ONLY in the panel's catalog and were never called at run time are gone: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, subagents/list, workspaceFiles/readAll, workspaceFiles/readRelated. The panel does not call them — the loss breaks nothing.",
+          "The session log format is v4: sessions created by this version are not opened by engine 0.1.5-rc.2 (\"log format v4, but this harness reads only v3\")."
         ],
         "zh": [
-          "面板已在使用的调用消失：agentPresets/copy、agentPresets/deletePreset、settings/canOpenAgentPresetDirectory、settings/openAgentPresetDirectory、workspaceFiles/readAll、workspaceFiles/readRelated、subagents/list。",
-          "会话日志格式为 v4：此版本创建的会话，引擎 0.1.5-rc.2 无法打开（「log format v4, but this harness reads only v3」）。此前创建的会话，此版本可以打开。"
+          "面板清单中仅存、运行时不调用的七个名称消失：agentPresets/copy、agentPresets/deletePreset、settings/canOpenAgentPresetDirectory、settings/openAgentPresetDirectory、subagents/list、workspaceFiles/readAll、workspaceFiles/readRelated。面板不调用它们——这一损失不会破坏任何功能。",
+          "会话日志格式为 v4：此版本创建的会话，引擎 0.1.5-rc.2 无法打开（「log format v4, but this harness reads only v3」）。"
+        ]
+      }
+    },
+    {
+      "version": "0.2.1-rc.2",
+      "verified": false,
+      "notes": {
+        "ru": [
+          "Набор версий для 0.2.1-rc.2 есть: 683 пакета, сумма закреплена в сборке, проба по нему прошла 77/77 имён и 8/8 умений. Ставится отдельной кнопкой с подтверждением. Версией по умолчанию остаётся 0.1.5-rc.2: панель не проверена на 0.2.1 целиком — живой телефон на ней не перемерян приёмкой, живой вопрос на странице телефона не поднимался (нужна правка), установщик и чистая ВМ не прогонялись.",
+          "Сверка поверхности: нужных панели имён 77 из 77 эта версия объявляет и признаёт живьём; семь наших имён она больше не объявляет (панель их не зовёт), зато появилось 67 новых в 16 семействах — панель их не использует.",
+          "Умения панели на этой версии читаются: живой вопрос и ответ на него проверены отдельным прогоном 18.10.2026."
+        ],
+        "en": [
+          "A version set exists for 0.2.1-rc.2: 683 packages, the sum is pinned in the build, and the probe passed on it — 77/77 names and 8/8 skills. It is installed by a separate button with confirmation. 0.1.5-rc.2 stays the default version: the panel is not verified on 0.2.1 in full — the live phone was not re-measured there by acceptance, the live question on the phone page was not raised (a fix is required), and the installer and a clean VM were not run.",
+          "Surface check: all 77 names the panel needs are declared and recognised live; seven of our names are no longer declared (the panel never calls them), while 67 are new in 16 families — the panel does not use them.",
+          "The panel's skills do read on this version: a real question and its answer were verified by a separate run on 18.10.2026."
+        ],
+        "zh": [
+          "0.2.1-rc.2 已有版本集：683 个包，校验和在构建中固定，按该集进行的检查已通过——77/77 个名称和 8/8 项能力。它由单独的按钮并带确认来安装。默认版本仍是 0.1.5-rc.2：面板未在 0.2.1 上完整验证——验收未在该版本上重测实际手机，手机页面的实际提问未发起（需修复），安装程序与干净虚拟机未运行。",
+          "调用面核对：面板需要的 77 个名称全部被声明并实际确认；我们清单中的七个名称不再声明（面板从不调用它们），新增 67 个，分布在 16 个家族——面板不使用它们。",
+          "面板能力在此版本上可读取：真实提问与回答已由 18.10.2026 的单独运行验证。"
+        ]
+      },
+      "troubles": {
+        "ru": [
+          "Пропали семь имён, которые жили ТОЛЬКО в каталоге панели и живьём не звались: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, subagents/list, workspaceFiles/readAll, workspaceFiles/readRelated. Панель их не зовёт — потеря ничего не ломает.",
+          "Журнал сессий — v4. Сессия, открытая под этой версией, для 0.1.5-rc.2 ИСЧЕЗАЕТ ИЗ СПИСКА МОЛЧА (замер 18.10.2026: было видно 197 сессий, после одного открытия — 196; движок не пишет ни строки). Лечится уносом файла session.v4.jsonl.zstd из папки сессии.",
+          "Подчинённые сессии (у кого есть родитель) этой версией напрямую не открываются: session/page отвечает session/agent-busy «subagent Sessions require their durable parent address»."
+        ],
+        "en": [
+          "Seven names that lived ONLY in the panel's catalog and were never called at run time are gone: agentPresets/copy, agentPresets/deletePreset, settings/canOpenAgentPresetDirectory, settings/openAgentPresetDirectory, subagents/list, workspaceFiles/readAll, workspaceFiles/readRelated. The panel does not call them — the loss breaks nothing.",
+          "The session log is v4. A session opened by this version DISAPPEARS FROM THE LIST SILENTLY under 0.1.5-rc.2 (measured 18.10.2026: 197 sessions visible, 196 after a single open; the engine writes no line at all). Cure: move session.v4.jsonl.zstd out of the session folder.",
+          "Subagent sessions (those with a parent) cannot be opened directly by this version: session/page answers session/agent-busy \"subagent Sessions require their durable parent address\"."
+        ],
+        "zh": [
+          "面板清单中仅存、运行时不调用的七个名称消失：agentPresets/copy、agentPresets/deletePreset、settings/canOpenAgentPresetDirectory、settings/openAgentPresetDirectory、subagents/list、workspaceFiles/readAll、workspaceFiles/readRelated。面板不调用它们——这一损失不会破坏任何功能。",
+          "会话日志为 v4。由此版本打开的会话在 0.1.5-rc.2 下会从列表中静默消失（18.10.2026 实测：可见 197 个会话，打开一个后为 196；引擎不写任何一行）。处理办法：把 session.v4.jsonl.zstd 移出该会话目录。",
+          "子代理会话（有父会话的）无法由此版本直接打开：session/page 返回 session/agent-busy「subagent Sessions require their durable parent address」。"
         ]
       }
     }

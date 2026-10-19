@@ -34,7 +34,7 @@
 
     <AssemblyName>DshPanel</AssemblyName>
     <RootNamespace>DshPanel</RootNamespace>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <Product>DSH Panel</Product>
   </PropertyGroup>
 
@@ -78,10 +78,20 @@
       дерева; в раздачу он входит этим ресурсом, а обновляться может отдельно — одним файлом
       данных, как подсказки о версиях.
 
-      Имя ресурса получается из пути точками, и оно НЕ хардкодится: `EngineTreeLock` ищет замок
-      по суффиксу `.EngineLock.json`. Файл без BOM: `.json` с меткой ломает разбор.
+      Имя ресурса получается из пути точками, и оно НЕ хардкодится: `EngineTreeLocks` ищет замки
+      по СУФФИКСУ `.EngineTreeLock` (замков теперь два — см. ниже). Файл без BOM: `.json`
+      с меткой ломает разбор. ⚠️ Замки лежат с CRLF (`.gitattributes`: `*.json text eol=crlf`),
+      и это ЧАСТЬ закреплённой суммы: после checkout с другими переводами строк сумма перестала
+      бы сходиться и панель осталась бы без замка.
+
+      ⚠️ ВТОРОЙ ЗАМОК — ЛИНИЯ 0.2.x (задача `t4` плана 2.2.0, блок B): `0.2.1-rc.2`, **683 пакета**,
+      снят тем же сценарием из своей изолированной установки. Нужен, чтобы держать на диске ДВЕ
+      версии и ставить каждую по своему набору: у `0.1.5-rc.2` — 588 пакетов, у `0.2.1-rc.2` — 683,
+      одним замком другой не поставить. Имена ресурсов различаются хвостом версии, а логическое имя
+      ПЕРВОГО не меняется: на нём стоят закреплённая сумма и проверки.
     -->
     <EmbeddedResource Include="..\..\engine-lock.json" Link="Server/engine-lock.json" LogicalName="DshPanel.Server.EngineTreeLock.json" />
+    <EmbeddedResource Include="..\..\engine-lock-0.2.1-rc.2.json" Link="Server/engine-lock-0.2.1-rc.2.json" LogicalName="DshPanel.Server.EngineTreeLock.0.2.1-rc.2.json" />
   </ItemGroup>
 
   <ItemGroup>

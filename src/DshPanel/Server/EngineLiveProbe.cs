@@ -31,8 +31,8 @@ public sealed record EngineLiveProbeResult(
 
 /// <summary>
 /// ЖИВАЯ ПРОБА ПОСТАВЛЕННОГО ДВИЖКА (этап E3.2): панель после установки новой версии обязана
-/// проверить её ЖИВЬЁМ — тем же способом, что <c>--server-selftest</c> (84 имени поверхности,
-/// 8 умений), — но **не трогая ни профиль владельца, ни его порт**.
+/// проверить её ЖИВЬЁМ — тем же способом, что <c>--server-selftest</c> (нужные имена поверхности — 77,
+/// и 8 умений), — но **не трогая ни профиль владельца, ни его порт**.
 ///
 /// **Как это устроено.** Движок поднимается на **свободном** порту со **своим временным домом**
 /// (<c>DSH_HOME</c> = <paramref name="homeRoot"/>, который даёт вызывающий), прогоняется
@@ -252,7 +252,7 @@ public static class EngineLiveProbe
             var why = "место пробы не годится: это корень панели, дом движка или их предок — пробе нужно СВОЁ место";
 
             Say(why);
-            return new EngineLiveProbeResult(false, why, string.Empty, 0, EngineRpcSurface.Methods.Count, lines);
+            return new EngineLiveProbeResult(false, why, string.Empty, 0, EngineRpcSurface.RequiredTotal, lines);
         }
 
         // (2) ОБЪЯВЛЕНИЯ: движок не читается — проверять нечего, и поднимать его незачем.
@@ -269,14 +269,14 @@ public static class EngineLiveProbe
                 unreadable,
                 declaration.Version,
                 0,
-                EngineRpcSurface.Methods.Count,
+                EngineRpcSurface.RequiredTotal,
                 lines);
         }
 
         var home = homeRoot.Trim();
         var version = declaration.Version;
         var recognised = 0;
-        var total = EngineRpcSurface.Methods.Count;
+        var total = EngineRpcSurface.RequiredTotal;
         var ok = false;
         var port = 0;
         var detail = string.Empty;
@@ -382,7 +382,7 @@ public static class EngineLiveProbe
     {
         lines.Add(detail);
         return new EngineLiveProbeResult(
-            false, detail, string.Empty, 0, EngineRpcSurface.Methods.Count, lines);
+            false, detail, string.Empty, 0, EngineRpcSurface.RequiredTotal, lines);
     }
 
     /// <summary>

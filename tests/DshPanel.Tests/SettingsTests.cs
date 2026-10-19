@@ -172,20 +172,8 @@ public class SettingsTests
     private static string TempDir() =>
         Path.Combine(Path.GetTempPath(), "dsh-panel-settings-tests", Guid.NewGuid().ToString("N"));
 
-    private static void RemoveTemp(string dir)
-    {
-        try
-        {
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-
-            var parent = Path.GetDirectoryName(dir);
-            if (parent is not null && Directory.Exists(parent)) Directory.Delete(parent);
-        }
-        catch
-        {
-            // Родитель занят другой проверкой — это не ошибка.
-        }
-    }
+    /// <summary>Уборка только СВОЕГО каталога: общий родитель семейства не снимается (t3, `TempRoots`).</summary>
+    private static void RemoveTemp(string dir) => TempRoots.Remove(dir);
 
     // ---------------------------------------------------------------- хранилище
 

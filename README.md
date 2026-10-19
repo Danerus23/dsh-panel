@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="#whats-new-in-210">What's new in 2.1.0</a> ·
+  <a href="#whats-new-in-220">What's new in 2.2.0</a> ·
   <a href="#how-to-update">How to update</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#what-it-does">What it does</a> ·
@@ -36,7 +36,7 @@
 
 **Your DSH server, under control** — and out of the way in the tray. One file, `DshPanel.exe`:
 installed into your user profile, no administrator rights, no separate .NET install — the runtime is
-inside. This panel version is **2.1.0**.
+inside. This panel version is **2.2.0**.
 
 Start and stop the server, install, update and roll back DSH from a verified set, a tray icon that
 shows its state, your balance, peak windows and price history, copies of your data with restore, the
@@ -52,27 +52,26 @@ needs the network for that. What it does not do is in [“What is missing”](#w
 Russian is the original. **English and Chinese are machine translations:** the meaning is right, but
 some wording may not sound native.
 
-## What's new in 2.1.0
+## What's new in 2.2.0
 
-* **The phone answers the agent's question.** The settings have a “Phone” section: the switch, the
-  port, a six-digit code with a lifetime and a **QR code** that opens the phone page in a camera.
-  The page is the agent's question in words, with answer choices, and a “Cancel the agent's run”
-  button that says plainly the work of that run will not continue.
-* **The panel installs the DSH server itself — from a verified set of versions:** exact versions and
-  sums of every package, and the installed tree is checked against the set path by path.
-* **It updates and rolls back that server too.** Before replacing a version the panel asks, takes a
-  safety copy of the profile, stops **only its own** server and **checks the new version live**;
-  failed — the previous one comes back. The system Node does not fit — the panel downloads its own.
-* **The “Server” section says what the panel can do with this server**, skill by skill, in words:
-  checked · does not work · not checked. A feature without the skill it needs refuses in words
-  instead of staying silent.
-* **The panel updates itself from this release:** files are downloaded in chunks, the overall
-  SHA-256 is checked **before** a file takes its working place, and a failed check no longer looks
-  like “never checked”.
+* **The panel keeps two versions of the DSH server side by side** — the current and the previous
+  one — and installs each from its own verified set. The 0.2.x line has its own set: 683 packages,
+  the set file's sum pinned in the build, the install checked by a real `npm ci`, and the installed
+  tree passes the panel's full probe.
+* **A fresh version is installed by a separate button with a confirmation** and an honest line:
+  “newer, but the panel has not verified it”. Verified remains **0.1.5-rc.2**.
+* **Before switching versions the panel counts the sessions on disk and says in numbers** how many
+  of them the old DSH server will not see — and after a rollback it repeats that number. Visibility
+  is returned in one step, and the step is named in words rather than done silently.
+* **The phone shows only the conversations that can be opened:** subagent sessions do not appear in
+  the list, and their number goes to the panel's journal. An answer the server did not accept is no
+  longer passed off as sent.
+* **Backups: the window no longer gets stuck, and the archive no longer flickers** as an unfinished
+  file — it appears in one appearance, already checked.
 
 ## How to update
 
-Open the **“Update”** section and press **“Check now”**. The panel finds 2.1.0, downloads
+Open the **“Update”** section and press **“Check now”**. The panel finds 2.2.0, downloads
 `DshPanel.zip` from this release, checks its SHA-256 and replaces its files **after the panel
 exits**; a safety copy of the previous version is taken first. Nothing to unpack or uninstall by
 hand.
@@ -137,9 +136,19 @@ its own temporary home and runs the probe. Passed — the server comes back up o
 failed or broken — the **previous** one comes back. Words before the deed, one line after it.
 
 The “Return to version {X}…” line under the buttons is visible only when there is somewhere to
-return to. The panel always asks and speaks about sessions **plainly**: their journal is newer and
-the old server will not open them. If the system Node does not fit by version, the panel downloads
-**its own** — from the official source and with the sum checked.
+return to. The return goes into the **own** folder of the previous version: the panel keeps **two**
+versions on disk — the current and the previous one — and each is installed **from its own verified
+set** (the 0.2.x line has its own: 683 packages, the set file's sum pinned in the build). If the
+system Node does not fit by version, the panel downloads **its own** — from the official source and
+with the sum checked; the Node threshold is taken **no weaker than the strictest** of the sets, so
+that a rollback does not raise the previous version on an unsuitable Node.
+
+About sessions the panel speaks **in numbers**, not in general words: “DSH server {version} will
+not see N of M sessions: their journal is already in the new format, and it will not say so — they
+will disappear from the list silently”. The history is intact; visibility is returned in one step —
+remove the new journal file (session.v4) from the session folder — and the panel does not do that
+itself. The numbers come from the disk: the panel counts journal file names and reads no content.
+After a successful rollback the final line repeats the number in the past tense.
 
 ### The phone
 
@@ -154,6 +163,11 @@ in your own words if none of the choices fits, and the answer goes **once**. A s
 agent's run” button says plainly that the work of that run will not continue. The firewall rule for
 the phone is placed **only when you click**, and it is narrow: private profile only, the panel's
 port only, this program only and your own subnet only.
+
+The phone shows **only root conversations**: a subagent session cannot be opened without the
+parent's address, so it is not in the list, and the panel writes the number of hidden ones into its
+journal. An answer counts as sent only when the server **accepted** it: “not accepted” is shown to
+the phone as a refusal, and the question stays open.
 
 The phone works on your own network and makes no external connections. Setting tasks and managing
 agents from the phone are in development.
@@ -235,7 +249,11 @@ server, each skill in words.
   installer through “More info” → “Run anyway”.
 * **The panel installs and updates only ITS OWN DSH server.** It never touches a foreign
   installation: it shows the version and what it can do with it. A fresh version from the registry
-  is shown but not installed until a verified set has been taken for it.
+  is shown, and installed only when its own set exists — by a separate button with a confirmation.
+  “A set exists” does not mean “verified”: verified remains **0.1.5-rc.2**, and the panel says
+  exactly that about 0.2.1.
+* **Subagent sessions do not open from the phone** — they need the parent's address. The phone does
+  not show them, and the number of hidden ones goes to the panel's journal.
 * **The peak schedule is weekly.** The table runs by days of the week, the same as on the pricing
   page, and knows no Chinese holidays.
 

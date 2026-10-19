@@ -154,6 +154,58 @@ public static class EngineNode
         return strictest;
     }
 
+    /// <summary>
+    /// САМЫЙ СТРОГИЙ ПОРОГ СРЕДИ ВСЕХ ЗАМКОВ СБОРКИ (задача `t4`, блок B: замков теперь два).
+    ///
+    /// **Зачем.** Один Node на машине обслуживает ОБЕ версии движка, которые панель держит на диске.
+    /// Если порог брать только у той версии, которую ставим сейчас, откат мог бы поднять прежнюю
+    /// версию на Node, которого её замок не допускает, — то есть панель своими руками сделала бы
+    /// ровно то, от чего замок и заведён. Поэтому требование — **не слабее самого строгого**.
+    /// </summary>
+    public static string StrictestFrom(EngineTreeLocks? locks)
+    {
+        if (locks is null || !locks.Any) return string.Empty;
+
+        var strictest = string.Empty;
+
+        foreach (var engineLock in locks.All)
+        {
+            var lower = StrictestFrom(engineLock);
+            if (lower.Length == 0) continue;
+
+            if (strictest.Length == 0 || Compare(lower, strictest) > 0) strictest = lower;
+        }
+
+        return strictest;
+    }
+
+    /// <summary>
+    /// ЗАМОК, КОТОРЫЙ ТРЕБУЕТ САМЫЙ СВЕЖИЙ NODE, — его и зовут двери, добывающие Node: `Ensure`
+    /// принимает один замок, а требование должно быть общим (см. <see cref="StrictestFrom(EngineTreeLocks)"/>).
+    /// Замков нет — пустой замок, и порог падает к нижней границе.
+    /// </summary>
+    public static EngineTreeLock StrictestLock(EngineTreeLocks? locks)
+    {
+        if (locks is null || !locks.Any) return EngineTreeLock.Empty;
+
+        var best = locks.Primary.Any ? locks.Primary : locks.All[0];
+        var bestNeed = StrictestFrom(best);
+
+        foreach (var engineLock in locks.All)
+        {
+            var need = StrictestFrom(engineLock);
+            if (need.Length == 0) continue;
+
+            if (bestNeed.Length == 0 || Compare(need, bestNeed) > 0)
+            {
+                best = engineLock;
+                bestNeed = need;
+            }
+        }
+
+        return best;
+    }
+
     /// <summary>Не старше ли эта версия объявленного порога. Порог пуст — «требовать нечего».</summary>
     public static bool Satisfies(string? version, string? minimum)
     {

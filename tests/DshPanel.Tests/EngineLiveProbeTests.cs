@@ -189,8 +189,8 @@ public sealed class EngineLiveProbeTests
             var result = EngineLiveProbe.Run("node.exe", bin, home, AppPaths.Under(root), doors, steps.Add);
 
             Assert.True(result.Ok, string.Join(" | ", result.Lines));
-            Assert.Equal(EngineRpcSurface.Methods.Count, result.Total);
-            Assert.Equal(EngineRpcSurface.Methods.Count, result.Recognised);
+            Assert.Equal(EngineRpcSurface.RequiredTotal, result.Total);
+            Assert.Equal(EngineRpcSurface.RequiredTotal, result.Recognised);
             Assert.Equal("9.9.9-live", result.Version);
             Assert.Equal(engine.Port, Assert.Single(stops));
 
@@ -205,6 +205,72 @@ public sealed class EngineLiveProbeTests
         {
             TreeDeletion.Remove(root);
         }
+    }
+
+    /// <summary>
+    /// ЛИНИЯ 0.2.x: СЕМЬ СНЯТЫХ С НАДОБНОСТИ ИМЁН НЕ ОБЪЯВЛЯЮТСЯ — И ЭТО НЕ ПРОВАЛ.
+    ///
+    /// Подложный движок объявляет 77 нужных имён и 67 знакомых новых — ровно как настоящий
+    /// `0.2.1-rc.2` (замер 18.10.2026). Проба обязана пройти, признав 77 из 77 нужных, а потерю
+    /// семи назвать СТРОКОЙ, а не приговором: панель эти семь имён живьём не зовёт.
+    /// </summary>
+    [Fact]
+    public void Проба_принимает_движок_без_снятых_с_надобности_имён()
+    {
+        var declared = EngineRpcSurface.Required.Select(m => m.Endpoint)
+            .Concat(EngineRpcSurface.KnownAdded)
+            .ToList();
+
+        var (result, _) = ProbeAgainst("line02", "9.9.9-line02", declared);
+
+        Assert.True(result.Ok, string.Join(" | ", result.Lines));
+        Assert.Equal(EngineRpcSurface.RequiredTotal, result.Total);
+        Assert.Equal(EngineRpcSurface.RequiredTotal, result.Recognised);
+
+        // Потеря названа числом и словом «снятые с надобности» — человек видит, что это не поломка.
+        Assert.Contains(
+            result.Lines,
+            line => line.Contains(
+                $"снятые с надобности имена, которых движок больше не объявляет: {EngineRpcSurface.Retired.Count} из {EngineRpcSurface.Retired.Count}",
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// НЕЗНАКОМОЕ ИМЯ У ДВИЖКА — ПРЕЖНЯЯ ТРЕВОГА, И ОНА НЕ ОСЛАБЛЕНА: проба проваливается и называет
+    /// имя. Иначе «поверхность изменилась» проскакивало бы вместе с законной потерей семи.
+    /// </summary>
+    [Fact]
+    public void Проба_падает_на_незнакомом_имени_у_движка()
+    {
+        var declared = EngineRpcSurface.Methods.Select(m => m.Endpoint).Append("future/surprise").ToList();
+
+        var (result, _) = ProbeAgainst("unknown", "9.9.9-unknown", declared);
+
+        Assert.False(result.Ok);
+        Assert.Contains(
+            result.Lines,
+            line => line.Contains("future/surprise", StringComparison.Ordinal)
+                    && line.EndsWith("= False", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// ПРОПАЛО НУЖНОЕ ИМЯ — ПРОВАЛ. Граница, ради которой список и делится на «нужные» и «снятые
+    /// с надобности»: потеря первого — беда, потеря второго — законная тишина.
+    /// </summary>
+    [Fact]
+    public void Проба_падает_когда_пропало_нужное_имя()
+    {
+        var missing = EngineRpcSurface.Required[0].Endpoint;
+        var declared = EngineRpcSurface.Methods.Select(m => m.Endpoint)
+            .Where(name => !string.Equals(name, missing, StringComparison.Ordinal))
+            .ToList();
+
+        var (result, _) = ProbeAgainst("required", "9.9.9-required", declared);
+
+        Assert.False(result.Ok);
+        Assert.Contains(
+            result.Lines,
+            line => line.Contains("ПРОПАЛИ", StringComparison.Ordinal) && line.Contains(missing, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -351,7 +417,7 @@ public sealed class EngineLiveProbeTests
             Assert.False(result.Ok);
             Assert.Empty(result.Version);
             Assert.Equal(0, result.Recognised);
-            Assert.Equal(EngineRpcSurface.Methods.Count, result.Total);
+            Assert.Equal(EngineRpcSurface.RequiredTotal, result.Total);
             Assert.Contains(result.Lines, line => line == "опись движка прочитана = False");
             Assert.Contains(result.Lines, line => line.StartsWith("движок: версия", StringComparison.Ordinal));
         }
@@ -433,7 +499,7 @@ public sealed class EngineLiveProbeTests
                 bin, $"http://127.0.0.1:{engine.Port}/?token=probe", engine.Port, AppPaths.Under(root));
 
             Assert.False(result.Ok);
-            Assert.Equal(EngineRpcSurface.Methods.Count, result.Recognised);
+            Assert.Equal(EngineRpcSurface.RequiredTotal, result.Recognised);
             Assert.Contains(
                 result.Lines,
                 line => line.StartsWith("выдуманное имя движок НЕ признаёт", StringComparison.Ordinal)
@@ -461,7 +527,47 @@ public sealed class EngineLiveProbeTests
     /// списка» на нём сходится в обе стороны, поэтому проба доходит до живой части; ничего
     /// настоящего на машине для этого не нужно.
     /// </summary>
-    private static string FakeEngineBin(string root, string version)
+    /// <summary>
+    /// ПРОБА НА ПОДЛОЖНОМ ДВИЖКЕ С ЗАДАННЫМ НАБОРОМ ОБЪЯВЛЕНИЙ: свой корень, свой подложный движок,
+    /// свой дом, свободный порт. Возвращает итог и порты, на которые позвали остановку.
+    /// </summary>
+    private static (EngineLiveProbeResult Result, List<int> Stops) ProbeAgainst(
+        string mark, string version, IReadOnlyCollection<string> declared)
+    {
+        var root = TempRoot(mark);
+
+        try
+        {
+            using var engine = new FakeEngine();
+            var bin = FakeEngineBin(root, version, declared);
+            var home = Path.Combine(root, "home");
+            var stops = new List<int>();
+
+            var doors = new EngineLiveProbeDoors(
+                (_, _, _) =>
+                {
+                    Directory.CreateDirectory(home);
+                    return new EngineLiveProbeRun(
+                        true, engine.Port, $"http://127.0.0.1:{engine.Port}/?token=probe",
+                        "сервер отвечает", Array.Empty<string>());
+                },
+                port =>
+                {
+                    stops.Add(port);
+                    TreeDeletion.Remove(home);
+                });
+
+            var result = EngineLiveProbe.Run("node.exe", bin, home, AppPaths.Under(root), doors);
+
+            return (result, stops);
+        }
+        finally
+        {
+            TreeDeletion.Remove(root);
+        }
+    }
+
+    private static string FakeEngineBin(string root, string version, IEnumerable<string>? declared = null)
     {
         var package = Path.Combine(root, "dsh");
         Directory.CreateDirectory(Path.Combine(package, "lib"));
@@ -475,8 +581,10 @@ public sealed class EngineLiveProbeTests
 
         var text = new StringBuilder("interface TypertRemoteMap {\n");
 
-        foreach (var method in EngineRpcSurface.Methods)
-            text.Append("  '").Append(method.Endpoint).Append("': (a: object) => Promise<RemoteResult<object>>\n");
+        // По умолчанию — ВСЕ 84 имени панели (так объявляет наша версия). Другой набор подаётся
+        // затем, чтобы проверить линию 0.2.x (77 нужных + 67 знакомых новых) и тревогу на незнакомое.
+        foreach (var endpoint in declared ?? EngineRpcSurface.Methods.Select(m => m.Endpoint))
+            text.Append("  '").Append(endpoint).Append("': (a: object) => Promise<RemoteResult<object>>\n");
 
         text.Append("}\n");
         File.WriteAllText(Path.Combine(plugin, EngineRpcDeclarations.DeclarationFileName), text.ToString());

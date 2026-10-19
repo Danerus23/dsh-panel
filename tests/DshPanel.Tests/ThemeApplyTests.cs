@@ -169,17 +169,8 @@ public class ThemeApplyTests
         }
         finally
         {
-            try
-            {
-                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-
-                var parent = Path.GetDirectoryName(dir);
-                if (parent is not null && Directory.Exists(parent)) Directory.Delete(parent);
-            }
-            catch
-            {
-                // Родитель занят другой проверкой — это не ошибка.
-            }
+            // Убирается только СВОЙ каталог: общий родитель семейства не снимается (t3, `TempRoots`).
+            TempRoots.Remove(dir);
         }
     }
 }

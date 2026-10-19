@@ -122,6 +122,17 @@ public interface IServerControl
     /// она выходит одним свойством, чтобы второго способа её достать не завелось.
     /// </summary>
     string EntryLink { get; }
+
+    /// <summary>
+    /// Похоже ли, что профиль движка достраивается ВПЕРВЫЕ (t15, 18.10.2026). От этого зависит
+    /// ОДНА надпись — <c>EngineFirstRun.StartingLabel</c>: обещать «первый запуск достраивает
+    /// профиль» на каждом подъёме панель больше не имеет права.
+    ///
+    /// ⚠️ **Реализация по умолчанию — «не первый»**: подстановки сервера в проверках каталога
+    /// движка не знают, и «нечем мерить» обязано давать ЧЕСТНУЮ надпись без обещания, а не
+    /// наоборот. Тем же способом молчат <see cref="Known"/> и <see cref="Changed"/>.
+    /// </summary>
+    bool FirstRunLooks => false;
 }
 
 /// <summary>
@@ -153,9 +164,11 @@ public sealed class ServerController : IServerControl, IDisposable
 {
     /// <summary>
     /// Сколько строк вывода движка панель помнит для объяснения неудачи. Держать больше
-    /// незачем: человеку нужна последняя причина, а не весь журнал запуска.
+    /// незачем: человеку нужна последняя причина, а не весь журнал запуска. Число — ОДНО на
+    /// кольцевой буфер и на запись о завершении (<see cref="EngineExitReport.TailLines"/>),
+    /// иначе запись обещала бы больше строк, чем панель помнит.
     /// </summary>
-    private const int RememberedEngineLines = 40;
+    private const int RememberedEngineLines = EngineExitReport.TailLines;
 
     /// <summary>
     /// Как часто панель по-настоящему осматривает порты машины. Опрос состояния идёт раз в секунду,
@@ -253,6 +266,17 @@ public sealed class ServerController : IServerControl, IDisposable
     private Process? _process;
     private string _lastEngineLine = string.Empty;
     private bool _exitReported;
+
+    /// <summary>
+    /// ЭТОТ процесс гасит ПАНЕЛЬ (человек нажал «Остановить»), а не он уходит сам.
+    ///
+    /// **От какого случая (t15, 18.10.2026).** Запись о завершении должна различать «погасили»
+    /// и «упал», иначе после факта не разобрать инцидент 15:40:19. Флаг ставится в
+    /// <see cref="Stop"/> и <see cref="StopRecordedOwn"/> ДО гашения, сбрасывается на каждом
+    /// запуске и живёт только до записи о завершении.
+    /// </summary>
+    private bool _stoppedByPanel;
+
     private int _port;
 
     // Номер процесса СВОЕГО сервера, узнанного ПО ЗАПИСИ после перезапуска панели: живого
@@ -473,6 +497,14 @@ public sealed class ServerController : IServerControl, IDisposable
 
     /// <summary>Домашний каталог движка, которым пользуется этот контроллер (для отчётов проверок).</summary>
     public string DshHome => _dshHome;
+
+    /// <summary>
+    /// ПОХОЖЕ ЛИ, ЧТО ПРОФИЛЬ ДВИЖКА СТРОИТСЯ ВПЕРВЫЕ (t15, 18.10.2026). Считается по каталогам
+    /// своего дома движка (<see cref="EngineFirstRun.Markers"/>), а не по настройке: это факт на
+    /// диске, и он читается в тот миг, когда о нём спрашивают, — окно показывает надпись по этому
+    /// ответу, поэтому «первый запуск» перестаёт быть обещанием на каждом подъёме.
+    /// </summary>
+    public bool FirstRunLooks => EngineFirstRun.Looks(_dshHome);
 
     private int ActivePort()
     {
@@ -1340,6 +1372,10 @@ public sealed class ServerController : IServerControl, IDisposable
             _lastEngineLine = string.Empty;
             _exitReported = false;
 
+            // «ЭТОТ ПРОЦЕСС ПОГАСИТ ПАНЕЛЬ» — сбрасывается на КАЖДОМ запуске (t15, 18.10.2026):
+            // флаг пережил бы прошлый запуск и приписал панели чужое падение.
+            _stoppedByPanel = false;
+
             // Рабочий каталог спрашивается ЗДЕСЬ — в момент запуска сервера, а не при построении
             // контроллера: это настройка, и она обязана применяться без перезапуска панели.
             var workDir = ResolveWorkingDirectory();
@@ -1570,7 +1606,9 @@ public sealed class ServerController : IServerControl, IDisposable
         // и не гасит его: окно продолжает спрашивать состояние, и сервер появится сам.
         if (_process is not null && !_process.HasExited)
         {
-            var detail = string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvEngineStillStartingFormat, _port);
+            // ОБЕЩАНИЕ ПЕРВОГО ЗАПУСКА — ТОЛЬКО КОГДА ОН ПЕРВЫЙ (t15, 18.10.2026): слова выбирает
+            // признак по каталогам профиля, а не «так писали всегда».
+            var detail = EngineFirstRun.StillStartingDetail(FirstRunLooks, _port);
             return State = ServerState.Stopped(_port, detail);
         }
 
@@ -1611,15 +1649,30 @@ public sealed class ServerController : IServerControl, IDisposable
             StopWarning.Say(_log, _notify, own: true, port);
             _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvStoppingEngineLogFormat, process.Id));
 
+            // ПАНЕЛЬ ГАСИТ САМА — и запись о завершении скажет именно это (t15, 18.10.2026).
+            // `_exitReported` выставляется ДО гашения: иначе гонка «процесс уже умер, Refresh
+            // успел заметить» записала бы «завершился САМ» про процесс, который погасили, —
+            // ровно та ложь, ради которой запись и заводится.
+            _stoppedByPanel = true;
+            _exitReported = true;
+
+            int? exitCode = null;
+
             try
             {
                 if (!process.HasExited) process.Kill(entireProcessTree: true);
                 process.WaitForExit(20_000);
+
+                // Код выхода спрашивается ТОЛЬКО у завершившегося процесса: у живого .NET его
+                // не отдаёт вовсе, и «код 0» вместо «нет кода» было бы выдумкой.
+                if (process.HasExited) exitCode = process.ExitCode;
             }
             catch (Exception ex)
             {
                 _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvStopEngineFailedLogFormat, ex.GetType().Name, ex.Message));
             }
+
+            JournalEngineExit(process.Id, exitCode, stoppedByPanel: true);
 
             process.Dispose();
             _process = null;
@@ -1776,6 +1829,11 @@ public sealed class ServerController : IServerControl, IDisposable
                 Detail = string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvOwnStopFailedFormat, port, error),
             };
         }
+
+        // Погасила ПАНЕЛЬ, но дескриптора у неё уже нет (сервер узнан по записи после
+        // перезапуска панели): код выхода спросить не у кого, и запись честно говорит
+        // «нет кода» вместо выдуманного нуля (t15, 18.10.2026).
+        JournalEngineExit(pid, exitCode: null, stoppedByPanel: true);
 
         var cleared = ClearOwnServerFiles();
         _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvOwnServerClearedLogFormat, port));
@@ -2052,9 +2110,12 @@ public sealed class ServerController : IServerControl, IDisposable
         if (!_exitReported)
         {
             _exitReported = true;
-            _log(_lastEngineLine.Length == 0
-                ? string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvEngineExitedItselfFormat, _process.ExitCode)
-                : string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvEngineExitedItselfDetailFormat, _process.ExitCode, _lastEngineLine));
+
+            // ПРОЦЕСС УШЁЛ САМ — и это записывается фактами, а не догадкой (t15, 18.10.2026):
+            // PID, код выхода и хвост вывода. `_stoppedByPanel` здесь обычно false; true он
+            // бывает только тогда, когда панель уже сказала своё слово (тогда `_exitReported`
+            // выставлен ею и сюда мы не попадаем вовсе).
+            JournalEngineExit(_process.Id, _process.ExitCode, _stoppedByPanel);
         }
 
         _process.Dispose();
@@ -2104,6 +2165,26 @@ public sealed class ServerController : IServerControl, IDisposable
         if (link.Length > 0) SaveEntryLink(link);
 
         _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvEngineLineLogFormat, redacted));
+    }
+
+    /// <summary>
+    /// ЗАПИСЬ О ЗАВЕРШЕНИИ ПРОЦЕССА ДВИЖКА — ОДНО место (t15, 18.10.2026). Сюда приходят все три
+    /// ветви: процесс ушёл сам (<see cref="ForgetExitedProcess"/>), погасила панель со живым
+    /// дескриптором (<see cref="Stop"/>) и погасила панель по записи без дескриптора
+    /// (<see cref="StopRecordedOwn"/>). Формат строки и маска хвоста — в
+    /// <see cref="EngineExitReport"/>, здесь только факты.
+    ///
+    /// <c>internal</c>, а не <c>private</c>, — по той же причине, что и <see cref="Remember"/>:
+    /// это ШОВ. Через живой движок проверку не написать (панель сама собирает его командную
+    /// строку), а факты о завершении приходят извне; проверка подаёт сюда код выхода и вывод
+    /// ПОДСТАВНОГО процесса (<c>cmd /c … exit 7</c>) и смотрит, что легло в журнал панели.
+    /// Снаружи сборки этого шва не существует.
+    /// </summary>
+    internal void JournalEngineExit(int pid, int? exitCode, bool stoppedByPanel, IReadOnlyList<string>? tail = null)
+    {
+        var lines = EngineExitReport.Lines(pid, exitCode, stoppedByPanel, _clock(), tail ?? EngineTail());
+
+        foreach (var line in lines) _log(line);
     }
 
     private string ProcessName(int pid)

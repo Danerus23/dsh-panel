@@ -2,27 +2,41 @@
 #
 #   pwsh -NoProfile -File .\tools\make-release-tree.ps1 -Tag vX.Y.Z
 #   pwsh -NoProfile -File .\tools\make-release-tree.ps1 -Tag vX.Y.Z -Out C:\Temp\release-out-2.1.0
+#   pwsh -NoProfile -File .\tools\make-release-tree.ps1 -Rev <sha> -Out C:\Temp\release-out-2.1.1
 #
-# ЧТО ИЗМЕНИЛОСЬ. Раньше `-Out` получал только ДАННЫЕ выпуска (30 путей). Теперь `-Out` — **полное
-# публичное дерево**: код по разрешённому списку (ADR §5.2 п. 1) плюс 30 путей данных в КОРНЕ
-# (префикс `release/tree/` снят) — то есть ровно то, что уедет в публичный репозиторий одним коммитом.
-# Всё берётся ИЗ ОБЪЕКТОВ ТЕГА; рабочее дерево репозитория не читается вовсе.
+# ⚠️ ЧТО ИЗМЕНИЛОСЬ 18.10.2026 (дефект найден владельцем, воспроизведён капитаном). Раньше инструмент
+# ЛОЖНО ПАДАЛ, когда `HEAD` впереди тега: общая часть считала ожидание через `git rm --cached` БЕЗ `-f`,
+# индекс был из тега, `HEAD` — другой коммит, git отказывал («staged content different from both the
+# file and the HEAD»), а инструмент печатал «ДЕРЕВО ВЫПУСКА НЕ СОВПАЛО» — то есть падение ИНСТРУМЕНТА
+# выдавал за расхождение ДЕРЕВА. Теперь: `-f` стоит, а падение инструмента называется своим именем.
+#
+# ВХОД — ТЕГ ИЛИ РЕВИЗИЯ (приёмка 2.1.1, 18.10.2026). `-Rev <sha>` собирает то же ПОЛНОЕ дерево из
+# РЕВИЗИИ, не создавая объекта тега: ожидание считается тем же временным индексом, вывод говорит
+# «ревизия», а сверка «номер тега против <Version>» заменяется сверкой `<Version>` из ревизии с тремя
+# CHANGELOG. Нужен, чтобы проверить 2.1.1 ДО тега.
+#
+# ЧТО ИЗМЕНИЛОСЬ ПРОТИВ РЕДАКЦИИ ДО 17.10.2026. Раньше `-Out` получал только ДАННЫЕ выпуска (тогда
+# 30 путей; с 18.10.2026 — 39, решение владельца о трёх новых видах кадров).
+# Теперь `-Out` — **полное публичное дерево**: код по разрешённому списку (ADR §5.2 п. 1) плюс 39 путей
+# данных в КОРНЕ (префикс `release/tree/` снят) — то есть ровно то, что уедет в публичный репозиторий
+# одним коммитом. Всё берётся ИЗ ОБЪЕКТОВ ТЕГА/РЕВИЗИИ; рабочее дерево репозитория не читается вовсе.
 #
 # ОЖИДАНИЕ — тот же хеш, что считает `check-release-tree.ps1` (`Get-ExpectedFullTree` в общей части):
-# временный индекс → `read-tree <тег>` → отброс всего вне списка → наложение 30 путей данных → `write-tree`.
+# временный индекс → `read-tree <тег>` → отброс всего вне списка → наложение 39 путей данных → `write-tree`.
 # Сборка сверяется с ожиданием ОДИН раз — по ВРЕМЕННОМУ каталогу, ДО первой записи в `-Out` (правка F5,
 # 17.10.2026: раньше финальная сверка шла по `-Out` уже после копирования, и при провале на диске
 # оставались и дерево, и опись). После переноса сверяется КОПИЯ: пути, размеры, байты (SHA-256).
 #
 # ПОРЯДОК (все проверки — ДО первой записи в `-Out`; при провале на диске не остаётся ни дерева, ни описи):
-#   1. тег существует; номер версии из имени тега = `<Version>` в теге (иначе код 2);
-#   2. рабочее дерево чистое (`git status --porcelain` пуст) — выпускают из тега, а не из «почти того же»;
-#   3. `ls-tree -r <тег>` → классификация: что код, что данные, что отброшено и по какому правилу;
+#   1. тег/ревизия существует; для тега номер версии из имени тега = `<Version>` в теге, для ревизии —
+#      `<Version>` из ревизии и три CHANGELOG ревизии с разделом `## <версия>` первым и непустым (иначе код 2/1);
+#   2. рабочее дерево чистое (`git status --porcelain` пуст) — выпускают из тега/ревизии, а не из «почти того же»;
+#   3. `ls-tree -r <тег|ревизия>` → классификация: что код, что данные, что отброшено и по какому правилу;
 #      НЕЗНАКОМЫЙ отброшенный путь (новый каталог кода) — отказ кодом 1 с именами;
 #   4. ожидаемое полное дерево из объекта git → `$expectedFull`;
-#   5. `check-release-tree -Tag <тег>` — состав/архив/данные обязаны быть зелёными (код 0);
-#   6. сборка во ВРЕМЕННОМ каталоге: `git archive <тег>` → убрать всё вне списка → наложить данные
-#      (`git archive '<тег>:release/tree'` в КОРЕНЬ); пути `-Out`/`-Manifest` проверяются ЗДЕСЬ же,
+#   5. `check-release-tree -Tag <тег>` (или `-Rev <sha>`) — состав/архив/данные обязаны быть зелёными (код 0);
+#   6. сборка во ВРЕМЕННОМ каталоге: `git archive <тег|ревизия>` → убрать всё вне списка → наложить данные
+#      (`git archive '<тег|ревизия>:release/tree'` в КОРЕНЬ); пути `-Out`/`-Manifest` проверяются ЗДЕСЬ же,
 #      чтобы отказы стояли до записи;
 #   7. опись `release-tree.txt` пишется РЯДОМ с временным деревом, и ФИНАЛЬНАЯ сверка
 #      `check-release-tree -Tree <временное дерево>` идёт по нему — ДО копирования (код 1 при расхождении);
@@ -31,14 +45,19 @@
 #      при любом сбое переноса записанное УБИРАЕТСЯ — на диске снова ничего;
 #   9. печатает следующие команды (коммит в публичный клон, тег, push) — и НЕ выполняет их.
 #
+# ⚠️ ПАДЕНИЕ ИНСТРУМЕНТА — СВОИМ ИМЕНЕМ (18.10.2026). Вся сборка обёрнута так, что техническая авария
+# (git отказал, tar не распаковал, индекс не снялся) печатается как «СБОРКА НЕ СДЕЛАНА: инструмент…»,
+# а не как расхождение дерева и не сырой записью исключения PowerShell: у двух разных бед разные лекарства.
+#
 # МЕРА В ОПИСИ — ОБЪЕКТ GIT (требование владельца 17.10.2026): `git cat-file -s` и SHA-256 по байтам
 # блоба; байт на диске — отдельная подписанная колонка и в сверке не участвует. Причина: на этой
 # машине `core.autocrlf=true`, блоб хранит LF, рабочая копия получает CRLF — опись по диску печатала
 # бы НЕ ТО, что сравнивается.
 #
-# КОДЫ: 0 — дерево собрано и проверено; 1 — расхождение (с путём и причиной); 2 — неприменимо
-# (тега нет, каталога `release\tree` в теге нет, номер тега не сходится с `<Version>`, в имени тега
-# нет номера версии). «Неприменимо» — не «зелено» и не «красно».
+# КОДЫ: 0 — дерево собрано и проверено; 1 — расхождение (с путём и причиной) ИЛИ падение инструмента
+# (тоже своим именем); 2 — неприменимо (нет тега/ревизии, каталога `release\tree` нет, номер тега не
+# сходится с `<Version>`, в ревизии нет `<Version>`, названы оба входа или ни одного).
+# «Неприменимо» — не «зелено» и не «красно».
 #
 # ЧЕГО ЭТОТ ИНСТРУМЕНТ НЕ ДЕЛАЕТ (названо, а не спрятано): не ставит тег и не пушит (только печатает
 # команды); не собирает установщик и архив раздачи (это следующий шаг выпуска); не проверяет смысл
@@ -46,6 +65,7 @@
 
 param(
     [string]$Tag = '',
+    [string]$Rev = '',
     [string]$Out = '',
     [string]$Manifest = '',
     [string]$Repo = '',
@@ -68,8 +88,14 @@ if (-not (Test-Path -LiteralPath (Join-Path $repoRoot '.git'))) {
     Write-Host ('неприменимо: в «' + $repoRoot + '» нет репозитория git')
     exit 2
 }
-if (-not $Tag) {
-    Write-Host 'неприменимо: тег не назван (-Tag vX.Y.Z) — вход выпуска назван тегом, а не рабочей копией'
+
+$namedInputs = @(@($Tag, $Rev) | Where-Object { $_ })
+if ($namedInputs.Count -eq 0) {
+    Write-Host 'неприменимо: вход не назван — назовите тег (-Tag vX.Y.Z) или ревизию (-Rev <sha>): вход выпуска называется объектом git, а не рабочей копией'
+    exit 2
+}
+if ($namedInputs.Count -gt 1) {
+    Write-Host ('неприменимо: названы ОБА входа (-Tag «' + $Tag + '» и -Rev «' + $Rev + '») — нужен ровно один')
     exit 2
 }
 
@@ -79,35 +105,64 @@ if (-not (Test-Path -LiteralPath $checkTool)) {
     exit 2
 }
 
-# ── 1. Тег и номер версии ──────────────────────────────────────────────────────────────────────
-$tagCheck = Invoke-ReleaseGit -Repo $repoRoot -GitArgs @('rev-parse', '--verify', '--quiet', ('refs/tags/' + $Tag))
-if ($tagCheck.Code -ne 0) {
-    Write-Host ('неприменимо: тега «' + $Tag + '» нет в репозитории — дерево выпуска собирается ТОЛЬКО из тега')
-    exit 2
+# ── 1. Тег/ревизия и номер версии ───────────────────────────────────────────────────────────────
+$spec = $null
+$commit = $null
+$projectVersion = $null
+$changelogReport = $null
+
+if ($Tag) {
+    $spec = $Tag
+    $tagCheck = Invoke-ReleaseGit -Repo $repoRoot -GitArgs @('rev-parse', '--verify', '--quiet', ('refs/tags/' + $Tag))
+    if ($tagCheck.Code -ne 0) {
+        Write-Host ('неприменимо: тега «' + $Tag + '» нет в репозитории — дерево выпуска собирается ТОЛЬКО из тега или ревизии')
+        exit 2
+    }
+
+    $tagVersion = $null
+    if ($Tag -match '(\d+\.\d+\.\d+)') { $tagVersion = $Matches[1] }
+    if (-not $tagVersion) {
+        Write-Host ('неприменимо: в имени тега «' + $Tag + '» нет номера версии вида X.Y.Z — сверять <Version> не с чем')
+        exit 2
+    }
+    $projectVersion = Get-ReleaseProjectVersion -Repo $repoRoot -Spec $spec
+    if (-not $projectVersion) {
+        Write-Host ('неприменимо: в теге «' + $Tag + '» нет src/DshPanel/DshPanel.csproj или в нём нет <Version> — версию выпуска взять неоткуда')
+        exit 2
+    }
+    if ($projectVersion -ne $tagVersion) {
+        Write-Host ('неприменимо: номер тега «' + $Tag + '» (' + $tagVersion + ') не совпадает с <Version> в теге (' + $projectVersion + ')')
+        Write-Host 'правило проекта: тег vX.Y.Z ставится на ревизию, где <Version> уже поднят до X.Y.Z. Такой тег выпуском не считается.'
+        exit 2
+    }
+}
+else {
+    # Режим приёмки 2.1.1: тега ещё нет, поэтому версию даёт сама ревизия, а историю — три CHANGELOG.
+    $commit = Resolve-ReleaseCommit -Repo $repoRoot -Rev $Rev
+    if (-not $commit) {
+        Write-Host ('неприменимо: в «' + $repoRoot + '» нет ревизии «' + $Rev + '» — дерево выпуска собирается только из объекта git')
+        exit 2
+    }
+    $spec = $commit
+    $projectVersion = Get-ReleaseProjectVersion -Repo $repoRoot -Spec $commit
+    if (-not $projectVersion) {
+        Write-Host ('неприменимо: в ревизии «' + $commit + '» нет src/DshPanel/DshPanel.csproj или в нём нет <Version> — версию выпуска взять неоткуда')
+        exit 2
+    }
+    $changelogProblems = @(Get-ReleaseChangelogProblems -Repo $repoRoot -Spec $commit -Version $projectVersion)
+    if ($changelogProblems.Count -gt 0) {
+        Write-Host ''
+        Write-Host ('СБОРКА НЕ ПОЙДЁТ: три CHANGELOG ревизии не знают её версии — ' + $changelogProblems.Count + ' замечаний (версия ' + $projectVersion + ')')
+        Write-Host 'в режиме -Rev сверки «номер тега против <Version>» нет; её место занимает эта проверка, и она красная'
+        foreach ($item in $changelogProblems) { Write-Host ('  ' + $item) }
+        exit 1
+    }
+    $changelogReport = 'три CHANGELOG знают «## ' + $projectVersion + '» первым разделом и он непустой'
 }
 
-$tagVersion = $null
-if ($Tag -match '(\d+\.\d+\.\d+)') { $tagVersion = $Matches[1] }
-if (-not $tagVersion) {
-    Write-Host ('неприменимо: в имени тега «' + $Tag + '» нет номера версии вида X.Y.Z — сверять <Version> не с чем')
-    exit 2
-}
-$projectInTag = Invoke-ReleaseGit -Repo $repoRoot -GitArgs @('show', ($Tag + ':src/DshPanel/DshPanel.csproj'))
-if ($projectInTag.Code -ne 0) {
-    Write-Host ('неприменимо: в теге «' + $Tag + '» нет src/DshPanel/DshPanel.csproj — версию выпуска взять неоткуда')
-    exit 2
-}
-$found = [regex]::Matches($projectInTag.Text, '<Version>([^<]+)</Version>')
-if ($found.Count -eq 0) {
-    Write-Host ('неприменимо: в DshPanel.csproj тега «' + $Tag + '» нет <Version>')
-    exit 2
-}
-$projectVersion = $found[0].Groups[1].Value.Trim()
-if ($projectVersion -ne $tagVersion) {
-    Write-Host ('неприменимо: номер тега «' + $Tag + '» (' + $tagVersion + ') не совпадает с <Version> в теге (' + $projectVersion + ')')
-    Write-Host 'правило проекта: тег vX.Y.Z ставится на ревизию, где <Version> уже поднят до X.Y.Z. Такой тег выпуском не считается.'
-    exit 2
-}
+# Подписи: одна и та же формула, но вывод обязан честно говорить, ЧТО было входом (тег или ревизия).
+$sourceWord = if ($Tag) { 'теге' } else { 'ревизии' }
+$sourceLabel = if ($Tag) { 'тег ' + $Tag } else { 'ревизия ' + $commit }
 
 # ── 2. Рабочее дерево чистое ───────────────────────────────────────────────────────────────────
 # ⚠️ ЭТОТ ВЫЗОВ — БЕЗ ПРИНУДИТЕЛЬНЫХ ФЛАГОВ ПЕРЕВОДОВ СТРОК (дефект найден 17.10.2026 на `ad69c85`).
@@ -126,41 +181,42 @@ if ($status.Code -ne 0) { throw ('git status не сработал: ' + $status.
 $dirty = @($status.Lines | Where-Object { $_ })
 if ($dirty.Count -gt 0) {
     Write-Host ('СБОРКА НЕ ПОЙДЁТ: рабочее дерево не чисто — ' + $dirty.Count + ' незакоммиченных изменения(й)')
-    Write-Host 'выпускают из ТЕГА, а не из «почти того же»: закоммитьте (или уберите) изменения и повторите'
+    Write-Host 'выпускают из ТЕГА/РЕВИЗИИ, а не из «почти того же»: закоммитьте (или уберите) изменения и повторите'
     $dirty | Select-Object -First 10 | ForEach-Object { Write-Host ('  ' + $_) }
     if ($dirty.Count -gt 10) { Write-Host ('  … всего строк: ' + $dirty.Count) }
     exit 1
 }
 
-# ── 3. Данные и классификация путей тега ───────────────────────────────────────────────────────
-$dataOverlay = Get-ReleaseDataOverlay -Repo $repoRoot -Tag $Tag
+# ── 3. Данные и классификация путей тега/ревизии ───────────────────────────────────────────────
+$dataOverlay = Get-ReleaseDataOverlay -Repo $repoRoot -Spec $spec
 if ($null -eq $dataOverlay) {
-    Write-Host ('неприменимо: в теге «' + $Tag + '» нет каталога release/tree — собирать нечего')
+    Write-Host ('неприменимо: в ' + $sourceLabel + ' нет каталога release/tree — собирать нечего')
     exit 2
 }
 if ($dataOverlay.Count -eq 0) {
-    Write-Host ('неприменимо: поддерево «' + $Tag + ':release/tree» ПУСТО')
+    Write-Host ('неприменимо: поддерево «' + $spec + ':release/tree» ПУСТО')
     exit 2
 }
 
-Write-Host ('сборка полного дерева выпуска: тег ' + $Tag + ', версия ' + $projectVersion)
-Write-Host ('источник: ' + $repoRoot + ' (рабочее дерево не читается — только объекты тега)')
+Write-Host ('сборка полного дерева выпуска: ' + $sourceLabel + ', версия ' + $projectVersion)
+if ($changelogReport) { Write-Host ('версия: ' + $projectVersion + ' из ревизии; ' + $changelogReport) }
+Write-Host ('источник: ' + $repoRoot + ' (рабочее дерево не читается — только объекты ' + $(if ($Tag) { 'тега' } else { 'ревизии; объект тега не создаётся' }) + ')')
 Write-Host ''
 
-$tagPathsResult = Invoke-ReleaseGit -Repo $repoRoot -GitArgs @('ls-tree', '-r', '--name-only', $Tag)
-if ($tagPathsResult.Code -ne 0) { throw ('git ls-tree не отдал пути тега: ' + $tagPathsResult.Text) }
+$tagPathsResult = Invoke-ReleaseGit -Repo $repoRoot -GitArgs @('ls-tree', '-r', '--name-only', $spec)
+if ($tagPathsResult.Code -ne 0) { throw ('git ls-tree не отдал пути источника: ' + $tagPathsResult.Text) }
 $tagPaths = @($tagPathsResult.Lines | Where-Object { $_ })
 $selection = Get-ReleaseSelection -TagPaths $tagPaths
 
 $discardedByRule = ($selection.ByRule | ForEach-Object { $_.Rule + ' = ' + $_.Count }) -join ', '
 $replacements = @($selection.Replacements)
-Write-Host ('путей в теге: ' + $tagPaths.Count + '; снято с индекса (rm --cached) ' + $selection.Discarded.Count + ' — по именованным правилам ' + ($selection.Discarded.Count - $selection.Unknown.Count) + ', НЕЗНАКОМЫХ ' + $selection.Unknown.Count)
+Write-Host ('путей в ' + $sourceWord + ': ' + $tagPaths.Count + '; снято с индекса (rm --cached -f) ' + $selection.Discarded.Count + ' — по именованным правилам ' + ($selection.Discarded.Count - $selection.Unknown.Count) + ', НЕЗНАКОМЫХ ' + $selection.Unknown.Count)
 if ($discardedByRule) { Write-Host ('  правила: ' + $discardedByRule) }
 Write-Host ('наложено данных: ' + $dataOverlay.Count + ' = ' + ($dataOverlay.Count - $replacements.Count) + ' новых + ' + $replacements.Count + ' замена' + $(if ($replacements.Count -gt 0) { ' (' + ($replacements -join ', ') + ' — блоб заменяется, путь остаётся один)' } else { '' }))
 Write-Host ('не уехало содержимым: ' + ($selection.Discarded.Count + $replacements.Count) + ' = ' + $selection.Discarded.Count + ' снятых + внутреннее содержимое ' + $replacements.Count + ' заменённого пути')
 if ($selection.Unknown.Count -gt 0) {
     Write-Host ''
-    Write-Host ('СБОРКА НЕ ПОЙДЁТ: в теге есть пути, которых разрешённый список не знает — ' + $selection.Unknown.Count)
+    Write-Host ('СБОРКА НЕ ПОЙДЁТ: в ' + $sourceWord + ' есть пути, которых разрешённый список не знает — ' + $selection.Unknown.Count)
     Write-Host 'новый каталог кода обязан остановить выпуск, а не потеряться молча: дополните разрешённый список'
     $selection.Unknown | Select-Object -First 12 | ForEach-Object { Write-Host ('  ' + $_) }
     exit 1
@@ -171,7 +227,7 @@ $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('dsh-make-release-' + [guid]::
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
 try {
-    $expected = Get-ExpectedFullTree -Repo $repoRoot -Tag $Tag -Selection $selection -DataOverlay $dataOverlay -TempRoot $tempRoot
+    $expected = Get-ExpectedFullTree -Repo $repoRoot -Spec $spec -Selection $selection -DataOverlay $dataOverlay -TempRoot $tempRoot
     # Проверка независима от классификатора — см. пояснение в `check-release-tree.ps1` и мутацию CI-11.
     foreach ($name in @($expected.Paths | Where-Object { $null -ne (Get-ReleaseInternalViolation -Path $_) })) {
         Write-Host ('СБОРКА НЕ ПОЙДЁТ: в ожидаемом дереве внутренний файл — ' + $name + ' (' + (Get-ReleaseInternalViolation -Path $name) + ')')
@@ -181,13 +237,17 @@ try {
     Write-Host ''
 
     # ── 5. Сторож выпуска: состав, архив, данные ───────────────────────────────────────────────
-    Write-Host 'шаг 1/3: проверка тега (check-release-tree)'
-    $preCheck = & pwsh -NoProfile -File $checkTool -Tag $Tag -Repo $repoRoot 2>&1
+    Write-Host ('шаг 1/3: проверка ' + $(if ($Tag) { 'тега' } else { 'ревизии' }) + ' (check-release-tree)')
+    # Тот же вход, что и у сборки: тег — ключом -Tag, ревизия — ключом -Rev (полный sha).
+    $preArgs = @('-NoProfile', '-File', $checkTool)
+    $preArgs += $(if ($Tag) { @('-Tag', $Tag) } else { @('-Rev', $commit) })
+    $preArgs += @('-Repo', $repoRoot)
+    $preCheck = & pwsh @preArgs 2>&1
     $preCode = $LASTEXITCODE
-    $preCheck | Where-Object { $_ -match 'ожидаемое ПОЛНОЕ|кода |отброшено путей|данные на диске|архив выпуска|тождество|НЕ СОВПАЛ|неприменимо|замечан|лишн|НЕТ файла|НЕЗНАКОМ' } | ForEach-Object { Write-Host ('  ' + $_) }
+    $preCheck | Where-Object { $_ -match 'ожидаемое ПОЛНОЕ|кода |отброшено путей|снято с индекса|данные на диске|архив выпуска|тождество|НЕ СОВПАЛ|неприменимо|замечан|лишн|НЕТ файла|НЕЗНАКОМ|версия из ревизии' } | ForEach-Object { Write-Host ('  ' + $_) }
     if ($preCode -ne 0) {
         Write-Host ''
-        Write-Host ('СБОРКА НЕ ПОЙДЁТ: проверка по тегу вернула код ' + $preCode + ' (0 — совпало, 1 — расхождение, 2 — неприменимо)')
+        Write-Host ('СБОРКА НЕ ПОЙДЁТ: проверка по ' + $(if ($Tag) { 'тегу' } else { 'ревизии' }) + ' вернула код ' + $preCode + ' (0 — совпало, 1 — расхождение, 2 — неприменимо)')
         $preCheck | Where-Object { $_ -match '^  ' } | ForEach-Object { Write-Host $_ }
         exit $preCode
     }
@@ -199,10 +259,10 @@ try {
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
 
     $fullTar = Join-Path $tempRoot 'full.tar'
-    $archiveFull = Invoke-ReleaseGit -Repo $repoRoot -GitArgs @('archive', '--format=tar', $Tag, '-o', $fullTar)
-    if ($archiveFull.Code -ne 0) { throw ('git archive тега не сработал: ' + $archiveFull.Text) }
+    $archiveFull = Invoke-ReleaseGit -Repo $repoRoot -GitArgs @('archive', '--format=tar', $spec, '-o', $fullTar)
+    if ($archiveFull.Code -ne 0) { throw ('git archive ' + $(if ($Tag) { 'тега' } else { 'ревизии' }) + ' не сработал: ' + $archiveFull.Text) }
     & tar -xf $fullTar -C $staging
-    if ($LASTEXITCODE -ne 0) { throw ('tar не распаковал архив тега (код ' + $LASTEXITCODE + ')') }
+    if ($LASTEXITCODE -ne 0) { throw ('tar не распаковал архив (код ' + $LASTEXITCODE + ')') }
 
     # убрать с диска всё, чего нет в разрешённом списке
     $removed = 0
@@ -223,7 +283,7 @@ try {
 
     # наложение данных в КОРЕНЬ
     $dataTar = Join-Path $tempRoot 'data.tar'
-    $archiveData = Invoke-ReleaseGit -Repo $repoRoot -GitArgs @('archive', '--format=tar', ($Tag + ':release/tree'), '-o', $dataTar)
+    $archiveData = Invoke-ReleaseGit -Repo $repoRoot -GitArgs @('archive', '--format=tar', ($spec + ':release/tree'), '-o', $dataTar)
     if ($archiveData.Code -ne 0) { throw ('git archive данных не сработал: ' + $archiveData.Text) }
     & tar -xf $dataTar -C $staging
     if ($LASTEXITCODE -ne 0) { throw ('tar не распаковал архив данных (код ' + $LASTEXITCODE + ')') }
@@ -287,9 +347,9 @@ try {
     $measureLines += '# ⚠️ В РАБОЧЕЙ КОПИИ РЕПОЗИТОРИЯ те же блобы длиннее на пары CRLF (core.autocrlf=true) — опись по диску печатала бы НЕ ТО, что сравнивается.'
 
     $manifestLines = @(
-        '# release-tree.txt — опись ПОЛНОГО дерева выпуска, собранного из тега (ADR-001 §5.2, правка 17.10.2026)'
-        ('# тег: {0}' -f $Tag)
-        ('# версия: {0} (<Version> в src\DshPanel\DshPanel.csproj тега)' -f $projectVersion)
+        '# release-tree.txt — опись ПОЛНОГО дерева выпуска, собранного из тега или ревизии (ADR-001 §5.2 — 17.10.2026; режим -Rev — 18.10.2026)'
+        $(if ($Tag) { ('# тег: {0}' -f $Tag) } else { ('# ревизия: {0} (тег НЕ создавался)' -f $commit) })
+        ('# версия: {0} (<Version> в src\DshPanel\DshPanel.csproj {1})' -f $projectVersion, $(if ($Tag) { 'тега' } else { 'ревизии' }))
         ('# дерево выпуска (git tree): {0}' -f $expected.Tree)
         ('# путей: {0} = кода {1} + данных {2}' -f $rows.Count, $expected.CodeCount, $expected.DataCount)
     ) + $measureLines + @(
@@ -302,7 +362,10 @@ try {
     # ── ФИНАЛЬНАЯ сверка: по ВРЕМЕННОМУ дереву, ДО первой записи в -Out ────────────────────────
     Write-Host ''
     Write-Host '  финальная сверка: собранное сверяется с ожиданием ДО записи в -Out'
-    $finalCheck = & pwsh -NoProfile -File $checkTool -Tag $Tag -Repo $repoRoot -Tree $staging 2>&1
+    $finalArgs = @('-NoProfile', '-File', $checkTool)
+    $finalArgs += $(if ($Tag) { @('-Tag', $Tag) } else { @('-Rev', $commit) })
+    $finalArgs += @('-Repo', $repoRoot, '-Tree', $staging)
+    $finalCheck = & pwsh @finalArgs 2>&1
     $finalCode = $LASTEXITCODE
     if ($finalCode -ne 0) {
         Write-Host ('СБОРКА ПРОВАЛЕНА: собранное дерево не сошлось с ожиданием (код ' + $finalCode + ')')
@@ -363,6 +426,14 @@ try {
         Write-Host ('  записанное убрано: в «' + $Out + '» снова ничего, описи «' + $Manifest + '» нет')
         exit 1
     }
+} catch {
+    # ⚠️ ПАДЕНИЕ ИНСТРУМЕНТА — СВОИМ ИМЕНЕМ (18.10.2026). Без этой ветки техническая авария
+    # выглядела как сырая запись исключения PowerShell, а рядом стоит совсем другая беда — «дерево
+    # не совпало». Разные беды — разные лекарства, поэтому называются по-разному.
+    Write-Host ''
+    Write-Host ('СБОРКА НЕ СДЕЛАНА: инструмент не смог собрать дерево — ' + $_.Exception.Message)
+    Write-Host ('  в ' + $(if ($Out) { '«' + $Out + '»' } else { 'каталог -Out' }) + ' не записано НИЧЕГО: все сверки идут до первой записи')
+    exit 1
 } finally {
     if (-not $KeepTemp -and $tempRoot -and (Test-Path -LiteralPath $tempRoot)) {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -371,7 +442,8 @@ try {
 
 Write-Host ''
 Write-Host 'ДЕРЕВО ВЫПУСКА СОБРАНО И ПРОВЕРЕНО'
-Write-Host ('  тег:      ' + $Tag)
+Write-Host ('  ' + $(if ($Tag) { 'тег:      ' } else { 'ревизия:  ' }) + $spec)
+if (-not $Tag) { Write-Host '  тег:      НЕ создавался (режим -Rev: приёмка временным индексом, без тега)' }
 Write-Host ('  версия:   ' + $projectVersion)
 Write-Host ('  путей:    ' + $rows.Count + ' = кода ' + $expected.CodeCount + ' + данных ' + $expected.DataCount)
 Write-Host ('  дерево:   ' + $expected.Tree)
@@ -382,9 +454,11 @@ Write-Host ''
 Write-Host 'СЛЕДУЮЩИЕ КОМАНДЫ (инструмент их НЕ выполняет — тег и публикация по слову владельца):'
 Write-Host ('  # положить содержимое «' + $Out + '» в корень публичного дерева одним коммитом')
 Write-Host '  git -C <клон-публичного> add -A; git -C <клон-публичного> commit -m "2.0 вместо 1.x"'
+Write-Host '  # проверить публикацию по ДЕРЕВУ КОММИТА (это и есть тождество, а не диск): check-release-tree -Tree <клон-публичного>'
 Write-Host '  # показать владельцу, дождаться его слова'
-Write-Host ('  git -C <клон-публичного> tag -a ' + $(if ($Tag -match '^v\d+\.\d+\.\d+$') { $Tag } else { 'vX.Y.Z' }) + ' -m "..."')
+$tagForNext = if ($Tag -match '^v\d+\.\d+\.\d+$') { $Tag } elseif ($projectVersion) { 'v' + $projectVersion } else { 'vX.Y.Z' }
+Write-Host ('  git -C <клон-публичного> tag -a ' + $tagForNext + ' -m "..."')
 Write-Host '  git -C <клон-публичного> push origin main --tags   # только по слову владельца'
 Write-Host ''
-Write-Host 'ЧЕСТНО О ГРАНИЦЕ: доказаны СОСТАВ и БАЙТЫ дерева выпуска (код по разрешённому списку + данные). Пары (path, blob-sha) с публичным клоном не сверяются — для них нужен публичный тег того же выпуска.'
+Write-Host 'ЧЕСТНО О ГРАНИЦЕ: доказаны СОСТАВ и БЛОБЫ дерева выпуска (код по разрешённому списку + данные). Пары (path, blob-sha) с публичным клоном не сверяются — для них нужен публичный тег того же выпуска.'
 exit 0

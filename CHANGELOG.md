@@ -2,6 +2,115 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.2.0 - 2026-10-18
+
+**The panel keeps TWO versions of the DSH server side by side, installs each from its own verified
+set, and before switching versions counts the sessions on disk — so that it can name in numbers what
+will become invisible instead of staying silent.** The version is in "About": it says **2.2.0**.
+
+### DSH server: two versions side by side, each from its own set
+
+* **A second verified set — for the 0.2.x line.** `0.2.1-rc.2`: **683 packages**, every record with
+  its own sum and address, the set file is **437 323 B** and its sum is pinned in the build. The set
+  is checked by a real `npm ci`: code 0, **20.7 s**, **63 639 files / 692.8 MB**, and the tree
+  installed from it passes the **panel's full probe**: "77 needed — 77 of 77 recognised; 67 known new
+  — 67 of 67; 7 retired — 7 of 7; 8 skills — 8 of 8; SERVER SUCCESS".
+* **Each version is installed from its own set:** the version's folder gets its own files, and a
+  foreign set is never applied to it. The disk now holds **two** versions — the current and the
+  previous one (**906.4 MB** together); the previous one stays after a rollback too, so "return" is
+  not "install again". The rollback was checked live on two versions (its self-test takes
+  **41.2 s**): "the new folder stayed — we keep the current and the previous one".
+* **A fresh version that has its own set can be installed — but only by a separate button with a
+  confirmation.** The line about it says honestly: "fresh {version} — newer, but the panel has not
+  verified it". **Verified remains `0.1.5-rc.2`:** "it has a set" and "it is verified" are different
+  things, and the panel does not mix them.
+* **The Node threshold is taken no weaker than the strictest of the sets:** one Node serves both
+  versions, and a rollback will not raise the previous version on an unsuitable Node.
+
+### Session journal: a number before a version switch, not silence after
+
+* **The panel counts the session journal format itself — from the disk, by file names.** It reads
+  not one byte of content: the names `session.vN.jsonl*` inside session folders are what is counted.
+  Five numbers: sessions in total, with the new journal, with the old one only, with no journal at
+  all, and a separate count of the "flat" layout. An unfinished record (`.tmp`) does not count as a
+  format; a missing folder is an honest zero, while an unparsable argument is **"could not find
+  out"** — a separate answer, not a zero.
+* **The question before a rollback names the number** — for example: "DSH server 0.1.5-rc.2 will not
+  see **5 of 197** sessions: their journal is already in the new format, and it will not say so —
+  they will disappear from the list silently. The history is intact and lies next to it in the file
+  of the old format; visibility can be returned in one step — remove the new journal file
+  (session.v4) from the session folder; the panel does not do this itself."
+* **After a successful rollback the panel repeats the number itself** — in the past tense. That is
+  not politeness: the engine never speaks about the sessions that disappeared (measured: the `0.1.5`
+  list became **197 → 196**, with neither a field nor a word in the answer, stderr **0 bytes**), so
+  only the panel can say it.
+* **The question before an update says how many sessions will move** on the first opening under the
+  new version: "Right now **192 of 197** sessions are in the old format". This works for the separate
+  button of an unverified version too: the window used to compose the question text itself and lost
+  everything the door added — that is, the journal warning would not have reached the person exactly
+  where an unverified version is installed. The defect was found and fixed by this release.
+* **The migration is lazy and the history is not lost.** Measured on a copy of the profile (197
+  sessions: 179 subagent and 18 root): the old journal file is not rewritten (its SHA-256 matched),
+  a new file appears next to it. Records **261 → 261** and **1043 → 1044** (the migration added one
+  service record), all record kinds matched, the three token counters are the same, and the new file
+  is **26.7 %** and **35.8 %** smaller than the compressed old one.
+* **A falsehood about the mechanism is fixed** in three dictionaries: it used to say "sessions
+  **created** by version {0} will not be opened by the old DSH server" — by measurement, the session
+  that was merely **opened** under the new version is hidden too. Now it says "opened under".
+
+### Phone
+
+* **The phone shows only the conversations that can be opened.** Measured: **179 of 197** sessions
+  are subagent ones, and they cannot be opened without the parent address — the rows were in the list
+  while there was no way to open them. Now only root sessions are given to the phone, and the hidden
+  ones are **not hidden silently**: a line goes to the panel's journal — "subagent sessions not shown
+  to the phone: 179 of 197" — and it repeats only when the number changes. No new call, path or
+  address was added: the allow-list is still **13 calls**.
+* **An answer the server did not accept is no longer passed off as sent.** If the server answers "not
+  accepted" (`200 {ok:true, value:false}` — its answer when the profile is `mode: legacy`), the phone
+  gets a refusal: "The DSH server did not accept the answer — the question is still open. Answer
+  again or cancel the run", not "the answer has been sent".
+* **The gate does not come up on a wildcard address.** `0.0.0.0` and `::` are refused with a reason:
+  that would open it to the whole network rather than to one machine. Previously this was a promise
+  in a comment, while the check only asked "does the string parse as an address".
+* **A profile copy with the new journal is checked by a real 7-Zip:** both the archive and the
+  restore return all five journal files byte for byte.
+
+### Backups
+
+* **The copies window no longer gets stuck.** The answer of a background job could fail to reach the
+  window (measured: 1 failure in 5 full runs under load), and the window stayed busy forever. Now the
+  window takes its own thread and answers through it — someone else's forgetfulness does not disarm
+  it. The product's behaviour has not changed: the copy still runs in the background, the window is
+  busy while it works and unblocks when it ends.
+* **A backup archive appears in one appearance instead of flickering.** The final name used to appear
+  and disappear (measured before: in 6 runs out of 6 — three appearances and two removals of the
+  final name per copy; after — a single event). Now the archive is written under `<name>.part`,
+  checked by `7z t` **before** publication and published by a single move; a stray `.part` does not
+  count as a copy. The same was done in the update archive.
+
+### What 2.2 does not have
+
+* **The 0.2.x line is not declared verified.** Verified remains `0.1.5-rc.2`; `0.2.1-rc.2` has its own
+  set and can be installed by a separate button with a confirmation, but the words "the panel has
+  verified it" do not appear because of that.
+* **The panel does not remove `session.v4` itself** and does not "fix" the journal layout: that is a
+  person's data, and the step is named in words rather than done silently.
+* **Subagent sessions do not open from the phone** — they need the parent address. The phone does not
+  show them, and the number of hidden ones goes to the panel's journal.
+* **There is still no code signing** — SmartScreen will warn on the first run.
+
+**Under the hood (no visible change):** the server surface catalogue knows the second line: on
+`0.2.1-rc.2` there are **144** names declared — **77** of ours are alive, **7** are retired, **67**
+are new in **16** families (on `0.2.0-rc.2` — 140, 63 and 13; the lines are not subsets of each
+other). The probe calls only the 77 needed live, names the absence of the retired ones in a line, and
+**an unknown name at the engine still fails the probe**: the next version must be noticed before
+people are. The version registry reads **both** marks — `latest` and `next` — and takes the senior
+one: the old "fresh = latest" hid a fresher version entirely. The build in CI is pinned to SDK
+`10.0.402` (`10.0.401` failed `restore --locked-mode` with `NU1004` —
+`Microsoft.NET.ILLink.Tasks`; the sets were taken on `10.0.402`), and a test run cleans up after
+itself in `%TEMP%\dsh-panel-tests` (was 66 folders / 28.54 MB — now 0). The test count is **2084**.
+
 ## 2.1.0 - 2026-10-17
 
 **A phone on your own network answers the agent's question, and the panel now installs, updates

@@ -309,15 +309,32 @@ public static class EngineInstaller
         EngineInstallDoors doors,
         Action<string>? progress,
         Func<EngineNodeResult>? ownNode = null,
-        string? recordPath = null)
+        string? recordPath = null,
+        EngineTreeLocks? locks = null,
+        string? requested = null)
     {
         ArgumentNullException.ThrowIfNull(doors);
 
-        if (engineLock is null) return Refuse(EngineInstallOutcome.Refused, EngineInstallRefusals.NoLock, string.Empty);
+        var all = locks ?? EngineTreeLocks.Of(engineLock);
+        var wanted = (requested ?? string.Empty).Trim();
 
-        var plan = EngineInstallDecisions.Decide(engineLock, hints, engineDir);
+        if (!all.Any) return Refuse(EngineInstallOutcome.Refused, EngineInstallRefusals.NoLock, string.Empty);
+
+        // ⚠️ ДВЕ ДОРОГИ, И ОНИ РАЗНЫЕ (блок B): главная кнопка берёт версию из подсказок и сверяет
+        // её с замком («две правды об одном дереве»), а отдельная просьба называет версию сама —
+        // и проверяется только годность её замка. Первая дорога не изменилась ни на строку.
+        var plan = wanted.Length > 0
+            ? EngineInstallDecisions.DecideFor(all, wanted, engineDir)
+            : EngineInstallDecisions.Decide(engineLock, hints, engineDir);
 
         if (!plan.Any) return Refuse(EngineInstallOutcome.Refused, plan.RefusalKey, plan.Version);
+
+        // Замок — ТОЙ ВЕРСИИ, которую ставим: у 0.1.5 набор 588 пакетов, у 0.2.1 — 683, и файлы
+        // `package-lock.json`/`package.json` в папку версии кладутся ИЗ НЕГО.
+        var lockFile = wanted.Length > 0 ? all.For(wanted) : engineLock!;
+
+        if (!lockFile.Any)
+            return Refuse(EngineInstallOutcome.Refused, EngineInstallRefusals.NoLockForVersion, plan.Version);
 
         if (string.IsNullOrWhiteSpace(engineDir))
             return Refuse(EngineInstallOutcome.Refused, EngineInstallRefusals.NoPlace, plan.Version);
@@ -335,7 +352,7 @@ public static class EngineInstaller
         var usedNode = new EngineNodeResult(
             EngineNodeOutcome.SystemSuits, node, nodeVersion, string.Empty, string.Empty, Ours: false);
 
-        if (!EngineNode.Fits(nodeVersion, engineLock))
+        if (!EngineNode.Fits(nodeVersion, lockFile))
         {
             var own = ownNode?.Invoke();
 
@@ -360,7 +377,7 @@ public static class EngineInstaller
             else
             {
                 return Refuse(EngineInstallOutcome.Refused, EngineInstallRefusals.NodeOld, plan.Version,
-                    EngineInstallPhrases.NodeOld(nodeVersion, EngineNode.RequiredFrom(engineLock)));
+                    EngineInstallPhrases.NodeOld(nodeVersion, EngineNode.RequiredFrom(lockFile)));
             }
         }
 
@@ -390,8 +407,8 @@ public static class EngineInstaller
         try
         {
             Directory.CreateDirectory(installDir);
-            File.WriteAllText(Path.Combine(installDir, "package-lock.json"), engineLock.NpmLockJson, Utf8);
-            File.WriteAllText(Path.Combine(installDir, "package.json"), engineLock.PackageJson, Utf8);
+            File.WriteAllText(Path.Combine(installDir, "package-lock.json"), lockFile.NpmLockJson, Utf8);
+            File.WriteAllText(Path.Combine(installDir, "package.json"), lockFile.PackageJson, Utf8);
         }
         catch (Exception error)
         {
@@ -412,7 +429,7 @@ public static class EngineInstaller
                 EngineInstallPhrases.NpmFailed(run.Code, run.Output));
 
         var read = doors.ReadTree(installDir);
-        var tree = EngineTreeCheck.Against(engineLock, read.Paths, read.VersionOf);
+        var tree = EngineTreeCheck.Against(lockFile, read.Paths, read.VersionOf);
 
         if (!tree.Ok)
         {

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using DshPanel.Localization;
 using DshPanel.Shell;
 
@@ -513,6 +514,13 @@ public static class PhoneDecisions
     public const string SessionCancelEndpoint = "session/cancel";
 
     /// <summary>
+    /// СПИСОК РАЗГОВОРОВ — единственный вызов, чей ОТВЕТ калитка переписывает (блок D плана 2.2.0):
+    /// из него убираются подчинённые сессии (<see cref="PhoneSessions"/>). Имя стоит здесь по той же
+    /// причине, что <see cref="SessionCancelEndpoint"/>: одним местом, а не строкой в двух файлах.
+    /// </summary>
+    public const string SessionListEndpoint = "session/list";
+
+    /// <summary>
     /// ЧТО ТЕЛЕФОНУ МОЖНО — ЗАКРЕПЛЁННЫЙ СПИСОК, ОДНО МЕСТО НА ВСЮ ПАНЕЛЬ.
     ///
     /// **Это не «мост наружу», а белый список, и разница принципиальна.** У движка без входа
@@ -538,7 +546,7 @@ public static class PhoneDecisions
     /// </summary>
     public static IReadOnlyList<PhoneCall> Allowed { get; } = new[]
     {
-        new PhoneCall("session/list", EngineRpcMode.Unary, ArgumentSessionList),
+        new PhoneCall(SessionListEndpoint, EngineRpcMode.Unary, ArgumentSessionList),
         new PhoneCall("session/page", EngineRpcMode.Unary, ArgumentRequest),
         new PhoneCall("session/follow", EngineRpcMode.Stream, ArgumentRequest),
         new PhoneCall("session/control", EngineRpcMode.Stream, ArgumentRequest),
@@ -881,4 +889,68 @@ public static class PhoneDecisions
     /// </summary>
     public static string PairingCodeText(string code) =>
         Loc.T(PanelStrings.PhonePairingCodeFormat, code, (int)CodeLifetime.TotalMinutes);
+
+    // ---- принял ли движок ответ телефона (блок D плана 2.2.0) --------------------------------
+
+    /// <summary>ЧТО СКАЗАЛ ДВИЖОК ПРО ОТВЕТ ТЕЛЕФОНА.</summary>
+    public enum AnswerJudge
+    {
+        /// <summary>Принял — ответ человека ушёл в работу.</summary>
+        Accepted,
+
+        /// <summary>
+        /// НЕ ПРИНЯЛ: движок ответил `200`, конверт без ошибки, но в нём ЯВНОЕ `value: false`.
+        /// Сказать телефону «ответ отправлен» здесь значило бы соврать: ход останется стоять.
+        /// </summary>
+        NotTaken,
+
+        /// <summary>Конверт с кодом ошибки — событие чужое или уже снятое (это разбирается отдельно).</summary>
+        EnvelopeError,
+    }
+
+    /// <summary>
+    /// ПРИНЯЛ ЛИ ДВИЖОК ОТВЕТ — ПО ОТВЕТУ, А НЕ ПО КОДУ HTTP.
+    ///
+    /// **От какого замера (`_team\220\l1-zhivoy-vopros.md`).** На живом блокирующем вопросе старую
+    /// дверь (`$events/result`) движок принимает одинаково на 0.1.5 и на 0.2.1 — `200 {ok:true}`.
+    /// А новые вызовы `userQuestions/*` ответ НЕ принимают: `userQuestions/answer` → `200 {ok:true,
+    /// value:false}`, `attachWait` → ни одного кадра за 2,5 с. Причина названа: профиль `web`
+    /// работает в `mode: legacy`, а проекция `userQuestions` считает только `timed`.
+    ///
+    /// ⚠️ **Зачем эта проверка, если сегодня всё принимается.** Риск назван в самой задаче: если
+    /// апстрим однажды переключит профиль на `mode: timed`, дверь `$events/result` начнёт отвечать
+    /// **молча** (`ok:true`, `value:false`), и калитка без этой проверки сказала бы человеку
+    /// «ответ отправлен» там, где вопрос так и висит. Теперь такой ответ — честный отказ.
+    ///
+    /// ⚠️ Смотрим ТОЛЬКО на явное `false`: у принятого ответа поля `value` нет вовсе (замер L1),
+    /// а `value` с чем-то другим — не отказ, и придираться к нему нельзя.
+    /// </summary>
+    public static AnswerJudge JudgeAnswer(string? body)
+    {
+        if (EngineRpcClient.ErrorCode(body).Length > 0) return AnswerJudge.EnvelopeError;
+
+        if (string.IsNullOrWhiteSpace(body)) return AnswerJudge.Accepted;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body!);
+
+            var root = document.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object) return AnswerJudge.Accepted;
+            if (!root.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Object)
+                return AnswerJudge.Accepted;
+
+            if (result.TryGetProperty("value", out var value) && value.ValueKind == JsonValueKind.False)
+                return AnswerJudge.NotTaken;
+
+            return AnswerJudge.Accepted;
+        }
+        catch (JsonException)
+        {
+            // Не разобрали — не выдумываем отказ: конверт разбирает движок, а наша беда в разборе
+            // не повод объявлять ответ потерянным.
+            return AnswerJudge.Accepted;
+        }
+    }
 }

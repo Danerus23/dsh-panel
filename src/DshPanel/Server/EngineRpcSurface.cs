@@ -37,6 +37,13 @@ public sealed record EngineRpcMethod(string Endpoint, EngineRpcMode Mode, bool R
 /// целиком»). Прежняя запись в `docs\ENGINE.md` (§8) говорила `session.*` — она этому замеру
 /// больше не соответствует и поправлена.
 ///
+/// **Линия 0.2.x — второй снимок, а не второй список.** Панель 2.2.0 переезжает на 0.2.x, и её
+/// проба обязана отличать «движок стал другим и это беда» от «движок стал другим, и мы это знали»:
+/// у `0.2.1-rc.2` объявлено 144 имени — 77 наших живы, 7 сняты с надобности (`Retired`, живьём
+/// не зовутся), 67 новых (`KnownAdded`, панели не нужны). Проверяется ЖИВЬЁМ только `Required`
+/// (77), отсутствие снятых законно, а НЕЗНАКОМОЕ имя — по-прежнему провал. Замер, числа и правило —
+/// в блоке констант ниже и в `docs\ENGINE.md`; отчёт замера — `_team\220\a-poverhnost-imen.md`.
+///
 /// **Что здесь НЕ утверждается.** Список говорит «эти имена у движка ЕСТЬ», и ничего про то,
 /// что каждое из них панель уже использует: сегодня панель ходит в движок только запуском
 /// процесса, а RPC не зовёт вовсе. Список — договор на будущее и сторож на сегодня.
@@ -54,6 +61,126 @@ public static class EngineRpcSurface
     /// из которого молча вычеркнули строку, перестал бы её и проверять.
     /// </summary>
     public const int MeasuredCount = 84;
+
+    // ---------------------------------------------------------------------------------------
+    // ВТОРОЙ СНИМОК ПОВЕРХНОСТИ — ЛИНИЯ 0.2.x (замер 18.10.2026, задача t3 плана 2.2.0)
+    //
+    // Зачем второй снимок. Панель 2.2.0 переезжает на движок 0.2.x, а её закреплённый список
+    // снят на 0.1.5-rc.2. Без второго снимка проба на 0.2.x честно кричала бы «поверхность
+    // изменилась» — и действительно менялась бы, но не в ту сторону, которая ломает панель.
+    //
+    // Что измерено (своим разбором объявлений движка, 29 файлов `typert.remote-client.d.ts`,
+    // сошлось с разведкой E4 до единицы):
+    //   * у `0.2.1-rc.2` объявлено 144 имени: 77 наших живы, 7 наших пропали, 67 новых в 16 семействах;
+    //   * 7 пропавших — ТОЛЬКО в каталоге панели, живьём ни одно из них не зовётся (разведка E4 §5:
+    //     каждое встречается в `src` ровно один раз — в этом файле), поэтому потеря ничего не ломает;
+    //   * 67 новых панели НЕ НУЖНЫ — они названы затем, чтобы «поверхность изменилась» было
+    //     посчитанным фактом, а не тревогой с чужого слова.
+    //
+    // Отсюда правило пробы (см. `EngineRpcProbe`): обязательны 77 нужных имён (`Required`),
+    // отсутствие 7 снятых с надобности (`Retired`) — законно, а НЕЗНАКОМОЕ имя у движка —
+    // по-прежнему тревога: следующая версия обязана быть замечена до людей.
+    // ---------------------------------------------------------------------------------------
+
+    /// <summary>Версия движка, на которой снят второй снимок (линия 0.2.x).</summary>
+    public const string KnownOnVersion = "0.2.1-rc.2";
+
+    /// <summary>Когда снят второй снимок.</summary>
+    public const string KnownOn = "18.10.2026";
+
+    /// <summary>Сколько имён объявляет `0.2.1-rc.2`: 77 нужных панели + 67 новых.</summary>
+    public const int KnownOnDeclaredCount = 144;
+
+    /// <summary>Сколько новых имён у линии 0.2.x — тех, что панели не нужны.</summary>
+    public const int KnownAddedCount = 67;
+
+    /// <summary>Сколько семейств у этих 67 новых имён.</summary>
+    public const int KnownAddedFamilies = 16;
+
+    /// <summary>Сколько наших имён живо у линии 0.2.x (и обязаны быть живы).</summary>
+    public const int RequiredCountOnKnown = 77;
+
+    /// <summary>
+    /// СЕМЬ ИМЁН, КОТОРЫЕ У ЛИНИИ 0.2.x ПРОПАЛИ, — И ЭТО ЗАКОННО.
+    ///
+    /// **Почему законно.** Разведка E4 проверила по репозиторию: каждое из семи встречается в `src`
+    /// **ровно один раз** — в этом файле; ни один живой вызов панели их не зовёт (ни телефонная
+    /// калитка, ни проба умений, ни одна дверь). То есть это не «потерянные вызовы», а строки
+    /// каталога, снятые с надобности: у 0.1.5 они есть, у 0.2.x их нет, и панели всё равно.
+    ///
+    /// ⚠️ **Список НЕ вычёркивается молча, и это важно:** `Required` = список минус эти семь,
+    /// а сама семёрка остаётся названной — иначе через полгода никто не ответит, почему в списке
+    /// 84 имени, а проверяется 77. Запись в `engine-hints.json` про 0.2.1 называет их же — сверка
+    /// стережёт `EngineHintsTests`.
+    /// </summary>
+    public static IReadOnlyList<string> Retired { get; } = new[]
+    {
+        // dsh-agent-presets
+        "agentPresets/copy",
+        "agentPresets/deletePreset",
+
+        // dsh-api-settings-controller (вместе с credentials)
+        "settings/canOpenAgentPresetDirectory",
+        "settings/openAgentPresetDirectory",
+
+        // dsh-subagent · dsh-api-workspace-files
+        "subagents/list",
+        "workspaceFiles/readAll",
+        "workspaceFiles/readRelated",
+    };
+
+    /// <summary>
+    /// 67 ИМЁН, КОТОРЫЕ У ЛИНИИ 0.2.x ПОЯВИЛИСЬ. Панели они не нужны — но перечислены, потому что
+    /// «у движка что-то появилось» обязано быть фактом каталога, а не неожиданностью на пробе.
+    ///
+    /// Вид вызова (одиночный/поток) у новых имён **не размечался намеренно**: панель их не зовёт,
+    /// а догадка о виде потока стала бы утверждением без замера. Понадобятся — размечаются вместе
+    /// с первым живым вызовом.
+    /// </summary>
+    public static IReadOnlyList<string> KnownAdded { get; } = new[]
+    {
+        // pluginManager = 12
+        "pluginManager/cancelInstall", "pluginManager/inspect", "pluginManager/installBundle",
+        "pluginManager/listBundles", "pluginManager/listPlugins", "pluginManager/listVersionExemptions",
+        "pluginManager/registries", "pluginManager/removeBundle", "pluginManager/setBundleEnabled",
+        "pluginManager/setPluginEnabled", "pluginManager/setVersionExemption", "pluginManager/waitForInstall",
+
+        // account = 11
+        "account/ackBonusNotified", "account/cancelSignIn", "account/getBalance", "account/getProfile",
+        "account/getState", "account/getUnnotifiedBonuses", "account/hasRunningAccountTasks",
+        "account/signOut", "account/startSignIn", "account/watch", "account/watchExpiry",
+
+        // terminal = 8
+        "terminal/attach", "terminal/close", "terminal/create", "terminal/environment",
+        "terminal/list", "terminal/rename", "terminal/retain", "terminal/shells",
+
+        // speech = 6
+        "speech/cancelPreparation", "speech/catalog", "speech/configure", "speech/follow",
+        "speech/prepare", "speech/transcribe",
+
+        // schedule = 5
+        "schedule/catalog", "schedule/delete", "schedule/history", "schedule/list", "schedule/update",
+
+        // workspace = 4
+        "workspace/initializeDefault", "workspace/pinSession", "workspace/unarchiveSession",
+        "workspace/unpinSession",
+
+        // job · pluginMarket · productAnalytics · session = по 3
+        "job/follow", "job/kill", "job/list",
+        "pluginMarket/listIndexes", "pluginMarket/search", "pluginMarket/setIndexes",
+        "productAnalytics/enabled", "productAnalytics/report", "productAnalytics/watchPolicy",
+        "session/initializeDefaultModel", "session/projections", "session/workspacePathApplications",
+
+        // cotTranslation · officeToPdf · userQuestions = по 2
+        "cotTranslation/limits", "cotTranslation/translate",
+        "officeToPdf/generation", "officeToPdf/render",
+        "userQuestions/answer", "userQuestions/attachWait",
+
+        // permissionPresets · pluginRegistryProbe · remoteAccess = по 1
+        "permissionPresets/catalog",
+        "pluginRegistryProbe/fastest",
+        "remoteAccess/follow",
+    };
 
     /// <summary>
     /// Внутренний адрес движка, который пробой НЕ проверяется намеренно: `$events/result`
@@ -218,7 +345,72 @@ public static class EngineRpcSurface
     public static IReadOnlyList<string> Namespaces =>
         Methods.Select(m => m.Endpoint.Split('/')[0]).Distinct(StringComparer.Ordinal).OrderBy(n => n, StringComparer.Ordinal).ToList();
 
+    /// <summary>Семейства 67 новых имён линии 0.2.x — их 16, и это тоже посчитанный факт.</summary>
+    public static IReadOnlyList<string> KnownAddedNamespaces =>
+        KnownAdded.Select(n => n.Split('/')[0]).Distinct(StringComparer.Ordinal).OrderBy(n => n, StringComparer.Ordinal).ToList();
+
     /// <summary>Только те методы, что ничего не меняют. Калитке телефона (этап F) нужны прежде всего они.</summary>
     public static IReadOnlyList<EngineRpcMethod> Reading =>
         Methods.Where(m => m.ReadOnly).ToList();
+
+    /// <summary>
+    /// ЧТО ПРОБА ОБЯЗАНА НАЙТИ У ДВИЖКА — список 84 минус снятые с надобности семь (77 имён).
+    ///
+    /// ⚠️ Проверяется ЖИВЬЁМ именно этот список, а не все 84: имя, которое панель не зовёт, не даёт
+    /// права провалить пробу и объявить годный движок негодным. Зато пропажа НУЖНОГО имени —
+    /// по-прежнему провал (см. `EngineRpcProbe`).
+    /// </summary>
+    public static IReadOnlyList<EngineRpcMethod> Required { get; } =
+        Methods.Where(m => !Retired.Contains(m.Endpoint, StringComparer.Ordinal)).ToList();
+
+    /// <summary>Сколько имён пробе обязательно (77 на замере 18.10.2026).</summary>
+    public static int RequiredTotal => Required.Count;
+
+    /// <summary>
+    /// ЧЕГО У ДВИЖКА НЕТ ИЗ НУЖНОГО. Пусто — все нужные имена движок объявляет.
+    /// </summary>
+    public static IReadOnlyList<string> MissingRequired(IReadOnlyCollection<string> declared)
+    {
+        ArgumentNullException.ThrowIfNull(declared);
+
+        var have = declared.ToHashSet(StringComparer.Ordinal);
+        return Required.Select(m => m.Endpoint).Where(name => !have.Contains(name)).ToList();
+    }
+
+    /// <summary>
+    /// СКОЛЬКО ИЗ СЕМИ СНЯТЫХ С НАДОБНОСТИ ИМЁН ДВИЖОК БОЛЬШЕ НЕ ОБЪЯВЛЯЕТ. Ноль — движок старой
+    /// линии (0.1.5: все семь на месте); семь — линия 0.2.x. Провалом не является НИ ОДНО значение:
+    /// панель этих имён не зовёт.
+    /// </summary>
+    public static IReadOnlyList<string> LostKnown(IReadOnlyCollection<string> declared)
+    {
+        ArgumentNullException.ThrowIfNull(declared);
+
+        var have = declared.ToHashSet(StringComparer.Ordinal);
+        return Retired.Where(name => !have.Contains(name)).ToList();
+    }
+
+    /// <summary>
+    /// ИМЕНА, С КОТОРЫМИ ПАНЕЛЬ НЕ ЗНАКОМА ВООБЩЕ. Непустой список — провал пробы: поверхность
+    /// движка изменилась, и панель обязана это заметить до людей, а не после.
+    /// </summary>
+    public static IReadOnlyList<string> UnknownAdded(IReadOnlyCollection<string> declared)
+    {
+        ArgumentNullException.ThrowIfNull(declared);
+
+        var known = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var method in Methods) known.Add(method.Endpoint);
+        foreach (var name in KnownAdded) known.Add(name);
+
+        return declared.Where(name => !known.Contains(name)).OrderBy(name => name, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Сколько знакомых новых имён движок действительно объявляет (на 0.2.1 — 67 из 67).</summary>
+    public static int KnownAddedPresent(IReadOnlyCollection<string> declared)
+    {
+        ArgumentNullException.ThrowIfNull(declared);
+
+        var have = declared.ToHashSet(StringComparer.Ordinal);
+        return KnownAdded.Count(name => have.Contains(name));
+    }
 }

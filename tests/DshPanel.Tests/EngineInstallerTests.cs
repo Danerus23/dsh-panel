@@ -518,8 +518,65 @@ public class EngineInstallerTests
         }
     }
 
+    /// <summary>
+    /// ОТДЕЛЬНАЯ ПРОСЬБА О ВЕРСИИ: СТАВИТСЯ ЕЁ ЗАМОК, А НЕ ГЛАВНЫЙ (задача `t4`, блок B).
+    ///
+    /// Это и есть «две версии на диске»: человек просит поставить линию 0.2.x, у неё свой набор
+    /// (683 пакета), и в папку `<движок>\0.2.1-rc.2` обязаны лечь файлы ИМЕННО её замка — иначе
+    /// `npm ci` поставил бы 588 пакетов, а панель объявила бы 683.
+    /// </summary>
+    [Fact]
+    public void Отдельная_просьба_ставит_по_замку_названной_версии()
+    {
+        var root = NewFolder();
+
+        try
+        {
+            var old = Lock();
+            var fresh = LockFor("0.2.1-rc.2");
+            var locks = new EngineTreeLocks(new[] { old, fresh });
+            var engineDir = Path.Combine(root, "engine");
+            var asked = string.Empty;
+
+            var doors = new EngineInstallDoors(
+                _ => "v26.9.0",
+                (_, dir, _, _) =>
+                {
+                    asked = dir;
+                    return new EngineNpmRun(0, "added 683 packages", false);
+                },
+                _ => Tree(fresh));
+
+            var result = EngineInstaller.Install(
+                locks.Primary, Hints(), engineDir, @"C:\Node\node.exe", @"C:\Node\npm.cmd",
+                doors, null, ownNode: null, recordPath: null, locks: locks, requested: "0.2.1-rc.2");
+
+            Assert.True(result.Ok, result.Detail);
+            Assert.Equal("0.2.1-rc.2", result.Version);
+            Assert.Equal(Path.Combine(engineDir, "0.2.1-rc.2"), asked);
+
+            // В папке версии — файлы ЕЁ замка, и главный замок туда не попал.
+            var package = File.ReadAllText(Path.Combine(engineDir, "0.2.1-rc.2", "package.json"));
+            Assert.Contains("0.2.1-rc.2", package, StringComparison.Ordinal);
+            Assert.DoesNotContain("0.1.5-rc.2", package, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Remove(root);
+        }
+    }
     // ---- подставные замок, подсказки и дерево ------------------------------------------------
 
+    /// <summary>Замок на две записи для НАЗВАННОЙ версии — для проверок «двух версий» (блок B).</summary>
+    private static EngineTreeLock LockFor(string version) => EngineTreeLock.Parse(
+        "{\"format\":2,\"engine\":{\"name\":\"@deepseek-ai/dsh\",\"version\":\"" + version + "\"}," +
+        "\"product\":{\"name\":\"dsh-panel-engine\",\"version\":\"0.0.0\"},\"packages\":2," +
+        "\"lock\":{\"name\":\"dsh-panel-engine\",\"version\":\"0.0.0\",\"lockfileVersion\":3,\"requires\":true,\"packages\":{" +
+        "\"\":{\"name\":\"dsh-panel-engine\",\"version\":\"0.0.0\",\"dependencies\":{\"@deepseek-ai/dsh\":\"" + version + "\"}}," +
+        "\"node_modules/@deepseek-ai/dsh\":{\"version\":\"" + version + "\",\"integrity\":\"sha512-A\"," +
+        "\"resolved\":\"https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-" + version + ".tgz\"}," +
+        "\"node_modules/a\":{\"version\":\"1.0.0\",\"integrity\":\"sha512-B\"," +
+        "\"resolved\":\"https://registry.npmjs.org/a/-/a-1.0.0.tgz\"}}}}");
     /// <summary>Замок на две записи — как настоящий, только короткий.</summary>
     private static EngineTreeLock Lock() => EngineTreeLock.Parse(
         "{\"format\":2,\"engine\":{\"name\":\"@deepseek-ai/dsh\",\"version\":\"0.1.5-rc.2\"}," +

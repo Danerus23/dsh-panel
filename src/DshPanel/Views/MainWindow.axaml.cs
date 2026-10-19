@@ -82,19 +82,81 @@ public partial class MainWindow : Window
     private string _renderedFoundPorts = string.Empty;
 
     /// <summary>
+    /// СВОЯ нитка интерфейса, взятая при постройке окна (t11 цикла 2.1.2 — тот же класс, что Н-1).
+    ///
+    /// ⚠️ Спрашивать её заново в каждом ответе из фона НЕЛЬЗЯ: память общей двери (`Shell\UiThread`)
+    /// одна на процесс, и её очищает проверка «нитки нет вовсе» (`UiThreadTests.ForgetForTests`),
+    /// идущая в полном прогоне ПАРАЛЛЕЛЬНО с окнами. Тогда ответ терялся, а занятость оставалась
+    /// навсегда: `_busy` держал кнопки «Запустить»/«Отвязать»/«Остановить» заблокированными,
+    /// а `_refreshing` выключал опрос состояния целиком. Окно свою нитку знает — и ответ доходит.
+    /// </summary>
+    private readonly Dispatcher _ui;
+
+    /// <summary>
+    /// НИТКА ИНТЕРФЕЙСА ОКНА ИЛИ ГРОМКИЙ ОТКАЗ (требование владельца, t11).
+    ///
+    /// **Почему отказ, а не пустое поле.** Окно без диспетчера своей нитки не умеет возвращать
+    /// ответы из фона: `_busy` и `_refreshing` остались бы занятыми НАВСЕГДА — кнопки
+    /// «Запустить»/«Отвязать»/«Остановить» заблокированы, опрос состояния выключен, и человек
+    /// видит мёртвое окно без единого слова. «Иногда так бывает» здесь нет: окно живёт на нитке
+    /// интерфейса по определению.
+    ///
+    /// **Почему это отдельный член, а не строка в конструкторе.** Окно на нитке БЕЗ диспетчера
+    /// построить нельзя вовсе: базовый конструктор `Window` требует платформу и падает первым
+    /// («Unable to locate 'Avalonia.Platform.IWindowingPlatform'», замер t11). Поэтому решение
+    /// проверяется напрямую — оно же и есть то, что зовёт конструктор; подменять проверку
+    /// осмотром нельзя. См. `MainWindowBackgroundTests.Окно_без_нитки_интерфейса_отказывается_строиться`.
+    /// </summary>
+    internal static Dispatcher RequireUiThread(Dispatcher? captured) =>
+        UiThread.RequireWindow(captured, "ГЛАВНОЕ ОКНО");
+
+    /// <summary>
+    /// ОТПРАВИТЬ РАБОТУ НА СВОЮ НИТКУ ОКНА (t13). Так App возвращает занятость автоподъёма:
+    /// `BeginServerStart` и `EndServerStart` — состояние ЭТОГО окна, и они обязаны дойти, даже если
+    /// память нитки в общей двери к тому моменту забыта. Потеря второго означала бы «запускаю
+    /// сервер…» навсегда с заблокированными кнопками.
+    ///
+    /// ⚠️ Ветка `false` **недостижима по конструкции**: `_ui` взят в конструкторе и non-nullable,
+    /// `RequireUiThread` пустого значения не даёт. И всё же она названа вслух строкой журнала —
+    /// и не исключением: это ответ фоновой задачи, и бросить оттуда значит уронить процесс, что хуже
+    /// залипшей кнопки.
+    /// </summary>
+    public void PostToOwnUi(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        if (UiThread.PostTo(_ui, action)) return;
+
+        PanelLog.Write(
+            "ГЛАВНОЕ ОКНО: ответ из фона не дошёл — нитка интерфейса окна недоступна; " +
+            "занятость окна могла остаться навсегда");
+    }
+
+    /// <summary>
     /// InitializeComponent, а не AvaloniaXamlLoader.Load(this): только первый прописывает
     /// поля, объявленные в разметке через x:Name. С Load(this) окно рисуется, а поля остаются
     /// null — и первое же обращение к кнопке падает. Поймал тест окна 24.09.2026.
     /// </summary>
     public MainWindow()
     {
-        InitializeComponent();
-
+        // 1) НИТКА ИНТЕРФЕЙСА — ДО РАЗМЕТКИ, и это не перестановка ради красоты (t11): отказ
+        // «нет нитки» обязан зависеть от НИТКИ, а не от того, поднялась ли платформа. Проверено
+        // прогоном: на нитке без диспетчера `InitializeComponent` падает первым и СВОИМ текстом,
+        // и проверка отказа получала бы чужую причину.
+        //
         // Окно живёт на нитке интерфейса — она и есть нитка панели для общей двери
         // (`Shell\UiThread`): фоновые опросы сервера возвращаются сюда, и дверь обязана
         // знать, куда именно. Без этого фоновый ответ спрашивал бы `Dispatcher.UIThread`
         // и в прогоне проверок ЗАБИРАЛ бы нитку интерфейса себе.
         UiThread.Remember();
+
+        // ...и ЗДЕСЬ же она берётся на память самому окну: оба ответа из фона (нажатие и опрос)
+        // идут через `UiThread.PostTo(_ui, …)` и не зависят от того, помнит ли дверь нитку (t11).
+        // Пустая нитка — отказ с названной причиной, а не тихое поле: см. `RequireUiThread`.
+        _ui = RequireUiThread(UiThread.Capture());
+
+        // 2) Разметка
+        InitializeComponent();
 
         // Значок окна — из одной точки правды (`Shell\PanelIcon.cs`): тот же рисунок лежит
         // в самом exe, и расходиться им нельзя.
@@ -250,9 +312,11 @@ public partial class MainWindow : Window
         _server = server;
         RebuildModel();
 
+        // НАДПИСЬ ЗАНЯТОСТИ — ПО ПРИЗНАКУ «ПЕРВЫЙ ЛИ ЗАПУСК» (t15, 18.10.2026): обещание минуты
+        // достраивания профиля здесь стояло всегда и было неправдой на обычном подъёме.
         StartServerButton.Click += (_, _) => RunInBackground(
             () => server.Start(StartTimeout),
-            PanelStrings.ServerStarting);
+            EngineFirstRun.StartingLabel(server.FirstRunLooks));
 
         StopServerButton.Click += (_, _) => RequestStop();
         RestartServerButton.Click += (_, _) => RequestRestart();
@@ -802,7 +866,7 @@ public partial class MainWindow : Window
         {
             server.Refresh();
             return server.Scan();
-        }).ContinueWith(task => UiThread.Post(() =>
+        }).ContinueWith(task => UiThread.PostTo(_ui, () =>
         {
             _refreshing = false;
 
@@ -821,7 +885,7 @@ public partial class MainWindow : Window
         _busyText = busyText;
         Render();
 
-        Task.Run(work).ContinueWith(_ => UiThread.Post(() =>
+        Task.Run(work).ContinueWith(_ => UiThread.PostTo(_ui, () =>
         {
             _busy = false;
             _busyText = string.Empty;

@@ -61,7 +61,10 @@ public class BackupScheduleLifeTests
         bool serverRunning = false,
         Action? onLocateEngine = null)
     {
-        var root = Path.Combine(Path.GetTempPath(), "dsh-live-" + Guid.NewGuid().ToString("N"));
+        // СВОЙ КОРЕНЬ ПРОГОНА, А НЕ ПУТЬ В %TEMP% (t14): стенд живёт под TempRoots, и прогон
+        // снимает его сам. Прежде путь сеялся прямо в %TEMP%, и каталог оставался навсегда, если
+        // уборка не успевала (замер t12: 347 каталогов `dsh-live-*`).
+        var root = TempRoots.For("live");
         Directory.CreateDirectory(root);
 
         var paths = AppPaths.Under(root);
@@ -110,6 +113,58 @@ public class BackupScheduleLifeTests
         return condition();
     }
 
+    /// <summary>
+    /// МУСОР УБОРКИ — НАЗВАННЫЙ, А НЕ ПОДМЕНЯЮЩИЙ ПРИЧИНУ (блок F плана 2.2.0).
+    /// Список заполняет <see cref="Cleanup"/>, а провал называет отдельная проверка ниже.
+    /// </summary>
+    private static readonly List<string> Leftovers = new();
+
+    /// <summary>
+    /// УБОРКА НЕ ОСТАВЛЯЕТ МУСОРА — и это ОТДЕЛЬНАЯ проверка, а не строка в `finally`.
+    ///
+    /// **От какого случая.** `Assert.Fail` в уборке подменял исходное исключение проверки: причина
+    /// падения терялась. Теперь уборка молчит об исключении и пишет путь в <see cref="Leftovers"/>,
+    /// а провал называет эта проверка — у неё нет чужого исключения, которое можно потерять.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«вернуть `Assert.Fail` в уборку»** (проверяется
+    /// по исходнику: в теле `Cleanup` его нет) и **«молча проглотить неудачу»** (без записи
+    /// в список провал уборки перестал бы быть виден вовсе).
+    /// </summary>
+    [Fact]
+    public void Уборка_не_подменяет_причину_и_называет_мусор()
+    {
+        Assert.True(
+            Leftovers.Count == 0,
+            "стенды не убраны (исходное исключение при этом не подменялось): " + string.Join("; ", Leftovers));
+
+        var source = BackupScheduleLifeTestsSource();
+        var start = source.LastIndexOf("private static void Cleanup(Stand stand)", StringComparison.Ordinal);
+
+        Assert.True(start > 0, "не нашёл уборку в исходнике — проверка ничего не проверила");
+
+        // ТЕЛО МЕТОДА, а не остаток файла: иначе проверка нашла бы запрещённое слово в САМОЙ СЕБЕ
+        // (в тексте этого утверждения) — и краснела бы всегда.
+        var rest = source[start..];
+        var end = rest.IndexOf("/// <summary>", StringComparison.Ordinal);
+        var body = end > 0 ? rest[..end] : rest;
+
+        Assert.DoesNotContain("Assert.Fail", body, StringComparison.Ordinal);
+        Assert.Contains("Leftovers.Add", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>Исходник этого класса — по корню репозитория (как у прочих сторожей исходников).</summary>
+    private static string BackupScheduleLifeTestsSource()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, "tests", "DshPanel.Tests", "BackupScheduleLifeTests.cs");
+
+            if (File.Exists(candidate)) return File.ReadAllText(candidate);
+        }
+
+        throw new FileNotFoundException("не нашёл корень репозитория с tests/DshPanel.Tests/BackupScheduleLifeTests.cs");
+    }
+
     private static void Write(string path, int bytes)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -119,15 +174,46 @@ public class BackupScheduleLifeTests
     /// <summary>Начало строки словаря до первой подстановки — по нему видно, какая это строка.</summary>
     private static string Head(string format) => format.Split('{')[0];
 
+    /// <summary>
+    /// УБОРКА ЧЕСТНАЯ (t14): занятый файл — не повод молча оставить каталог.
+    ///
+    /// Копия идёт в фоне, и уборка может застать файл ещё открытым; поэтому — несколько повторов
+    /// с короткой паузой. Если каталог остался и после них, это НАЗВАННЫЙ провал с путём и типом
+    /// ошибки, а не тишина: прежняя редакция глотала исключение, и стенды копились в %TEMP%
+    /// (замер t12: 347 каталогов, из них 44 — от чужих прогонов до этой сессии).
+    ///
+    /// ⚠️ **`Assert.Fail` ЗДЕСЬ БОЛЬШЕ НЕТ (блок F плана 2.2.0), и это не мягкость.** Уборка
+    /// зовётся из `finally`, а провал в `finally` **заменяет исходное исключение проверки**:
+    /// человек читал «стенд не убран за 20 попыток» вместо настоящей причины падения и шёл
+    /// искать её не там. Поэтому уборка ничего не бросает: она называет путь и тип ошибки
+    /// в <see cref="Leftovers"/> и громко пишет в stderr, а провал называет ОТДЕЛЬНАЯ проверка
+    /// `Уборка_не_подменяет_причину_и_называет_мусор`, у которой нет чужого исключения.
+    /// </summary>
     private static void Cleanup(Stand stand)
     {
-        try
+        for (var attempt = 1; attempt <= 20; attempt++)
         {
-            Directory.Delete(stand.Paths.Root, true);
-        }
-        catch
-        {
-            // Уборка подставного корня не имеет права уронить проверку.
+            try
+            {
+                if (!Directory.Exists(stand.Paths.Root)) return;
+
+                Directory.Delete(stand.Paths.Root, recursive: true);
+                return;
+            }
+            catch (Exception error)
+            {
+                if (attempt == 20)
+                {
+                    Leftovers.Add(stand.Paths.Root + " (" + error.GetType().Name + ")");
+
+                    Console.Error.WriteLine(
+                        "стенд не убран за 20 попыток (" + error.GetType().Name + "): исходное исключение не подменяется");
+
+                    return;
+                }
+
+                Thread.Sleep(50);
+            }
         }
     }
 

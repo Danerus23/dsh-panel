@@ -162,70 +162,141 @@ public static class BackupEngine
             notes.Add(PanelStrings.BackupEngineLiveCopyNote);
         }
 
-        var manifest = BuildManifest(prepared, paths, engine);
-        var sevenZipPath = request.SevenZipPath ?? SevenZip.Find();
+        // КОНЕЧНОЕ ИМЯ ПОЯВЛЯЕТСЯ ТОЛЬКО ГОТОВЫМ (Н-2, задача t12). Пишем и проверяем под ВРЕМЕННЫМ
+        // именем рядом, а конечное получаем ОДНИМ переименованием в самом конце.
+        //
+        // **От какого случая.** `7z a` переписывает архив на КАЖДЫЙ свой запуск (полная копия — это
+        // несколько запусков: корни + опись), и под конечным именем файл исчезал и появлялся снова.
+        // Замер наблюдателем за папкой копий 18.10.2026: **6 прогонов из 6** — по ДВА удаления
+        // и ТРИ появления конечного имени за одну копию (окна по 2–20 мс). Всякий, кто смотрит
+        // в папку в это время — окно копий, список копий, рядом идущая проверка, — видел
+        // «копия есть… копии нет… опять есть», и честная копия выглядела пропавшей.
+        // Временный хвост `.part` выбран так, чтобы файл НЕ попадал в перечни `dsh2-backup-*.zip`.
+        var partial = full + PartialSuffix;
+        var published = false;
 
-        var created = ZipWriter.Write(
-            full,
-            prepared.Sources,
-            sevenZipPath,
-            ZipWriter.DefaultSkipDirectoryNames,
-            progress,
-            entries =>
-            {
-                // Опись описывает то, что в архиве ЕСТЬ. Присваиваем, а не дописываем: при смене
-                // способа записи (7-Zip подвёл — пишем своими силами) дверь зовётся второй раз,
-                // и добавление повторов показало бы в описи дерево дважды.
-                manifest.TotalFiles = entries.Count;
-                manifest.TotalBytes = entries.Sum(entry => entry.Length);
-                manifest.Files = entries
-                    .Select(entry => new BackupFileEntry { Path = entry.Name, Size = entry.Length })
-                    .ToList();
-
-                // Ключи доступа — ПО ЗАПИСЯМ: у «копии для передачи» файла в архиве нет, и опись
-                // не должна утверждать обратное.
-                manifest.WithCredentials = CredentialsLanded(prepared, entries);
-
-                return JsonSerializer.Serialize(manifest, BackupManifest.WriteOptions);
-            });
-
-        if (!created.Ok)
-            return Failed(created.Error, full, created.Took, notes);
-
-        var restricted = RestrictToOwner(full);
-        if (!restricted.Ok)
+        // ЗАПИСЬ — ВНУТРИ try (t15): гарантия уборки `.part` обязана накрывать участок ОТ САМОЙ
+        // ЗАПИСИ, а не с первого её результата. Писатель может БРОСИТЬ (а не вернуть отказ), и тогда
+        // `.part` остался бы — ровно та дырка, от которой заведён `finally`. Опись и путь 7-Zip живут
+        // здесь же: они нужны только записи и проверке.
+        try
         {
-            notes.Add(string.Format(CultureInfo.CurrentCulture, PanelStrings.BackupRightsNotRestrictedFormat, restricted.Reason));
-        }
+            var manifest = BuildManifest(prepared, paths, engine);
+            var sevenZipPath = request.SevenZipPath ?? SevenZip.Find();
 
-        bool? verified = null;
-        if (request.Verify)
-        {
-            if (string.IsNullOrWhiteSpace(sevenZipPath))
-            {
-                notes.Add(PanelStrings.BackupNoVerifier);
-            }
-            else
-            {
-                var check = SevenZip.Verify(sevenZipPath, full);
-                verified = check.Ok;
-
-                if (!check.Ok)
+            var created = ZipWriter.Write(
+                partial,
+                prepared.Sources,
+                sevenZipPath,
+                ZipWriter.DefaultSkipDirectoryNames,
+                progress,
+                entries =>
                 {
-                    return new BackupRunResult(
-                        false,
-                        string.Format(
-                            CultureInfo.CurrentCulture, PanelStrings.BackupVerifyFailedFormat,
-                            Short(check.Output), DisplayMask.Path(full)),
-                        full, created.Bytes, created.Files, created.SourceBytes, created.Writer, created.Reason,
-                        created.Took, restricted.Ok, false, notes);
+                    // Опись описывает то, что в архиве ЕСТЬ. Присваиваем, а не дописываем: при смене
+                    // способа записи (7-Zip подвёл — пишем своими силами) дверь зовётся второй раз,
+                    // и добавление повторов показало бы в описи дерево дважды.
+                    manifest.TotalFiles = entries.Count;
+                    manifest.TotalBytes = entries.Sum(entry => entry.Length);
+                    manifest.Files = entries
+                        .Select(entry => new BackupFileEntry { Path = entry.Name, Size = entry.Length })
+                        .ToList();
+
+                    // Ключи доступа — ПО ЗАПИСЯМ: у «копии для передачи» файла в архиве нет, и опись
+                    // не должна утверждать обратное.
+                    manifest.WithCredentials = CredentialsLanded(prepared, entries);
+
+                    return JsonSerializer.Serialize(manifest, BackupManifest.WriteOptions);
+                });
+
+            if (!created.Ok)
+            {
+                return Failed(created.Error, full, created.Took, notes);
+            }
+
+            var restricted = RestrictToOwner(partial);
+            if (!restricted.Ok)
+            {
+                notes.Add(string.Format(CultureInfo.CurrentCulture, PanelStrings.BackupRightsNotRestrictedFormat, restricted.Reason));
+            }
+
+            bool? verified = null;
+            if (request.Verify)
+            {
+                if (string.IsNullOrWhiteSpace(sevenZipPath))
+                {
+                    notes.Add(PanelStrings.BackupNoVerifier);
+                }
+                else
+                {
+                    // Проверяем ГОТОВЫЙ файл до переименования: конечное имя не должно появиться,
+                    // пока архив не проверен (Н-2, t12).
+                    var check = SevenZip.Verify(sevenZipPath, partial);
+                    verified = check.Ok;
+
+                    if (!check.Ok)
+                    {
+                        return new BackupRunResult(
+                            false,
+                            string.Format(
+                                CultureInfo.CurrentCulture, PanelStrings.BackupVerifyFailedFormat,
+                                Short(check.Output), DisplayMask.Path(full)),
+                            full, created.Bytes, created.Files, created.SourceBytes, created.Writer, created.Reason,
+                            created.Took, restricted.Ok, false, notes);
+                    }
                 }
             }
-        }
 
-        return new BackupRunResult(
-            true, string.Empty, full, created.Bytes, created.Files, created.SourceBytes, created.Writer,
-            created.Reason, created.Took, restricted.Ok, verified, notes);
+            // ПУБЛИКАЦИЯ: единственное место, где появляется конечное имя. Переименование в пределах
+            // одной папки — одна операция, и наблюдатель увидит копию РОВНО ОДИН РАЗ.
+            try
+            {
+                File.Move(partial, full, overwrite: true);
+                published = true;
+            }
+            catch (Exception exception)
+            {
+                return Failed(
+                    string.Format(
+                        CultureInfo.CurrentCulture, PanelStrings.ZipCreateFailedFormat,
+                        DisplayMask.Path(full), exception.Message),
+                    full,
+                    started.Elapsed,
+                    notes);
+            }
+
+            return new BackupRunResult(
+                true, string.Empty, full, created.Bytes, created.Files, created.SourceBytes, created.Writer,
+                created.Reason, created.Took, restricted.Ok, verified, notes);
+        }
+        finally
+        {
+            // ГАРАНТИЯ ПОСТРОЕНИЯ, а не список мест (t14, замечание владельца): что бы ни случилось —
+            // писатель отказал (!created.Ok), не прошла проверка 7z t, не удалось переименование,
+            // или что-то бросило исключение, — временного файла не остаётся, а конечного имени без
+            // готового архива не появляется никогда. Именно поэтому уборка здесь ОДНА, а не при
+            // каждом отказе по отдельности: список мест однажды забыл бы новое.
+            if (!published) DropPartial(partial);
+        }
+    }
+
+    /// <summary>Хвост временного имени архива: `&lt;конечное имя&gt;.part` (Н-2, t12).</summary>
+    private const string PartialSuffix = ".part";
+
+    /// <summary>
+    /// Убрать недоделанный архив. Он НЕ остаётся под конечным именем ни при каком отказе: файл
+    /// с именем копии, который копией не является, хуже, чем отсутствие файла, — человек (и накат)
+    /// принял бы его за копию. Причина отказа при этом названа в отчёте и журнале.
+    /// </summary>
+    private static void DropPartial(string path)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+            // Недописанный архив не предмет проверки: его не убрали — скажет о себе место копий.
+        }
     }
 
     // --- опись ---------------------------------------------------------------

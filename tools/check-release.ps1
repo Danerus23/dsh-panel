@@ -29,7 +29,8 @@
 #        диске (нет строки — это не «пропустим», а беда: без суммы панель вложение не распаковывает);
 #     4. манифест winget против ассетов ТОГО выпуска, на который он указывает: `InstallerUrl` ведёт
 #        на имя установщика и на тег своей `PackageVersion`, `InstallerSha256` — 64 знака и равен
-#        `digest` ассета выпуска;
+#        `digest` ассета выпуска, `ReleaseDate` — дате СОЗДАНИЯ релиза (UTC, `createdAt`): это тоже
+#        число выпуска, а не ревизии;
 #     5. если `SHA256SUMS.txt` на диске — файл сумм САМОГО выпуска (его digest совпал с ассетом
 #        `SHA256SUMS.txt` выпуска), то и «вложения против выпуска» считается внутри одного источника:
 #        расхождение размера или суммы = код 1.
@@ -124,7 +125,7 @@ function Get-GitHubAssets {
     $gh = Get-Command gh -ErrorAction SilentlyContinue
     if (-not $gh) { $script:gitHubError = 'gh не найден в PATH'; return $null }
 
-    $raw = & gh release view $Tag --repo $Repo --json tagName,assets 2>&1
+    $raw = & gh release view $Tag --repo $Repo --json tagName,assets,createdAt 2>&1
     if ($LASTEXITCODE -ne 0) {
         $script:gitHubError = ('gh release view ' + $Tag + ' вернул код ' + $LASTEXITCODE + ': ' +
             (($raw | Out-String).Trim()))
@@ -151,6 +152,18 @@ function Get-GitHubAssets {
     }
 
     if ($map.Count -eq 0) { $script:gitHubError = ('в выпуске ' + $Tag + ' не видно ни одного ассета'); return $null }
+
+    # Дата СОЗДАНИЯ релиза (UTC) — тоже число выпуска: её называет `ReleaseDate` манифеста.
+    $created = [string]$json.createdAt
+    $script:releaseCreated[$Tag] = ''
+    if ($created) {
+        try {
+            $script:releaseCreated[$Tag] = ([DateTimeOffset]::Parse($created, [Globalization.CultureInfo]::InvariantCulture)).UtcDateTime.ToString('yyyy-MM-dd')
+        }
+        catch {
+            $script:gitHubError = ('дата создания выпуска не разобралась: ' + $created)
+        }
+    }
     return $map
 }
 
@@ -192,6 +205,7 @@ $problems = New-Object Collections.Generic.List[string]
 $differences = New-Object Collections.Generic.List[string]
 $notes = New-Object Collections.Generic.List[string]
 $script:gitHubError = ''
+$script:releaseCreated = @{}
 
 if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
 if (-not (Test-Path -LiteralPath $Root)) { throw ('нет дерева: ' + $Root) }
@@ -439,6 +453,7 @@ $manifestPackageVersion = ''
 $manifestUrl = ''
 $manifestSum = ''
 $manifestCoveredName = ''
+$manifestDate = ''
 
 if ($manifestFile) {
     Write-Host ('манифест: ' + $manifestFile)
@@ -449,9 +464,20 @@ if ($manifestFile) {
     $manifestSum = Get-SingleField -Text $text -Pattern '(?m)^\s*InstallerSha256:\s*(\S+)\s*$' -What 'InstallerSha256'
     if ($manifestSum) { $manifestSum = $manifestSum.ToLowerInvariant() }
 
+    # Дата выпуска — такое же число ВЫПУСКА, как сумма: её даёт дата создания релиза (UTC),
+    # а не дата цикла. Строки может не быть — поле winget необязательное.
+    $dateMatches = [regex]::Matches($text, '(?m)^ReleaseDate:\s*(\S+)\s*$')
+    if ($dateMatches.Count -gt 1) {
+        $problems.Add('в манифесте строка ReleaseDate встречается ' + $dateMatches.Count + ' раз')
+    }
+    elseif ($dateMatches.Count -eq 1) {
+        $manifestDate = $dateMatches[0].Groups[1].Value.Trim()
+    }
+
     if ($manifestPackageVersion) { Write-Host ('  PackageVersion: ' + $manifestPackageVersion) }
     if ($manifestUrl) { Write-Host ('  InstallerUrl:   ' + $manifestUrl) }
     if ($manifestSum) { Write-Host ('  InstallerSha256: ' + $manifestSum) }
+    if ($manifestDate) { Write-Host ('  ReleaseDate:    ' + $manifestDate) }
 
     if ($manifestUrl) {
         $match = [regex]::Match($manifestUrl, '/download/([^/]+)/([^/]+)$')
@@ -490,7 +516,7 @@ if ($manifestFile) {
             $manifestRelease = Get-GitHubAssets -Tag $manifestTag -Repo $Repo
             if (-not $manifestRelease) {
                 $notes.Add('выпуск ' + $manifestTag + ' (на него указывает манифест) прочитать не удалось: ' +
-                    $script:gitHubError + ' — сумма манифеста не сверена')
+                    $script:gitHubError + ' — сумма и дата манифеста не сверены')
             }
             else {
                 Write-Host ('  выпуск манифеста: ' + $manifestTag + ' прочитан отдельно (манифест указывает на него)')
@@ -516,6 +542,32 @@ if ($manifestFile) {
 }
 else {
     Write-Host 'манифест: файла нет и ключи -Manifest / -ManifestRoot не названы'
+}
+
+# ── Дата выпуска в манифесте — число ВЫПУСКА, а не ревизии (t5, 18.10.2026) ──
+#
+# `ReleaseDate` манифеста winget называет день, когда выпуск ВЫШЕЛ, то есть дату СОЗДАНИЯ релиза
+# на GitHub (UTC). Иное число здесь — такое же расхождение, как чужая сумма. Замер на 2.1.0:
+# в теге стояло `ReleaseDate: 2026-10-18` (дата цикла), а релиз создан 2026-10-17 23:30Z.
+# До этой проверки манифест с ВЕРНОЙ суммой и НЕВЕРНОЙ датой давал ровно 0 (мутация «дата на
+# день вперёд» в манифесте из `main`: до правки 0, после — 1 с обеими датами). Сеть не нужна
+# сверх уже прочитанного выпуска: дата берётся из того же `gh release view` (`createdAt`).
+if ($manifestDate -and $manifestPackageVersion) {
+    $dateTag = 'v' + $manifestPackageVersion
+    $releaseDay = ''
+    if ($script:releaseCreated.ContainsKey($dateTag)) { $releaseDay = $script:releaseCreated[$dateTag] }
+
+    if ($manifestDate -notmatch '^\d{4}-\d{2}-\d{2}$') {
+        $problems.Add('ReleaseDate в манифесте не дата вида ГГГГ-ММ-ДД: ' + $manifestDate)
+    }
+    elseif ($releaseDay -and $manifestDate -ne $releaseDay) {
+        $problems.Add('дата в манифесте не сошлась с выпуском ' + $dateTag + ': в манифесте ' +
+            $manifestDate + ', релиз создан ' + $releaseDay + ' (UTC)')
+    }
+    elseif ($releaseDay) {
+        Write-Host ('  дата манифеста = дате создания релиза ' + $dateTag + ' (' + $releaseDay + ', UTC) — сошлось')
+    }
+    # Выпуск не читался (обычный прогон) — сверять дату не с чем; об этом сказано выше одной строкой.
 }
 
 # ── Источник колонок «в манифесте» и род сверки ──────────────────────────────

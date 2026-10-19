@@ -106,6 +106,26 @@ public partial class BackupWindow : Window
     private bool _closed;
 
     /// <summary>
+    /// СВОЯ нитка интерфейса, взятая при постройке окна (Н-1, задача D3 цикла 2.1.2).
+    ///
+    /// ⚠️ Спрашивать её заново в каждом ответе из фона НЕЛЬЗЯ: память общей двери одна на процесс,
+    /// и её забывает проверка «нитки нет вовсе» — а она в полном прогоне идёт параллельно с этим
+    /// окном. Замер: 1 падение из 5 прогонов, окно оставалось занятым навсегда («окно не вернулось
+    /// в рабочее состояние» через 1 min 2 s). Окно свою нитку знает — и ответ доходит до неё.
+    /// </summary>
+    private readonly Dispatcher _ui;
+
+    /// <summary>
+    /// НИТКА ИНТЕРФЕЙСА ОКНА КОПИЙ ИЛИ ГРОМКИЙ ОТКАЗ (t13). Пустое значение не прячется в поле:
+    /// без своей нитки окно не умеет возвращать ответы из фона (замер Н-1), и отказ дешевле
+    /// полудохлого окна. Текст называет СВОЁ окно — см. `UiThread.RequireWindow`.
+    ///
+    /// ⚠️ Отдельным членом, потому что постройку окна без платформы проверить нельзя (базовый
+    /// `Window` падает первым) — проверяется ровно то решение, которое зовёт конструктор.
+    /// </summary>
+    internal static Dispatcher RequireUiThread(Dispatcher? captured) =>
+        UiThread.RequireWindow(captured, "ОКНО КОПИЙ");
+    /// <summary>
     /// InitializeComponent, а не AvaloniaXamlLoader.Load(this): только первый прописывает поля
     /// <c>x:Name</c>. Та же грабля, что у главного окна и настроек (`docs\STACK.md` §6, грабля 13).
     /// </summary>
@@ -116,6 +136,10 @@ public partial class BackupWindow : Window
         // Окно живёт на нитке интерфейса — она и есть нитка панели для общей двери
         // (`Shell\UiThread`): замер объёма, копия и накат возвращаются сюда из фона.
         UiThread.Remember();
+
+        // ...и ЗДЕСЬ же она берётся на память самому окну: дальше ответы из фона идут через
+        // `UiThread.PostTo(_ui, …)` и не зависят от того, помнит ли дверь нитку в этот момент (Н-1).
+        _ui = RequireUiThread(UiThread.Capture());
 
         Icon = PanelIcon.Window;
 
@@ -619,7 +643,7 @@ public partial class BackupWindow : Window
         _estimating = scope;
         var backups = _backups;
 
-        Task.Run(() => backups.Estimate(scope)).ContinueWith(task => UiThread.Post(() =>
+        Task.Run(() => backups.Estimate(scope)).ContinueWith(task => UiThread.PostTo(_ui, () =>
         {
             // Окно закрыли, пока считалось, — рисовать нечего и НЕЛЬЗЯ: органы окна уже не наши.
             if (_closed) return;
@@ -847,13 +871,19 @@ public partial class BackupWindow : Window
         // `BringIntoView()` уходит в ScrollViewer с прежними координатами панели. Проверено
         // прогоном: окно прокручивалось на 180 пикселей вместо нужных 600, то есть план
         // оставался за нижним краем — ровно тот дефект, от которого эта работа и заведена.
-        UiThread.Post(
-            () =>
-            {
-                if (_closed || !PlanPanel.IsVisible) return;
-                PlanPanel.BringIntoView();
-            },
-            DispatcherPriority.Loaded);
+        if (!UiThread.PostTo(
+                _ui,
+                () =>
+                {
+                    if (_closed || !PlanPanel.IsVisible) return;
+                    PlanPanel.BringIntoView();
+                },
+                DispatcherPriority.Loaded))
+        {
+            // Ветка НЕДОСТИЖИМА по конструкции (_ui non-nullable), но названа вслух: здесь
+            // теряется не занятость окна, а прокрутка — и всё же молчать нечего.
+            PanelLog.Write("ОКНО КОПИЙ: отложенная прокрутка плана не отправлена — нитка интерфейса окна недоступна");
+        }
     }
 
     /// <summary>
@@ -1078,7 +1108,7 @@ public partial class BackupWindow : Window
         StatusText.Text = busyText;
         Render();
 
-        Task.Run(work).ContinueWith(task => UiThread.Post(() =>
+        Task.Run(work).ContinueWith(task => UiThread.PostTo(_ui, () =>
         {
             _busy = false;
 

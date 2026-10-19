@@ -73,21 +73,11 @@ public class AutostartTests
     private static string TempDir() =>
         Path.Combine(Path.GetTempPath(), "dsh-panel-autostart-tests", Guid.NewGuid().ToString("N"));
 
-    /// <summary>Убрать временный каталог и, если он опустел, его родителя: за проверкой не должно оставаться мусора.</summary>
-    private static void RemoveTemp(string dir)
-    {
-        try
-        {
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-
-            var parent = Path.GetDirectoryName(dir);
-            if (parent is not null && Directory.Exists(parent)) Directory.Delete(parent);
-        }
-        catch
-        {
-            // Родитель занят другой проверкой — это не ошибка.
-        }
-    }
+    /// <summary>
+    /// Убрать СВОЙ временный каталог. Родитель НЕ снимается: два одновременных прогона делят его
+    /// имя, и его удаление — это ровно тот дефект, от которого заведён `TempRoots` (t3, 18.10.2026).
+    /// </summary>
+    private static void RemoveTemp(string dir) => TempRoots.Remove(dir);
 
     private static string Absent => @"C:\нет\такого\каталога\DshPanel.exe";
 

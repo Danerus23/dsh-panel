@@ -56,6 +56,15 @@ public sealed record EngineUpdateSectionDoors(
     /// <summary>Двери отката: погасить свой движок, проверить прежнюю версию живьём, переписать запись.</summary>
     public EngineRollbackDoors RollbackDoors { get; init; } = EngineRollbackDoors.None;
 
+    /// <summary>
+    /// ЧИСЛА ЖУРНАЛА СЕССИЙ (блок C плана 2.2.0): сколько сессий на диске и в каком они формате.
+    ///
+    /// Умолчание — <see cref="EngineJournalState.Unexamined"/> («двери нет»), и это НЕ ноль:
+    /// предохранитель обязан сказать «узнать не удалось», а не «прятать нечего». Так же ведут себя
+    /// прогон проверки и кадр окна — им такой двери не дают вовсе, и в сеть они не ходят.
+    /// </summary>
+    public Func<EngineJournalState> ReadJournal { get; init; } = () => EngineJournalState.Unexamined;
+
     /// <summary>Дверей нет: обновлять нечем (прогон проверки, изоляция, нет своей папки движка).</summary>
     public static EngineUpdateSectionDoors None { get; } = new(
         () => EngineHints.Empty,
@@ -189,28 +198,62 @@ public sealed class EngineUpdateService : IEngineUpdateSection
     public string ReleasesAddress => ProductLinks.EngineReleasesUrl;
 
     /// <summary>Вопрос перед обновлением: показывается ВСЕГДА, даже когда обновлять нечем (слова отказа).</summary>
-    public PanelQuestion UpdateQuestion => new(
-        PanelStrings.EngineUpdateAskTitle,
-        Available
-            ? string.Format(CultureInfo.CurrentCulture, PanelStrings.EngineUpdateAskFormat, _recommended)
-            : EngineInstallPhrases.UpdateRefusal(RefusalKey),
-        PanelStrings.EngineUpdateAskYes,
-        PanelStrings.EngineUpdateAskNo,
-        PanelStrings.TipEngineUpdateAskYes,
-        PanelStrings.TipEngineUpdateAskNo);
+    public PanelQuestion UpdateQuestion => UpdateQuestionFor(freshWanted: false);
 
-    /// <summary>Вопрос перед откатом: **последствие для сессий — словами**, а не числами.</summary>
+    /// <summary>
+    /// ВОПРОС ПОД ТУ ВЕРСИЮ, КОТОРУЮ ПОСТАВЯТ (блок C плана 2.2.0): к обычному вопросу добавляется
+    /// последствие для журнала сессий — **с числом, снятым с диска**, а не общими словами.
+    ///
+    /// **Зачем это здесь, а не в окне.** Окно складывало фразу само, и у отдельной кнопки
+    /// непроверенной версии текст терял всё, что добавляла дверь (находка блока C). Теперь слово
+    /// ОДНО и оно тут: версия, которую поставим, и что станется с журналом.
+    ///
+    /// ⚠️ **Почему предупреждение обязательно и для проверенной версии тоже.** Миграция журнала
+    /// **ленивая**: сессия переезжает в v4 в момент ОТКРЫТИЯ под 0.2.x, а не в момент установки
+    /// (замер `l2`: 197 → 196 после одного открытия). Значит «поставим проверенную» не значит
+    /// «ничего не случится с журналом» — случится при первом же открытии сессии.
+    /// </summary>
+    public PanelQuestion UpdateQuestionFor(bool freshWanted)
+    {
+        var version = VersionFor(freshWanted);
+
+        var text = Available
+            ? string.Format(CultureInfo.CurrentCulture, PanelStrings.EngineUpdateAskFormat, version)
+            : EngineInstallPhrases.UpdateRefusal(RefusalKey);
+
+        if (Available && version.Length > 0)
+            text = Join(text, EngineJournalPhrases.Sentence(EngineJournalFuse.ForUpdate(Journal(), version)));
+
+        return new PanelQuestion(
+            PanelStrings.EngineUpdateAskTitle,
+            text,
+            PanelStrings.EngineUpdateAskYes,
+            PanelStrings.EngineUpdateAskNo,
+            PanelStrings.TipEngineUpdateAskYes,
+            PanelStrings.TipEngineUpdateAskNo);
+    }
+
+    /// <summary>
+    /// Вопрос перед откатом: **последствие для журнала сессий — словами И числом** (требование
+    /// владельца, блок C). Число снимается с диска в момент вопроса: «сколько именно исчезнет
+    /// из списка прежнего движка» — это факт машины, а не общее предупреждение.
+    /// </summary>
     public PanelQuestion RollbackQuestion
     {
         get
         {
             var plan = RollbackPlan();
 
+            var text = plan.Any
+                ? string.Format(CultureInfo.CurrentCulture, PanelStrings.EngineRollbackAskFormat, plan.Current, plan.Target)
+                : EngineInstallPhrases.UpdateRefusal(plan.RefusalKey);
+
+            if (plan.Any)
+                text = Join(text, EngineJournalPhrases.Sentence(EngineJournalFuse.ForRollback(Journal(), plan.Target)));
+
             return new PanelQuestion(
                 PanelStrings.EngineRollbackAskTitle,
-                plan.Any
-                    ? string.Format(CultureInfo.CurrentCulture, PanelStrings.EngineRollbackAskFormat, plan.Current, plan.Target)
-                    : EngineInstallPhrases.UpdateRefusal(plan.RefusalKey),
+                text,
                 PanelStrings.EngineRollbackAskYes,
                 PanelStrings.EngineRollbackAskNo,
                 PanelStrings.TipEngineRollbackYes,
@@ -221,6 +264,11 @@ public sealed class EngineUpdateService : IEngineUpdateSection
     /// <summary>
     /// ВЕРНУТЬСЯ: исполняет откат и отвечает последней строкой — тем, чем кончилось. Отказ «некуда»
     /// не трогает машину вовсе.
+    ///
+    /// **«НЕ ОТКАТЫВАТЬ МОЛЧА» — здесь вторая половина предохранителя.** Движок о спрятанных сессиях
+    /// не скажет никогда (замер `l2`: 197 → 196 без поля и без слова), поэтому панель говорит это
+    /// сама и ПОСЛЕ дела: в итоговой строке названо, сколько сессий прежний сервер DSH не видит,
+    /// что история цела и каким одним шагом видимость возвращается.
     /// </summary>
     public string Rollback()
     {
@@ -229,11 +277,27 @@ public sealed class EngineUpdateService : IEngineUpdateSection
         if (!plan.Any)
             return EngineInstallPhrases.UpdateRefusal(plan.RefusalKey);
 
+        // ЧИСЛА — ОДНИ И ТЕ ЖЕ ДО И ПОСЛЕ: откат ничего не меняет на диске (файлы журнала остаются
+        // как были), поэтому состояние снимается один раз, а фраз до/после — две.
+        var journal = Journal();
+        var hidden = EngineJournalFuse.ForRollback(journal, plan.Target);
+
         var result = EngineRollbackRun.Run(plan, _doors.OwnPort(), _doors.RollbackDoors, _log);
 
         Refresh();
 
-        return result.Lines.Count > 0 ? result.Lines[^1] : string.Empty;
+        var last = result.Lines.Count > 0 ? result.Lines[^1] : string.Empty;
+
+        // ОТКАТ НЕ СОСТОЯЛСЯ — говорить про «не видит сессии» нечего: на машине ничего не изменилось.
+        if (!result.Ok || !hidden.Hides) return last;
+
+        var after = EngineJournalPhrases.Sentence(EngineJournalFuse.ForRollback(journal, plan.Target, after: true));
+
+        if (after.Length == 0) return last;
+
+        _log?.Invoke(after);
+
+        return Join(last, after);
     }
 
     /// <summary>ЗАНОВО СПРОСИТЬ ВЕРСИИ: подсказки (наш файл) и свежую (реестр npm).</summary>
@@ -286,4 +350,38 @@ public sealed class EngineUpdateService : IEngineUpdateSection
 
         _recommended = EngineUpdateDecisions.Recommended(_hints);
     }
+
+    /// <summary>
+    /// КАКАЯ ВЕРСИЯ БУДЕТ ПОСТАВЛЕНА — ТЕМ ЖЕ РЕШЕНИЕМ, ЧТО И У ПУТИ (`Run`): свежая только когда
+    /// её просили отдельной кнопкой И она новее рекомендованной, иначе рекомендованная. Вопрос
+    /// обязан называть ту же версию, которую поставит работа, — иначе человек подтверждает одно,
+    /// а получает другое.
+    /// </summary>
+    private string VersionFor(bool freshWanted) =>
+        freshWanted && EngineUpdateDecisions.MayInstallFresh(_fresh, _recommended)
+            ? _fresh
+            : _recommended;
+
+    /// <summary>
+    /// ЧИСЛА ЖУРНАЛА ЧЕРЕЗ ДВЕРЬ, БЕЗ ПРАВА УРОНИТЬ ОКНО. Чужая беда (нет доступа, каталог занят)
+    /// становится ответом «узнать не удалось» с названной причиной — и человек увидит это словами,
+    /// а не пустое место там, где ждал предупреждение.
+    /// </summary>
+    private EngineJournalState Journal()
+    {
+        try
+        {
+            return _doors.ReadJournal() ?? EngineJournalState.Unexamined;
+        }
+        catch (Exception error)
+        {
+            _log?.Invoke(PanelStrings.EngineJournalUnavailableLog + " " + error.GetType().Name);
+
+            return EngineJournalState.Unknown(error.GetType().Name);
+        }
+    }
+
+    /// <summary>Склеить две фразы: пустое не добавляет ни пробела, ни пустой строки.</summary>
+    private static string Join(string first, string second) =>
+        second.Length == 0 ? first : first.Length == 0 ? second : first + " " + second;
 }

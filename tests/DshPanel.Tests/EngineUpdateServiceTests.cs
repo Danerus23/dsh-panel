@@ -47,6 +47,22 @@ public class EngineUpdateServiceTests
         /// <summary>Есть ли замок для свежей версии: по умолчанию — НЕТ (замок снят с проверенной).</summary>
         public bool LockForFresh { get; set; }
 
+        /// <summary>
+        /// ЧИСЛА ЖУРНАЛА, КОТОРЫЕ ОТДАЁТ ДВЕРЬ (блок C). По умолчанию — «двери нет»: тогда раздел
+        /// обязан сказать «узнать не удалось», а не «прятать нечего».
+        /// </summary>
+        public EngineJournalState Journal { get; set; } = EngineJournalState.Unexamined;
+
+        /// <summary>Запись «что стоит сейчас» и папки версий — для отката; по умолчанию отката нет.</summary>
+        public EngineInstallRecord Record { get; set; } = EngineInstallRecord.Empty;
+
+        public IReadOnlyList<string> Folders { get; set; } = Array.Empty<string>();
+
+        /// <summary>Двери отката: по умолчанию все три согласны — проверяется путь, а не машина.</summary>
+        public bool RollbackStop { get; set; } = true;
+        public bool RollbackProbe { get; set; } = true;
+        public bool RollbackRecordWriting { get; set; } = true;
+
         public EngineUpdateSectionDoors Doors() => new(
             ReadHints: () =>
             {
@@ -75,6 +91,13 @@ public class EngineUpdateServiceTests
             Ready: Ready)
         {
             HasLockFor = version => LockForFresh && version == Fresh,
+            ReadJournal = () => Journal,
+            ReadRecord = () => Record,
+            ReadFolders = () => Folders,
+            RollbackDoors = new EngineRollbackDoors(
+                _ => RollbackStop,
+                _ => RollbackProbe,
+                _ => RollbackRecordWriting),
         };
 
         public EngineUpdateService Service(List<string>? log = null) =>
@@ -296,5 +319,170 @@ public class EngineUpdateServiceTests
         Assert.Equal(
             new[] { "погасить 3081", "копия 0.1.5-rc.2", "поставить 0.1.5-rc.2", "проба 0.1.5-rc.2" },
             order);
+    }
+
+    // ---------------------------------------------------- предохранитель журнала (блок C)
+
+    /// <summary>Замер `l2` числами: 197 сессий, 5 переехали в новый формат, 192 ещё в старом.</summary>
+    private static EngineJournalState Journal(int sessions, int newFormat, int oldFormatOnly) =>
+        new(true, sessions, newFormat, oldFormatOnly, 0, 0, string.Empty);
+
+    /// <summary>Запись «стоит сейчас» 0.2.1-rc.2, на диске обе версии — откат возможен.</summary>
+    private static EngineInstallRecord RollbackRecord() =>
+        new("0.2.1-rc.2", "C:\\проба\\engine\\0.2.1-rc.2", "22.23.3", "C:\\проба\\node.exe", true,
+            new List<string> { "0.1.5-rc.2", "0.2.1-rc.2" });
+
+    private static Stand RollbackStand(EngineJournalState journal) => new()
+    {
+        Record = RollbackRecord(),
+        Folders = new[] { "0.1.5-rc.2", "0.2.1-rc.2" },
+        Journal = journal,
+    };
+
+    /// <summary>
+    /// ВОПРОС ПЕРЕД ОТКАТОМ НАЗЫВАЕТ ЧИСЛО — ГЛАВНОЕ ТРЕБОВАНИЕ БЛОКА C. Не «сессии могут стать
+    /// невидимыми», а «5 из 197»: число снято с диска, и оно единственное делает предупреждение
+    /// проверяемым (замер `l2`: 197 → 196 молча).
+    /// </summary>
+    [Fact]
+    public void Вопрос_перед_откатом_называет_число_сессий()
+    {
+        var service = RollbackStand(Journal(197, 5, 192)).Service();
+        var question = service.RollbackQuestion;
+
+        Assert.True(service.RollbackAvailable, "откат возможен — иначе случай не тот");
+        Assert.Equal("0.1.5-rc.2", service.RollbackTarget);
+
+        Assert.Contains("5", question.Text, StringComparison.Ordinal);
+        Assert.Contains("197", question.Text, StringComparison.Ordinal);
+        Assert.Contains("0.1.5-rc.2", question.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("{", question.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ПОСЛЕ ОТКАТА ПАНЕЛЬ ГОВОРИТ САМА — это вторая половина предохранителя. Движок о спрятанных
+    /// сессиях не скажет никогда (замер: 197 → 196 без поля и без слова), поэтому итоговая строка
+    /// обязана назвать число, а журнал панели — сохранить её.
+    /// </summary>
+    [Fact]
+    public void После_отката_сказано_сколько_сессий_спряталось()
+    {
+        var log = new List<string>();
+        var stand = RollbackStand(Journal(197, 5, 192));
+        var service = stand.Service(log);
+
+        var answer = service.Rollback();
+
+        Assert.Contains("5", answer, StringComparison.Ordinal);
+        Assert.Contains("197", answer, StringComparison.Ordinal);
+        Assert.DoesNotContain("{", answer, StringComparison.Ordinal);
+
+        // Строка журнала — не та же, что у пути отката: она про сессии и сказана ПОСЛЕ дела.
+        Assert.Contains(log, line => line.Contains("5", StringComparison.Ordinal)
+            && line.Contains("197", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// ПРЯТАТЬ НЕЧЕГО — итог не обрастает лишним: сказано то, чем кончился путь, и только.
+    /// Предупреждение «ничего не спрячется» человек прочитал в вопросе — повторять его после дела
+    /// значит удлинять строку, в которой человек ищет «получилось или нет».
+    /// </summary>
+    [Fact]
+    public void Если_прятать_нечего_итог_не_обрастает()
+    {
+        var stand = RollbackStand(Journal(197, 0, 197));
+        var service = stand.Service();
+
+        var answer = service.Rollback();
+
+        Assert.Equal(EngineInstallPhrases.UpdateStep(EngineRollbackDecisions.Words.Done, "0.1.5-rc.2", "0.2.1-rc.2"), answer);
+        Assert.DoesNotContain("197", answer, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ОТКАТ НЕ СОСТОЯЛСЯ — про спрятанные сессии не говорим вовсе: на машине ничего не изменилось,
+    /// и «сервер не видит 5 из 197» было бы неправдой о том, чего не случилось.
+    /// </summary>
+    [Fact]
+    public void Откат_не_состоялся_про_сессии_не_говорим()
+    {
+        var stand = RollbackStand(Journal(197, 5, 192));
+        stand.RollbackProbe = false;
+
+        var service = stand.Service();
+        var answer = service.Rollback();
+
+        Assert.Equal(EngineInstallPhrases.UpdateStep(EngineRollbackDecisions.Words.ProbeFailed, "0.1.5-rc.2", "0.2.1-rc.2"), answer);
+        Assert.DoesNotContain("197", answer, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ВОПРОС ПЕРЕД ОБНОВЛЕНИЕМ — ПОД ТУ ВЕРСИЮ, КОТОРУЮ ПОСТАВЯТ, и с числом «сколько переедет».
+    ///
+    /// ⚠️ Отдельной кнопке непроверенной версии это нужно не меньше главной: решение владельца
+    /// 10.10.2026 разрешает её, но человек обязан видеть последствие ДО подтверждения, а прежнее
+    /// окно собирало текст само и добавленное дверью слово теряло.
+    /// </summary>
+    [Fact]
+    public void Вопрос_перед_обновлением_называет_переезд_и_ту_версию()
+    {
+        // Проверенная 0.2.0 (по ней поставит главная кнопка), свежая 0.2.1 — новее и с замком.
+        var stand = new Stand
+        {
+            Hints = Hints("0.2.0-rc.2", "0.2.1-rc.2"),
+            Fresh = "0.2.1-rc.2",
+            LockForFresh = true,
+            Journal = Journal(197, 5, 192),
+        };
+
+        var service = stand.Service();
+
+        var main = service.UpdateQuestionFor(freshWanted: false);
+
+        Assert.Contains("0.2.0-rc.2", main.Text, StringComparison.Ordinal);
+        Assert.Contains("192", main.Text, StringComparison.Ordinal);
+        Assert.Contains("197", main.Text, StringComparison.Ordinal);
+
+        var fresh = service.UpdateQuestionFor(freshWanted: true);
+
+        Assert.Contains("0.2.1-rc.2", fresh.Text, StringComparison.Ordinal);
+        Assert.Contains("192", fresh.Text, StringComparison.Ordinal);
+        Assert.NotEqual(main.Text, fresh.Text);
+
+        // Главная кнопка — всегда про рекомендованную версию, даже если спросили «как для свежей».
+        Assert.Equal(main.Text, service.UpdateQuestion.Text);
+    }
+
+    /// <summary>
+    /// ОБНОВЛЕНИЕ НА ВЕРСИЮ, ЧИТАЮЩУЮ ТОЛЬКО СТАРЫЙ ЖУРНАЛ (наш случай: проверенная — 0.1.5):
+    /// вперёд переезда не будет, зато названо уже спрятанное — те, кто переехал раньше. Это другое
+    /// число и другие слова, и путать их нельзя: человек читает вопрос перед подменой версии.
+    /// </summary>
+    [Fact]
+    public void Вопрос_перед_обновлением_на_старую_версию_называет_уже_спрятанное()
+    {
+        var stand = new Stand { Journal = Journal(197, 5, 192) };
+        var question = stand.Service().UpdateQuestionFor(freshWanted: false);
+
+        Assert.Contains("0.1.5-rc.2", question.Text, StringComparison.Ordinal);
+        Assert.Contains("5", question.Text, StringComparison.Ordinal);
+        Assert.Contains("197", question.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ДВЕРИ ЖУРНАЛА НЕТ — ВОПРОС ГОВОРИТ «УЗНАТЬ НЕ УДАЛОСЬ», а не «прятать нечего»: в прогоне
+    /// проверки и в кадре окна чисел нет вовсе, и притворяться нулём там нельзя.
+    /// </summary>
+    [Fact]
+    public void Без_двери_журнала_вопрос_говорит_не_узнали()
+    {
+        var stand = new Stand();
+
+        Assert.Equal(EngineJournalState.Unexamined, stand.Journal);
+
+        var question = stand.Service().UpdateQuestionFor(freshWanted: false);
+
+        Assert.Contains("no-door", question.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("сессий нет", question.Text, StringComparison.OrdinalIgnoreCase);
     }
 }

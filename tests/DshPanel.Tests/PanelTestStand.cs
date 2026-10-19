@@ -116,7 +116,13 @@ internal static class PanelTestStand
 
         Assert.True(width > 0 && height > 0, $"пустой размер окна {width}x{height} — сохранять нечего");
 
-        var folder = Path.Combine(Path.GetTempPath(), "dsh-panel-look-frames");
+        // ⚠️ КАДРЫ — В КОРНЕ СВОЕГО ПРОГОНА, а не в общей папке (t3, 18.10.2026). Прежде путь был
+        // `%TEMP%\dsh-panel-look-frames\<имя>.png`, имена детерминированные (`settings-server-Light`),
+        // и ВТОРОЙ одновременный прогон открывал занятый файл — воспроизведено падением
+        // `ServerSectionLookTests` → IOException «being used by another process». Теперь папка кадров
+        // своя у каждого прогона (`TempRoots.Frames`), а снятый путь по-прежнему возвращается и
+        // печатается проверкой — по нему кадр и находят глазами.
+        var folder = TempRoots.Frames;
         Directory.CreateDirectory(folder);
 
         var path = Path.Combine(folder, name + ".png");
@@ -252,24 +258,19 @@ internal static class PanelTestStand
         return button.GetVisualDescendants().OfType<PathIcon>().FirstOrDefault();
     }
 
-    /// <summary>Временный корень прогона: свои настройки, ни одного каталога владельца.</summary>
-    public static string TempDir() =>
-        Path.Combine(Path.GetTempPath(), "dsh-panel-look-tests", Guid.NewGuid().ToString("N"));
+    /// <summary>
+    /// Временный корень прогона: свои настройки, ни одного каталога владельца.
+    /// Свой у КАЖДОГО прогона (`TempRoots`): два одновременных `dotnet test` не делят ни одного
+    /// каталога — см. разбор в `TempRoots`.
+    /// </summary>
+    public static string TempDir() => TempRoots.For("look-tests");
 
-    public static void RemoveTemp(string dir)
-    {
-        try
-        {
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-
-            var parent = Path.GetDirectoryName(dir);
-            if (parent is not null && Directory.Exists(parent)) Directory.Delete(parent);
-        }
-        catch
-        {
-            // Родитель занят другой проверкой — это не ошибка.
-        }
-    }
+    /// <summary>
+    /// Уборка корня: снимает ТОЛЬКО своё. Общий каталог семейства не снимается никогда — прежде
+    /// уборка удаляла `%TEMP%\dsh-panel-look-tests` целиком и могла снести корень, из которого
+    /// в это время работал второй прогон (t3, 18.10.2026).
+    /// </summary>
+    public static void RemoveTemp(string dir) => TempRoots.Remove(dir);
 
     /// <summary>
     /// Окно настроек с настоящим контроллером под СВОИМ временным корнем.

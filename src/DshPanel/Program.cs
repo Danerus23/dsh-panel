@@ -1180,14 +1180,25 @@ internal static class Program
             // без них кадр показывал бы «баланс не читается» — то, на что владелец и жаловался.
             var peaks = new PeakWindow();
 
+            // ⚠️ ЦЕНЫ НА КАДРЕ — ОБРАЗЦОВАЯ ДВЕРЬ, А НЕ НАСТОЯЩИЙ КОНТРОЛЛЕР (t13, 18.10.2026).
+            // С настоящим блок «Стоимость» выходил ПУСТЫМ: прогон проверки не имеет права ходить
+            // в сеть, и окно честно писало «Цены не читались: это прогон проверки». На витрине это
+            // читается как «панель ничего не показывает». Окно здесь не меняется — меняется дверь,
+            // которую оно получает (см. `ShotDrawers.Pricing` и `ShotSamples.PricingSnapshotSample`).
+            //
             // t24: момент и смещение «на момент UTC» передаются ОКНУ явно — тогда кадр
             // и его ожидание считаются от одного мгновения, а не от часов машины.
             peaks.Attach(
                 sample ? drawers.Balance : RealShotBalance(),
-                ShotPricing(paths),
+                sample ? ShotDrawers.Pricing() : ShotPricing(paths),
                 peaksAt,
                 peaksOffsetAtUtc);
-            if (sample) doors.Add("balance");
+            if (sample)
+            {
+                doors.Add("balance");
+                doors.Add("pricing");
+            }
+
             window = peaks;
         }
         else if (kind == StartModes.ShotIssue)
@@ -1641,15 +1652,24 @@ internal static class Program
                 string.Empty,
                 "v2.1.0",
                 ProductLinks.ReleasesPageUrl,
-                "2026-09-27T10:00:00Z",
+
+                // ⚠️ ДАТА ВЫПУСКА — ИЗ ОДНОГО ИСТОЧНИКА (`ShotSamples.ReleasePublished`), t13, 18.10.2026.
+                // Здесь стоял литерал «2026-09-27», и кадр витрины говорил «Выпущен: 27.09.2026»,
+                // хотя 2.1.0 вышел 17.10.2026: читатель сверил бы дату со страницей релиза
+                // и решил, что панель не знает собственного выпуска. Сценарий кадра не менялся.
+                ShotSamples.ReleasePublished,
                 UpdateDecisions.PickNotes(Body, language),
                 Body,
                 at);
         }
 
-        /// <summary>Образец на языке панели: заметки разбираются на том языке, что выбран ключом.</summary>
+        /// <summary>
+        /// Образец на языке панели: заметки разбираются на том языке, что выбран ключом.
+        /// Дата ПРОВЕРКИ — тоже из одного источника (`ShotSamples.ReleaseCheckedAt`, 18.10.2026):
+        /// прежде здесь стояло 28.09.2026, и кадр называл проверку, которой у этого выпуска не было.
+        /// </summary>
         public static ShotUpdateControl For(string language) =>
-            new(language, new DateTimeOffset(2026, 9, 28, 12, 0, 0, TimeSpan.Zero));
+            new(language, ShotSamples.ReleaseCheckedAt);
 
         public UpdateRelease Result { get; }
 

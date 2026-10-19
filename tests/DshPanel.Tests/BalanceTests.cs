@@ -179,20 +179,8 @@ public class BalanceTests
         public bool SetWindowPlacement(int x, int y, int width, int height) => false;
     }
 
-    private static void RemoveTemp(string dir)
-    {
-        try
-        {
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-
-            var parent = Path.GetDirectoryName(dir);
-            if (parent is not null && Directory.Exists(parent)) Directory.Delete(parent);
-        }
-        catch
-        {
-            // Родитель занят другой проверкой — не ошибка.
-        }
-    }
+    /// <summary>Уборка только СВОЕГО каталога: общий родитель семейства не снимается (t3, `TempRoots`).</summary>
+    private static void RemoveTemp(string dir) => TempRoots.Remove(dir);
 
     private static BalanceController Controller(
         FakeClient client,

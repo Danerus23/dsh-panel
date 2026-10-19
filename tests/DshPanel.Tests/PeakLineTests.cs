@@ -66,20 +66,8 @@ public class PeakLineTests
     private static string TempDir() =>
         Path.Combine(Path.GetTempPath(), "dsh-panel-peakline-tests", Guid.NewGuid().ToString("N"));
 
-    private static void RemoveTemp(string dir)
-    {
-        try
-        {
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-
-            var parent = Path.GetDirectoryName(dir);
-            if (parent is not null && Directory.Exists(parent)) Directory.Delete(parent);
-        }
-        catch
-        {
-            // Родитель занят другой проверкой — это не ошибка.
-        }
-    }
+    /// <summary>Уборка только СВОЕГО каталога: общий родитель семейства не снимается (t3, `TempRoots`).</summary>
+    private static void RemoveTemp(string dir) => TempRoots.Remove(dir);
 
     /// <summary>Что строка обязана говорить: одна строка словаря и дата из профиля агента.</summary>
     private static string Expected(AgentProfile agent) =>

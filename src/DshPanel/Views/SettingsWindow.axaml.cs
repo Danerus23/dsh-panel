@@ -87,6 +87,23 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     /// </summary>
     private IFirewallDoor? _firewall;
 
+    /// <summary>
+    /// СВОЯ нитка интерфейса, взятая при постройке окна (t13 — тот же класс, что Н-1).
+    ///
+    /// ⚠️ Через неё возвращаются ответы фоновой работы: пожарная дверь (OnFirewallClick →
+    /// FinishFirewall) и подготовка обновления (PrepareNow). Память общей двери одна на процесс,
+    /// и её забывает проверка «нитки нет вовсе», идущая параллельно; тогда ответ не доходил,
+    /// а кнопка брандмауэра / раздел обновления оставались занятыми навсегда.
+    /// </summary>
+    private readonly Dispatcher _ui;
+
+    /// <summary>
+    /// НИТКА ИНТЕРФЕЙСА ОКНА НАСТРОЕК ИЛИ ГРОМКИЙ ОТКАЗ (t13). Текст называет СВОЁ окно
+    /// (см. `UiThread.RequireWindow`); проверяется это решение, а не постройка окна: окно на нитке
+    /// без платформы построить нельзя (базовый `Window` падает первым).
+    /// </summary>
+    internal static Dispatcher RequireUiThread(Dispatcher? captured) =>
+        UiThread.RequireWindow(captured, "ОКНО НАСТРОЕК");
     /// <summary>Последнее прочитанное состояние правила — по нему решается, что сделает кнопка.</summary>
     private FirewallState? _firewallState;
 
@@ -195,6 +212,10 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         // (`Shell\UiThread`): подготовка обновления в разделе «Обновление» возвращается сюда
         // из фона, и дверь обязана знать, куда.
         UiThread.Remember();
+
+        // ...и ЗДЕСЬ же она берётся на память самому окну (t13): ответы фоновой работы идут
+        // через `UiThread.PostTo(_ui, …)` и не зависят от того, помнит ли дверь нитку.
+        _ui = RequireUiThread(UiThread.Capture());
 
         Icon = PanelIcon.Window;
 
@@ -2185,10 +2206,20 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     /// (<see cref="UiThread"/>). Второго обращения к диспетчеру в панели быть не должно, а
     /// «отправить и не знать, приняли ли» здесь не годится: ответ о подготовке — не мелочь.
     /// </summary>
-    private static void OnUi(Action action)
+    private void OnUi(Action action)
     {
-        if (UiThread.CheckAccess()) action();
-        else UiThread.Post(action);
+        if (UiThread.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        if (UiThread.PostTo(_ui, action)) return;
+
+        // Ветка НЕДОСТИЖИМА по конструкции: _ui non-nullable. Но потеря здесь — занятость
+        // брандмауэра или раздела обновления навсегда, поэтому она названа строкой журнала
+        // (и не исключением: это ответ фоновой задачи, бросок уронил бы процесс).
+        PanelLog.Write("ОКНО НАСТРОЕК: ответ фоновой работы не дошёл — нитка интерфейса окна недоступна");
     }
 
     /// <summary>Строка состояния раздела — для проверок без экрана.</summary>
@@ -2597,17 +2628,12 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
             return;
         }
 
-        // (1) СПРОСИТЬ ВСЕГДА: без ответа «да» не начинается ничего. Вопрос называет ТУ версию,
-        // которую панель поставит (у отдельной кнопки — свежую, у главной — проверенную).
-        var question = freshWanted && door.Fresh.Length > 0
-            ? door.UpdateQuestion with
-            {
-                Text = string.Format(
-                    System.Globalization.CultureInfo.CurrentCulture,
-                    PanelStrings.EngineUpdateAskFormat,
-                    door.Fresh),
-            }
-            : door.UpdateQuestion;
+        // (1) СПРОСИТЬ ВСЕГДА: без ответа «да» не начинается ничего. Вопрос собирает ДВЕРЬ — она
+        // знает, какая версия будет поставлена (`UpdateQuestionFor`) и что станется с журналом
+        // сессий (блок C: формат v4 и молчаливый откат). Пока окно собирало вопрос САМО, подменяя
+        // текст свежей версией, всё, что дверь добавляла к вопросу, до человека не доходило —
+        // у отдельной кнопки терялось предупреждение о журнале (находка блока C).
+        var question = door.UpdateQuestionFor(freshWanted);
 
         if (!await AskEngine(question))
         {
@@ -2648,8 +2674,10 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
 
     /// <summary>
     /// ОТКАТ ПО КНОПКЕ (этап E3.3): тот же порядок, что у обновления — **спросить ВСЕГДА** и работать
-    /// в стороне от нитки окна. Вопрос здесь другой и он — суть отката: **сессии, созданные новой
-    /// версией, старый движок не откроет** (их журнал новее), и это сказано словами, а не числами.
+    /// в стороне от нитки окна. Вопрос здесь другой и он — суть отката: **сколько сессий прежний
+    /// сервер DSH не увидит**. Число даёт дверь (`EngineJournalFuse`, снимает с диска), а не окно:
+    /// замер `l2` показал, что движок об этом молчит (197 → 196 без поля и без слова), поэтому
+    /// предупредить может только панель.
     /// </summary>
     private async void RunEngineRollback()
     {

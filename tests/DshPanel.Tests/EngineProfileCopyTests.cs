@@ -1,6 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using DshPanel.Backup;
+using DshPanel.Isolation;
 using DshPanel.Server;
 using Xunit;
 
@@ -97,6 +101,99 @@ public class EngineProfileCopyTests
             foreach (var language in new[] { "ru", "en", "zh" })
             {
                 Assert.NotEqual(key, DshPanel.Localization.Loc.TIn(language, key));
+            }
+        }
+    }
+
+    /// <summary>
+    /// КОПИЯ ПРОФИЛЯ ПОЯВЛЯЕТСЯ ТОЛЬКО ГОТОВОЙ (Н-2, t14): во время упаковки файла с КОНЕЧНЫМ именем
+    /// в папке копий нет, после — есть, и ни одного `.part` не остаётся.
+    ///
+    /// **От какого случая.** Архив обновления писался ПРЯМО в `plan.Target`: в папке копий человек
+    /// видел недоделанный архив под именем готовой копии.
+    ///
+    /// **Почему наблюдатель СБЫТИЯМИ, а не опросом папки.** Опрос успевает заглянуть уже ПОСЛЕ
+    /// публикации и видит конечное имя, которого во время работы не было, — первая редакция этой
+    /// проверки на этом и покраснела на исправном коде. У событий ОС есть различающий признак:
+    /// с правкой конечное имя приходит `Renamed` (переименованием), а без правки — `Created`.
+    /// </summary>
+    [Fact]
+    public async Task Копия_профиля_появляется_только_готовой()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dsh-profilecopy " + Guid.NewGuid().ToString("N")[..8]);
+
+        try
+        {
+            var paths = AppPaths.Under(root);
+            Directory.CreateDirectory(paths.DshHome);
+            Directory.CreateDirectory(paths.BackupsDir);
+            File.WriteAllText(Path.Combine(paths.DshHome, "settings.yaml"), "agent: test" + Environment.NewLine);
+            File.WriteAllText(Path.Combine(paths.DshHome, "sessions.jsonl"), "{}" + Environment.NewLine);
+
+            var token = TestContext.Current.CancellationToken;
+
+            var gate = new object();
+            var created = new List<string>();
+            var renamed = new List<string>();
+
+            using var watcher = new FileSystemWatcher(paths.BackupsDir, "dsh2-before-engine-*")
+            {
+                IncludeSubdirectories = false,
+                NotifyFilter = NotifyFilters.FileName,
+            };
+
+            watcher.Created += (_, e) => { lock (gate) created.Add(e.Name ?? string.Empty); };
+            watcher.Renamed += (_, e) => { lock (gate) renamed.Add(e.Name ?? string.Empty); };
+            watcher.EnableRaisingEvents = true;
+
+            var done = false;
+
+            await Task.Run(() => done = EngineUpdateRealDoors.Copy(paths, "2.1.0", _ => { }), token);
+
+            // Ждём СИГНАЛ (событие о конечном имени), а не «спим на глаз»: уведомления приходят пачкой.
+            var until = DateTime.UtcNow.AddSeconds(5);
+
+            while (DateTime.UtcNow < until)
+            {
+                lock (gate)
+                {
+                    if (renamed.Any(name => name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))) break;
+                }
+
+                await Task.Delay(10, token);
+            }
+
+            watcher.EnableRaisingEvents = false;
+
+            Assert.True(done, "копия профиля не снята");
+
+            string[] createdNames;
+            string[] renamedNames;
+
+            lock (gate)
+            {
+                createdNames = created.ToArray();
+                renamedNames = renamed.ToArray();
+            }
+
+            // Конечное имя НЕ появляется созданием — только одним переименованием.
+            Assert.DoesNotContain(
+                createdNames,
+                name => name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(renamedNames, name => name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+
+            Assert.Single(Directory.GetFiles(paths.BackupsDir, "dsh2-before-engine-*.zip"));
+            Assert.Empty(Directory.GetFiles(paths.BackupsDir, "*.part"));
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Уборка подставного корня не имеет права уронить проверку.
             }
         }
     }

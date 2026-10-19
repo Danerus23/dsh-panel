@@ -9,8 +9,13 @@ namespace DshPanel.Tests;
 ///
 /// Здесь проверяется РАЗБОР ответа реестра — чистая функция: живое чтение делается только затем,
 /// чтобы показать человеку свежую строку, и в проверках оно подставлено. Главное, что стережётся:
-/// **свежая — это ровно то, что реестр зовёт `latest`**, с сохранением хвоста версии, а «не узнали»
-/// честно отличается от «узнали».
+/// **свежая — это СТАРШАЯ из двух меток реестра (`latest` и `next`)**, с сохранением хвоста версии,
+/// а «не узнали» честно отличается от «узнали».
+///
+/// ⚠️ **Почему двух меток, а не одной (замер 18.10.2026, задача t3 плана 2.2.0).** У npm `next`
+/// бывает НОВЕЕ `latest`: реестр звал `latest` = `0.2.0-rc.2`, а `next` = `0.2.1-rc.2`. Прежнее
+/// правило «свежая = `latest`» показывало человеку устаревшую строку и прятало более свежую версию
+/// целиком — молчание о ней и было дефектом.
 /// </summary>
 public class EngineRegistryTests
 {
@@ -28,6 +33,56 @@ public class EngineRegistryTests
 
         // Хвост `-rc.2` НЕ срезается: человек видит ту версию, что назвал реестр.
         Assert.Contains("rc.2", fetch.Version, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// `next` НОВЕЕ `latest` — СВЕЖАЯ БЕРЁТСЯ ИЗ `next`. Это ровно тот случай, ради которого правило
+    /// переписано: иначе панель показала бы `0.2.0-rc.2` и не сказала бы про `0.2.1-rc.2` вовсе.
+    /// Обе метки при этом остаются названными в ответе.
+    /// </summary>
+    [Fact]
+    public void Свежая_берётся_из_двух_меток_и_это_next_когда_он_новее()
+    {
+        var fetch = EngineRegistry.Parse(
+            "{\"dist-tags\":{\"latest\":\"0.2.0-rc.2\",\"next\":\"0.2.1-rc.2\",\"alpha\":\"0.2.1-alpha.5\"}}");
+
+        Assert.True(fetch.Ok);
+        Assert.Equal("0.2.1-rc.2", fetch.Version);   // старшая из двух
+        Assert.Equal("0.2.0-rc.2", fetch.Latest);    // и обе названы как есть
+        Assert.Equal("0.2.1-rc.2", fetch.Next);
+    }
+
+    /// <summary>
+    /// `next` СТАРШЕ `latest` — свежая остаётся `latest`: правило сравнивает версии, а не порядок
+    /// меток в ответе. Обратная сторона обязательна, иначе «всегда next» прошло бы молча.
+    /// </summary>
+    [Fact]
+    public void Свежая_остаётся_latest_когда_next_старше()
+    {
+        var fetch = EngineRegistry.Parse(
+            "{\"dist-tags\":{\"latest\":\"0.2.1-rc.2\",\"next\":\"0.2.0-rc.2\"}}");
+
+        Assert.Equal("0.2.1-rc.2", fetch.Version);
+        Assert.Equal("0.2.1-rc.2", fetch.Latest);
+        Assert.Equal("0.2.0-rc.2", fetch.Next);
+    }
+
+    /// <summary>
+    /// МЕТКИ `next` НЕТ ИЛИ ОНА НЕ СТРОКА — ЭТО НЕ «НЕ УЗНАЛИ»: свежая берётся из `latest`, а `Next`
+    /// остаётся пустой. Иначе реестр без `next` объявил бы панель слепой.
+    /// </summary>
+    [Theory]
+    [InlineData("{\"dist-tags\":{\"latest\":\"0.2.0-rc.2\"}}")]
+    [InlineData("{\"dist-tags\":{\"latest\":\"0.2.0-rc.2\",\"next\":42}}")]
+    [InlineData("{\"dist-tags\":{\"latest\":\"0.2.0-rc.2\",\"next\":\"\"}}")]
+    [InlineData("{\"dist-tags\":{\"latest\":\"0.2.0-rc.2\",\"next\":null}}")]
+    public void Без_next_свежая_остаётся_из_latest(string json)
+    {
+        var fetch = EngineRegistry.Parse(json);
+
+        Assert.True(fetch.Ok);
+        Assert.Equal("0.2.0-rc.2", fetch.Version);
+        Assert.Equal(string.Empty, fetch.Next);
     }
 
     /// <summary>

@@ -218,7 +218,7 @@ public static class EngineInstallSelfTest
                 Environment.SetEnvironmentVariable(DshEngine.NodeOverrideVariable, previousNode);
             }
 
-            Check("проба на поставленном движке прошла (84 имени, 8 умений)", probe == 0);
+            Check("проба на поставленном движке прошла (нужные имена 77, 8 умений)", probe == 0);
         }
 
         Print(report);

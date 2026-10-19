@@ -168,7 +168,7 @@ public sealed record EngineTreeLock(
     public const int Format = 2;
 
     /// <summary>Имя встроенного ресурса: файл входит в сборку, а не лежит рядом с exe.</summary>
-    private const string ResourceSuffix = ".EngineTreeLock.json";
+    internal const string ResourceSuffix = ".EngineTreeLock";
 
     /// <summary>
     /// ОФИЦИАЛЬНЫЙ РЕЕСТР — единственный источник, из которого панель ставит движок. Замер
@@ -185,6 +185,32 @@ public sealed record EngineTreeLock(
     /// тогда `Load()` откажется читать встроенный замок, а проверка назовёт расхождение.
     /// </summary>
     public const string PinnedSum = "25399096f1aedcb58a2750f10e1a1f1af8acab593ce6864f8e23de0d7259d5f2";
+
+    /// <summary>
+    /// СУММА ВТОРОГО ЗАМКА — ЛИНИИ 0.2.x (`0.2.1-rc.2`, задача `t4` плана 2.2.0): **683 пакета**,
+    /// снят своим `upd-build\make-engine-lock.ps1` из своей изолированной установки. Закреплена
+    /// здесь по тому же правилу, что и первая: «обновление данных» не должно подсунуть другой набор.
+    ///
+    /// ⚠️ Сумма считается по СЫРОМУ тексту файла, как его пишет сценарий замера, — файлы замков
+    /// лежат с CRLF (`.gitattributes`: `*.json text eol=crlf`), и это часть суммы, а не мелочь:
+    /// после checkout с другими переводами строк сумма перестала бы сходиться.
+    /// </summary>
+    public const string PinnedSumOnKnown = "f40de5b2723be4167bc9937e910cafccdc3a41b84d5c5248f950802123c0ab83";
+
+    /// <summary>
+    /// ВСЕ ЗАКРЕПЛЁННЫЕ СУММЫ: версия движка → сумма файла замка. Два замка — две строки; третий
+    /// (следующая линия) добавляется сюда же вместе со своим файлом и ресурсом.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> PinnedSums { get; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [EngineRpcSurface.MeasuredOnVersion] = PinnedSum,
+            [EngineRpcSurface.KnownOnVersion] = PinnedSumOnKnown,
+        };
+
+    /// <summary>Сумма, закреплённая за этой версией движка; пусто — версия незакреплённая.</summary>
+    public static string PinnedSumOf(string? version) =>
+        version is not null && PinnedSums.TryGetValue(version.Trim(), out var sum) ? sum : string.Empty;
 
     /// <summary>Замка нет: файла не было, он не разобрался или чужой схемы.</summary>
     public static EngineTreeLock Empty { get; } = new(
@@ -334,45 +360,33 @@ public sealed record EngineTreeLock(
     /// ЗАМОК, ВСТРОЕННЫЙ В СБОРКУ (ресурс ищется по СУФФИКСУ — имя сборки не хардкодится, как
     /// у словарей). Не прочитался — <see cref="Empty"/>, и это ответ, а не падение.
     /// </summary>
-    public static EngineTreeLock Load()
-    {
-        try
-        {
-            var assembly = typeof(EngineTreeLock).Assembly;
-            var resource = assembly.GetManifestResourceNames()
-                .FirstOrDefault(name => name.EndsWith(ResourceSuffix, StringComparison.Ordinal));
-
-            if (resource is null) return Empty;
-
-            using var stream = assembly.GetManifestResourceStream(resource);
-            if (stream is null) return Empty;
-
-            using var reader = new StreamReader(stream);
-            var json = reader.ReadToEnd();
-
-            // ⚠️ СВОЯ СУММА ПРОВЕРЯЕТСЯ ДО РАЗБОРА: «обновление данных» не должно подсунуть
-            // другой набор, а подмена ресурса (или правка файла без правки закреплённой суммы)
-            // обязана кончиться «замка нет», а не установкой неизвестно чего.
-            return MatchesPinned(json) ? Parse(json) : Empty;
-        }
-        catch
-        {
-            return Empty;
-        }
-    }
+    public static EngineTreeLock Load() => EngineTreeLocks.Load().Primary;
 
     /// <summary>
-    /// СУММА ЗАМКА СОВПАДАЕТ С ЗАКРЕПЛЁННОЙ В СБОРКЕ. Считается по СЫРОМУ тексту файла —
-    /// так же, как её считает `Get-FileHash` у сценария замера, поэтому числа сходятся
-    /// у сборки, у файла в дереве и у человека, который проверит файл руками.
+    /// СУММА ЭТОГО ЗАМКА СОВПАДАЕТ С ЗАКРЕПЛЁННОЙ В СБОРКЕ ДЛЯ ЕГО ВЕРСИИ. Считается по СЫРОМУ
+    /// тексту файла — так же, как её считает `Get-FileHash` у сценария замера, поэтому числа
+    /// сходятся у сборки, у файла в дереве и у человека, который проверит файл руками.
+    ///
+    /// Версия берётся из САМОГО текста: замок, подсунутый под чужим именем, не пройдёт по сумме
+    /// соседа — у каждого замка своя строка в <see cref="PinnedSums"/>.
     /// </summary>
-    public static bool MatchesPinned(string? json)
+    public static bool MatchesPinned(string? json, string? version)
     {
         if (string.IsNullOrEmpty(json)) return false;
 
+        var pinned = PinnedSumOf(version);
+        if (pinned.Length == 0) return false;
+
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
-        return string.Equals(hash, PinnedSum, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(hash, pinned, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// СУММА ЗАМКА СОВПАДАЕТ С ЗАКРЕПЛЁННОЙ В СБОРКЕ (одноаргументная форма — для НАШЕГО замка,
+    /// на котором панель мерилась). Оставлена ради проверок и ради читателя, который держит в руках
+    /// один файл; в сборке замков теперь два — их сверяет <see cref="EngineLocks"/>.
+    /// </summary>
+    public static bool MatchesPinned(string? json) => MatchesPinned(json, EngineRpcSurface.MeasuredOnVersion);
 
     /// <summary>НАША ЛИ ЭТО СХЕМА: редакция обязана быть объявлена и совпадать (первая не годится).</summary>
     private static bool Ours(JsonElement root)

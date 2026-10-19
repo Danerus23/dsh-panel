@@ -67,20 +67,8 @@ public class UpdateCleanupTests
         /// <summary>Папка сборки, которую готовит движок: <c>&lt;обновление&gt;\&lt;версия&gt;</c>.</summary>
         public string Staged => Path.Combine(UpdateRoot, "2.1.0");
 
-        public void Dispose()
-        {
-            try
-            {
-                if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true);
-
-                var parent = Path.GetDirectoryName(Root);
-                if (parent is not null && Directory.Exists(parent)) Directory.Delete(parent);
-            }
-            catch
-            {
-                // Родитель занят другой проверкой — это не ошибка.
-            }
-        }
+        /// <summary>Уборка только СВОЕГО каталога: общий родитель семейства не снимается (t3, `TempRoots`).</summary>
+        public void Dispose() => TempRoots.Remove(Root);
     }
 
     /// <summary>

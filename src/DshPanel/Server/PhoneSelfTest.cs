@@ -764,7 +764,7 @@ public static class PhoneSelfTest
 
             // РАЗРЕШЁННЫЙ ВЫЗОВ УХОДИТ В ДВИЖОК и возвращает ЕГО ответ как есть.
             engine.Answer = new PhoneEngineAnswer(
-                200, "{\"type\":\"server-response\",\"rpcId\":\"stub\",\"result\":{\"ok\":true,\"items\":[1,2,3]}}");
+                200, "{\"type\":\"server-response\",\"rpcId\":\"stub\",\"result\":{\"ok\":true,\"value\":{\"items\":[1,2,3]}}}");
 
             var allowed = Send(
                     stand.Http, HttpMethod.Post, "/api/session/list", "{\"args\":{\"_request\":{}}}", cookie)
@@ -1031,6 +1031,52 @@ public static class PhoneSelfTest
             Check("живой session/list принят движком (200)", list.Status == 200);
             Check("ответ движка — его конверт без ошибки", EngineRpcClient.ErrorCode(list.Body).Length == 0);
             Info($"  session/list: ответ {list.Body.Length} знаков (содержимое не печатаем: там имена разговоров человека)");
+
+            // --- ФОРМА СПИСКА: ТО, ЧТО ПИШЕТ ДВИЖОК, ПРОТИВ ТОГО, ЧТО ЖДЁТ КАЛИТКА -----------
+            //
+            // ⚠️ ЭТИ ПРОВЕРКИ ПОЯВИЛИСЬ ПОСЛЕ ДВУХ НАХОДОК (блоки D и E, 18.10.2026). Сначала фильтр
+            // искал `result.value` — по аналогии с другим вызовом; потом `result.items` — по
+            // ПОДСТАВНОМУ ответу самой панели, то есть проверка подтверждала мою же ошибку. Живой
+            // прогон на копии профиля (198 сессий) показал правду: `result.value.items`. Теперь форму
+            // меряет ЖИВОЙ прогон и печатает ИМЕНА полей — а подставной ответ в этом же самотесте
+            // приведён к той же форме, чтобы заглушка больше не «подтверждала» неверное.
+            var shape = PhoneSessions.Examine(list.Body);
+
+            if (shape.Found)
+            {
+                Check(
+                    $"путь до списка — тот, что ждёт калитка («{PhoneSessions.ItemsPath}»)"
+                    + (shape.Expected ? string.Empty : $" — пришёл «{shape.Container}»"),
+                    shape.Expected);
+
+                Info($"  в списке: сессий {shape.Sessions}, подчинённых {shape.Subordinate}");
+                Info($"  поля сессии: {(shape.Fields.Length == 0 ? "(список пуст)" : shape.Fields)}");
+
+                if (shape.Sessions > 0)
+                {
+                    // ПОЛЯ СЕССИИ ВИДНЫ ТОЛЬКО НА НЕПУСТОМ СПИСКЕ — на чистой машине их не из чего
+                    // взять, и «провал» там был бы ложью о панели.
+                    Check(
+                        "подчинённые сессии отличимы: у сессий есть parentSessionId или origin",
+                        shape.ParentField || shape.OriginField);
+
+                    Info(
+                        "  формат журнала: "
+                        + (shape.FormatField ? "поле formatStatus есть (это линия 0.2.x)" : "поля formatStatus нет (это 0.1.x)"));
+                }
+                else
+                {
+                    Note("поля сессии видны (список непустой)", false);
+                }
+            }
+            else
+            {
+                // ПУСТОЙ СПИСОК ПРИХОДИТ БЕЗ КОНТЕЙНЕРА ВОВСЕ (`result = {ok}`, 62 знака) — это
+                // законный ответ чистой установки, а не поломка. Проверять здесь нечего, и «провал»
+                // был бы неправдой; но и молчать нельзя — строка говорит, чего не увидели.
+                Note("список непустой (форма списка видна только на непустом)", false);
+                Info($"  контейнера списка в ответе нет ({shape.Container}) — это ответ чистой установки");
+            }
 
             // --- САМО РУКОПОЖАТИЕ: настоящий WS к /api/remote.mux и кадр `ready` ---
             //

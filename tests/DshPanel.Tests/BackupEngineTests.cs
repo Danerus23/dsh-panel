@@ -143,6 +143,130 @@ public class BackupEngineTests
             stand.Paths,
             stand.Engine);
 
+    /// <summary>
+    /// БРОСОК ИЗ ДВЕРИ ПРОГРЕССА НЕ ОСТАВЛЯЕТ НИ НЕДОДЕЛАННОГО, НИ КОНЕЧНОГО АРХИВА (блок F плана 2.2.0).
+    ///
+    /// **От какого случая.** Гарантия уборки `<конечное имя>.part` держалась ПОСТРОЕНИЕМ
+    /// (`finally { if (!published) DropPartial(partial); }` в `BackupEngine.Run`), а проверкой
+    /// не производилась вовсе: «писатель бросает» было названо непокрытым. Между тем бросок —
+    /// настоящий путь: дверь прогресса `progress` — НАШ колбэк, и её может бросить что угодно
+    /// (окно закрыли, журнал отказал, отмена).
+    ///
+    /// **Как проверяется без гонки.** Дверь прогресса зовётся ВО ВРЕМЯ записи; она ждёт, пока
+    /// недоделанный архив появится на диске (свидетель — в самой двери), и только потом бросает.
+    /// Значит к моменту броска `.part` ТОЧНО есть, и «после броска его нет» — доказательство,
+    /// а не совпадение.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«убрать `finally` с `DropPartial`»** (недоделанный
+    /// архив остаётся) и **«публиковать до проверки»** (появляется конечное имя).
+    /// </summary>
+    [Fact]
+    public void Бросок_из_двери_прогресса_не_оставляет_архива()
+    {
+        var stand = CreateStand();
+
+        try
+        {
+            var archive = Path.Combine(stand.Paths.BackupsDir, "dsh2-backup-throw-full.zip");
+            var partial = archive + ".part";
+            var thrown = false;
+
+            // ДВЕРЬ ПРОГРЕССА ЗОВЁТ ПИСАТЕЛЬ 7-Zip (свой писатель её не зовёт вовсе) — значит
+            // проверять надо им же. Без 7-Zip проверка НЕ ПРИМЕНИМА, и это не «зелено».
+            var sevenZip = SevenZip.Find();
+
+            if (sevenZip is null) Assert.Skip("7-Zip на машине нет — бросок из двери прогресса проверить нечем");
+
+            try
+            {
+                BackupEngine.Run(
+                    BackupPlanner.Full(stand.Paths, stand.Work, stand.Engine),
+                    new BackupRequest(archive, SevenZipPath: sevenZip, Verify: false),
+                    stand.Paths,
+                    stand.Engine,
+                    progress: _ =>
+                    {
+                        // Дверь прогресса — НАШ колбэк, и она имеет право бросить: проверяем именно это.
+                        throw new InvalidOperationException("бросок из двери прогресса");
+                    });
+            }
+            catch (InvalidOperationException)
+            {
+                thrown = true;
+            }
+
+            Assert.True(thrown, "исключение из двери прогресса не дошло до вызывающего");
+
+            // ПОСЛЕ БРОСКА НЕ ОСТАЁТСЯ НИЧЕГО: ни недоделанного, ни конечного.
+            Assert.False(File.Exists(partial), "недоделанный архив остался после броска");
+            Assert.False(File.Exists(archive), "конечное имя появилось без готового архива");
+            Assert.Empty(Directory.GetFiles(stand.Paths.BackupsDir, "dsh2-backup-*.zip"));
+        }
+        finally
+        {
+            Cleanup(stand);
+        }
+    }
+
+    /// <summary>
+    /// КОНЕЧНОЕ ИМЯ АРХИВА ПОЯВЛЯЕТСЯ ТОЛЬКО ГОТОВЫМ (Н-2, задача t12).
+    ///
+    /// **От какого случая.** `7z a` переписывает архив на КАЖДЫЙ свой запуск (полная копия — это
+    /// несколько запусков: корни и опись), поэтому под конечным именем файл исчезал и появлялся
+    /// снова. Замер наблюдателем за папкой копий 18.10.2026: **6 прогонов из 6** — по два удаления
+    /// и три появления конечного имени за одну копию (окна по 2–20 мс). Всякий, кто смотрит в папку
+    /// в это время — окно копий, список копий, рядом идущая проверка, — видел «копия есть…
+    /// копии нет… опять есть», и честная копия выглядела пропавшей.
+    ///
+    /// **Как проверяется БЕЗ гонки и без ожиданий.** Дверь прогресса `BackupEngine.Run` зовётся
+    /// ВО ВРЕМЯ работы (запись своим ходом зовёт её на каждом корне и каждой записи). Значит в ней
+    /// и спрашиваем папку копий: файла с КОНЕЧНЫМ именем там быть не должно, пока работа не кончилась.
+    /// На коде без правки он уже есть (его открывает сам писатель) — проверка красная сразу.
+    /// </summary>
+    [Fact]
+    public void Конечное_имя_архива_появляется_только_готовым()
+    {
+        var stand = CreateStand();
+
+        try
+        {
+            var archive = Path.Combine(stand.Paths.BackupsDir, "dsh2-backup-stand-full.zip");
+            var folder = Path.GetDirectoryName(archive)!;
+            var seen = new List<string>();
+
+            var result = BackupEngine.Run(
+                BackupPlanner.Full(stand.Paths, stand.Work, stand.Engine),
+
+                // Своими силами (`SevenZipPath: ""`): дверь прогресса тогда зовётся на каждом корне
+                // и каждой записи, и проверка не зависит от того, установлен ли 7-Zip на машине.
+                new BackupRequest(archive, SevenZipPath: string.Empty, Verify: false),
+                stand.Paths,
+                stand.Engine,
+                progress: _ =>
+                {
+                    if (File.Exists(archive)) seen.Add("конечное имя видно во время работы");
+
+                    if (Directory.Exists(folder))
+                        seen.AddRange(Directory.GetFiles(folder, "dsh2-backup-*.zip").Select(Path.GetFileName)!);
+                });
+
+            Assert.True(result.Ok, "копия не снята: " + result.Error);
+
+            Assert.True(
+                seen.Count == 0,
+                "во время работы в папке копий уже был архив с конечным именем: " + string.Join(", ", seen));
+
+            // А после работы — ровно один файл с конечным именем и ни одного временного.
+            Assert.Single(Directory.GetFiles(folder, "dsh2-backup-*.zip"));
+            Assert.Empty(Directory.GetFiles(folder, "*.part"));
+            Assert.Equal(archive, result.ArchivePath);
+        }
+        finally
+        {
+            Cleanup(stand);
+        }
+    }
+
     // --- состав корней и имена групп -----------------------------------------
 
     /// <summary>
@@ -840,6 +964,100 @@ public class BackupEngineTests
             {
                 // Временный каталог в %TEMP%: не убрался — не провал проверки.
             }
+        }
+    }
+
+    // --- Н-2, t14: временный архив не остаётся ни на одном пути отказа ------------------------
+
+    /// <summary>
+    /// ПУТЬ 1 — ПИСАТЕЛЬ ОТКАЗАЛ (!created.Ok): временного файла не остаётся (t14).
+    ///
+    /// Запертый файл в источниках — НАСТОЯЩАЯ причина отказа «своими силами»
+    /// (`ZipWriter.WriteBuiltIn` → `FileRefusal`), и `.part` к этому моменту уже создан.
+    /// Уборку делает ГАРАНТИЯ ПОСТРОЕНИЯ (`try/finally` с флагом `published`), а не список мест.
+    /// </summary>
+    [Fact]
+    public void Отказ_писателя_не_оставляет_временного_архива()
+    {
+        var stand = CreateStand();
+        var locked = Path.Combine(stand.Work, "proj", "src", "a.txt");
+
+        try
+        {
+            var archive = Path.Combine(stand.Paths.BackupsDir, "dsh2-backup-locked.zip");
+
+            using (new FileStream(locked, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                var result = Copy(stand, archive, verify: false);
+
+                Assert.False(result.Ok, "копия с запертым файлом не должна считаться снятой");
+                Assert.Empty(Directory.GetFiles(stand.Paths.BackupsDir, "*.part"));
+                Assert.Empty(Directory.GetFiles(stand.Paths.BackupsDir, "dsh2-backup-*.zip"));
+            }
+        }
+        finally
+        {
+            Cleanup(stand);
+        }
+    }
+
+    /// <summary>
+    /// ПУТЬ 2 — НЕ ПРОШЛА ПРОВЕРКА 7z t: временного файла не остаётся, конечного имени нет (t14).
+    ///
+    /// Проверка зовётся НАСТОЯЩЕЙ дверью, но по несуществующему пути — это её честный отказ
+    /// (`SevenZip.Run` не запускает процесс), а не подстроенный бросок.
+    /// </summary>
+    [Fact]
+    public void Провал_проверки_архива_не_оставляет_временного_файла()
+    {
+        var stand = CreateStand();
+
+        try
+        {
+            var archive = Path.Combine(stand.Paths.BackupsDir, "dsh2-backup-unverified.zip");
+
+            var result = Copy(stand, archive, verify: true, sevenZip: Path.Combine(stand.Root, "нет-такого-7z.exe"));
+
+            Assert.False(result.Ok, "непроверенный архив не должен считаться копией");
+            Assert.Contains("t", result.Error, StringComparison.OrdinalIgnoreCase);
+
+            Assert.Empty(Directory.GetFiles(stand.Paths.BackupsDir, "*.part"));
+            Assert.Empty(Directory.GetFiles(stand.Paths.BackupsDir, "dsh2-backup-*.zip"));
+        }
+        finally
+        {
+            Cleanup(stand);
+        }
+    }
+
+    /// <summary>
+    /// ПУТЬ 3 — ПЕРЕИМЕНОВАНИЕ НЕ УДАЛОСЬ (`catch` у `File.Move`): временного файла не остаётся,
+    /// а занятое конечное имя остаётся ЧУЖИМ и не трогается (t14).
+    ///
+    /// Место под конечным именем занято КАТАЛОГОМ — настоящее препятствие для переименования.
+    /// </summary>
+    [Fact]
+    public void Неудавшееся_переименование_не_оставляет_временного_файла()
+    {
+        var stand = CreateStand();
+
+        try
+        {
+            Directory.CreateDirectory(stand.Paths.BackupsDir);
+
+            var archive = Path.Combine(stand.Paths.BackupsDir, "dsh2-backup-taken.zip");
+            Directory.CreateDirectory(archive);
+
+            var result = Copy(stand, archive, verify: false);
+
+            Assert.False(result.Ok, "копия не опубликована — значит и снятой не считается");
+
+            Assert.Empty(Directory.GetFiles(stand.Paths.BackupsDir, "*.part"));
+            Assert.True(Directory.Exists(archive), "чужое занятое имя (каталог) не должно быть тронуто");
+        }
+        finally
+        {
+            Cleanup(stand);
         }
     }
 }

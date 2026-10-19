@@ -257,6 +257,61 @@ public class ShotWiringTests
     }
 
     /// <summary>
+    /// КАДР ДОКУМЕНТАЦИИ НАЗЫВАЕТ ДАТЫ ВЫПУСКА, А НЕ ВЫДУМАННЫЕ (t13, 18.10.2026).
+    ///
+    /// **От какого случая.** Владелец увидел на витрине «Выпущен: 27.09.2026» и «проверено
+    /// 28.09.2026», а выпуск 2.1.0 вышел **17.10.2026**. Прежняя проверка кадров считала ЦВЕТА
+    /// («кадр не белый лист»), и кадр с неверной датой был для неё так же зелен, как с верной:
+    /// число цветов про СМЫСЛ текста не говорит ничего.
+    ///
+    /// **Что проверяется.** Текст СОБРАННОГО окна кадра «Обновление»: в нём обе даты — 17.10.2026
+    /// (выпуск) и 18.10.2026 (проверка) — и НЕТ прежних 27.09.2026 / 28.09.2026.
+    ///
+    /// ⚠️ Даты сверяются ЛИТЕРАЛАМИ, а не константами образцовой двери: проверка о том, что видит
+    /// ЧЕЛОВЕК, и «ожидание = источник» осталось бы зелёным после правки самого источника —
+    /// то есть не поймало бы ровно тот дефект, ради которого заведено.
+    ///
+    /// **Мутации, которые обязаны упасть:** вернуть `"2026-09-27T10:00:00Z"` в `ShotUpdateControl`
+    /// (дата выпуска снова 27.09) · вернуть 28.09.2026 датой проверки в `ShotUpdateControl.For()`.
+    /// </summary>
+    [AvaloniaFact]
+    public void Кадр_обновления_называет_даты_выпуска_2_1_0()
+    {
+        var text = ShowAndRead(StartModes.ShotSettingsUpdate, "17.10.2026");
+
+        Assert.Contains("17.10.2026", text, StringComparison.Ordinal);
+        Assert.Contains("18.10.2026", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("27.09.2026", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("28.09.2026", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// КАДР «ПИКИ И ТАРИФЫ» ПОКАЗЫВАЕТ ЦЕНЫ, А НЕ ОТКАЗ ПРОГОНА (t13, 18.10.2026).
+    ///
+    /// **От какого случая.** Блок «Стоимость» на витрине был ПУСТ и объяснял: «{PriceLocked}».
+    /// Человек читает это как «панель ничего не умеет», а не как «здесь был прогон без сети».
+    /// Лечение — образцовая дверь цен (<see cref="ShotDrawers.Pricing"/>), а не правка окна.
+    ///
+    /// **Что проверяется.** Текст собранного окна: пары образцовых цен (0,25 вне пика / 0,50 в пик —
+    /// ровно те, что в образце истории цен), дата проверки цен 18.10.2026 и ОТСУТСТВИЕ строк
+    /// «цены не читались» / «ещё не спрашивали».
+    ///
+    /// **Мутации, которые обязаны упасть:** вернуть в ветвь кадра «пики» настоящий контроллер цен
+    /// (пустой «Стоимость» + строка про прогон) · убрать строки из `ShotSamples.PricingSnapshotSample`.
+    /// </summary>
+    [AvaloniaFact]
+    public void Кадр_пиков_показывает_цены_а_не_отказ_прогона()
+    {
+        var text = ShowAndRead(StartModes.ShotPeaks, "$0.50");
+
+        Assert.Contains("$0.25", text, StringComparison.Ordinal);
+        Assert.Contains("$0.50", text, StringComparison.Ordinal);
+        Assert.Contains("18.10.2026", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(PanelStrings.PriceLocked, text, StringComparison.Ordinal);
+        Assert.DoesNotContain(PanelStrings.PriceNeverRead, text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// КАДР «ДВА НАЙДЕННЫХ СЕРВЕРА» ОБРАЗЦОВЫХ ЗНАЧЕНИЙ НЕ ПОЛУЧАЕТ.
     ///
     /// **Зачем отдельно.** Это единственный кадр с НАСТОЯЩЕЙ моделью окна и подставленной пробой
@@ -364,7 +419,11 @@ public class ShotWiringTests
 
         // Кадры с образцовыми данными (у окна первого запуска своя дверь фактов — это она).
         (StartModes.ShotBackup, new[] { "backup" }),
-        (StartModes.ShotPeaks, new[] { "balance" }),
+
+        // ⚠️ «ПИКИ И ТАРИФЫ» — ДВЕ ДВЕРИ, А НЕ ОДНА (t13, 18.10.2026): «balance» и «pricing».
+        // Вторая появилась потому, что без неё блок «Стоимость» на кадре был ПУСТ и объяснял
+        // «цены не читались: это прогон проверки» — то есть витрина показывала нашу механику.
+        (StartModes.ShotPeaks, new[] { "balance", "pricing" }),
         (StartModes.ShotSettings, AllSettingsDoors()),
         (StartModes.ShotSettingsGeneral, AllSettingsDoors()),
         (StartModes.ShotSettingsBackup, AllSettingsDoors()),

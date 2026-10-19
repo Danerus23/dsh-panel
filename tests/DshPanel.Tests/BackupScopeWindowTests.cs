@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using Avalonia.Controls;
@@ -30,10 +31,19 @@ namespace DshPanel.Tests;
 /// </summary>
 public class BackupScopeWindowTests
 {
-    /// <summary>Прокрутить очередь диспетчера, дожидаясь условия: замер размера идёт в фоне.</summary>
+    /// <summary>
+    /// Прокрутить очередь диспетчера, дожидаясь условия: замер размера и копия идут в фоне.
+    ///
+    /// ⚠️ **Бюджет — это СЕКУНДЫ, а не число проходов** (Н-1, задача D3 цикла 2.1.2): прежде счётчик
+    /// прибавлял по 5 на каждом проходе, а проход под нагрузкой стоит ~15 мс — и «20 секунд» на деле
+    /// были **1 min 2 s** (ровно столько шла упавшая проверка 2.1.1). Теперь время берут часы,
+    /// и число в бюджете значит то, что написано: ждать дольше двадцати секунд проверка не станет.
+    /// </summary>
     private static bool WaitFor(Func<bool> condition, int milliseconds = 20000)
     {
-        for (var waited = 0; waited < milliseconds && !condition(); waited += 5)
+        var clock = Stopwatch.StartNew();
+
+        while (clock.ElapsedMilliseconds < milliseconds && !condition())
         {
             Dispatcher.UIThread.RunJobs();
             Thread.Sleep(5);
@@ -55,7 +65,10 @@ public class BackupScopeWindowTests
     /// </summary>
     private static (SettingsController Settings, BackupController Backups, AppPaths Paths, string File) Stand()
     {
-        var root = Path.Combine(Path.GetTempPath(), "dsh-scope-ui-" + Guid.NewGuid().ToString("N"));
+        // Корень — из TempRoots (правило `tests\AGENTS.md`, задача D2 этого же цикла): у каждого
+        // прогона свой, и снимает его сам прогон при выходе. Прежде путь сеялся прямо в `%TEMP%`,
+        // и упавшая проверка оставляла каталог навсегда — замер D3: один такой (0,04 МБ) остался.
+        var root = TempRoots.For("scope-ui");
         Directory.CreateDirectory(root);
 
         var paths = AppPaths.Under(root);
@@ -378,6 +391,97 @@ public class BackupScopeWindowTests
         finally
         {
             Cleanup(paths);
+        }
+    }
+
+    /// <summary>
+    /// Н-1 (наблюдение цикла 2.1.1, закрывается задачей D3 цикла 2.1.2): ответ фоновой копии доходит
+    /// до СВОЕГО окна даже тогда, когда память нитки интерфейса в двери успели забыть.
+    ///
+    /// **От какого случая.** 1 падение из 5 полных прогонов под нагрузкой: копия снималась, окно было
+    /// занято, и «окно не вернулось в рабочее состояние» — сама проверка шла **1 min 2 s**. Память
+    /// нитки интерфейса в <see cref="UiThread"/> — ОДНА на процесс, а проверка «нитки нет вовсе»
+    /// (`UiThreadTests`) очищает её (`ForgetForTests`). Классы идут ПАРАЛЛЕЛЬНО (разные коллекции),
+    /// и очистка может лечь ровно между постройкой окна и ответом фоновой задачи: `UiThread.Post`
+    /// честно отвечает `false`, а вызывающий это `false` терял — окно оставалось занятым навсегда,
+    /// без единого слова человеку.
+    ///
+    /// Проверка воспроизводит это **без гонки**: окно построено (свою нитку оно знает), дверь забыта,
+    /// нажатие — и ответ обязан дойти. На коде без правки она падает «ответ копии не дошёл до окна»
+    /// (замер — `_team\c6\rd3-n1.md`), с правкой — зелёная.
+    /// </summary>
+    [AvaloniaFact]
+    public void Ответ_фоновой_копии_доходит_до_окна_и_после_забывания_двери()
+    {
+        var (_, backups, paths, _) = Stand();
+
+        try
+        {
+            var window = new BackupWindow();
+            window.Attach(backups);
+
+            // Чужая проверка двери очищает память нитки интерфейса — ровно это и происходит
+            // в полном прогоне, когда UiThreadTests идёт параллельно с этим классом.
+            UiThread.ForgetForTests();
+
+            Нажать(window, "CreateButton");
+
+            Assert.True(window.Busy, "окно не занялось копией");
+            Assert.True(WaitFor(() => !window.Busy), "ответ копии не дошёл до окна");
+        }
+        finally
+        {
+            UiThread.Remember();
+            Cleanup(paths);
+        }
+    }
+
+    /// <summary>
+    /// ОКНО КОПИЙ БЕЗ НИТКИ ИНТЕРФЕЙСА — ГРОМКИЙ ОТКАЗ (t13). Так же, как у главного окна: пустое
+    /// значение не прячется в поле, а отказ называет СВОЁ окно. Строить окно без платформы нельзя
+    /// (базовый `Window` падает первым), поэтому проверяется ровно решение, которое зовёт конструктор.
+    /// </summary>
+    [Fact]
+    public void Окно_копий_без_нитки_интерфейса_отказывается_строиться()
+    {
+        var refusal = Assert.Throws<InvalidOperationException>(() => BackupWindow.RequireUiThread(null));
+
+        Assert.Contains("ОКНО КОПИЙ БЕЗ НИТКИ ИНТЕРФЕЙСА", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("Стройте окно на нитке интерфейса", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ОТЛОЖЕННАЯ РАБОТА ДОХОДИТ ДО СВОЕЙ НИТКИ И ПОСЛЕ ЗАБЫВАНИЯ ДВЕРИ (t13) — механизм, которым
+    /// пользуется отложенная прокрутка плана (`ShowPlanOnScreen`, `DispatcherPriority.Loaded`).
+    ///
+    /// ⚠️ **Чего эта проверка НЕ доказывает:** что прокрутка плана сработала. Её следствие — позиция
+    /// прокрутки, и отдельного наблюдения за ней в наборе нет. Названо непокрытым в отчёте, а не
+    /// выдано за проверенное.
+    /// </summary>
+    [AvaloniaFact]
+    public void Отложенная_работа_доходит_до_своей_нитки_после_забывания_двери()
+    {
+        var ui = UiThread.Capture();
+
+        Assert.NotNull(ui);
+
+        try
+        {
+            UiThread.ForgetForTests();
+
+            var done = false;
+
+            Assert.True(
+                UiThread.PostTo(ui, () => done = true, DispatcherPriority.Loaded),
+                "работа не отправлена в захваченную нитку интерфейса");
+
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(done, "отложенная работа не дошла до нитки интерфейса");
+        }
+        finally
+        {
+            UiThread.Remember();
         }
     }
 }

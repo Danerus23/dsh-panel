@@ -12,12 +12,32 @@
 #
 # ФОРМУЛА ОЖИДАНИЯ (слово владельца, 17.10.2026): ожидаемое ПОЛНОЕ дерево выпуска считается
 # ТОЛЬКО из объекта git — временный индекс: `read-tree <тег>` → `rm --cached` всего, чего нет
-# в разрешённом списке → наложение 30 путей данных из `'<тег>:release/tree'` (в КОРЕНЬ, префикс
+# в разрешённом списке → наложение 39 путей данных из `'<тег>:release/tree'` (в КОРЕНЬ, префикс
 # снимается) → `write-tree`. Рабочее дерево репозитория при этом не читается вовсе.
 #
 # Флаги `-c core.autocrlf=false -c core.safecrlf=false` стоят на КАЖДОМ вызове git (в том числе на
 # `archive`): замер 17.10.2026 — `git archive` сам применяет eol-настройку машины, и без флага
 # блобы в черновом репозитории перестают совпадать с блобами тега на ИСПРАВНОМ дереве.
+#
+# ⚠️ `-f` У `git rm --cached` — НЕ УКРАШЕНИЕ (дефект найден владельцем 18.10.2026, воспроизведён
+# капитаном). Индекс наполняется из ТЕГА/РЕВИЗИИ, а `HEAD` рабочего репозитория — обычно ДРУГОЙ коммит
+# (после выпуска в дерево идут правки). Без `-f` git честно отказывает («staged content different from
+# both the file and the HEAD»), индекс остаётся целым, ожидание НЕ считается — а инструмент печатал
+# «ДЕРЕВО ВЫПУСКА НЕ СОВПАЛО», то есть падение ИНСТРУМЕНТА выдавал за расхождение ДЕРЕВА. Теперь `-f`
+# стоит ВСЕГДА, а отказ `rm --cached` называется именем инструмента, а не приговором дереву.
+#
+# ВХОД — ТЕГ ИЛИ РЕВИЗИЯ (приёмка 2.1.1, 18.10.2026). Обе точки входа принимают `-Rev <sha>` и считают
+# ожидание ТЕМ ЖЕ временным индексом (`read-tree <sha>` → `rm --cached -f` лишнего → наложение данных из
+# `<sha>:release/tree` → `write-tree`): объект тега НЕ создаётся, вывод говорит «ревизия», а проверка
+# «тег против <Version>» заменяется проверкой версии из `<sha>:src/DshPanel/DshPanel.csproj` и трёх
+# CHANGELOG. Для git «тег» и «ревизия» — одно и то же имя объекта, поэтому весь код ниже общий, а
+# различие живёт в подписях и в проверке версии.
+#
+# МЕРА ДЛЯ `-Tree` (Ф-9-2, 18.10.2026). Если названная папка — РЕПОЗИТОРИЙ, сверяется ДЕРЕВО КОММИТА
+# (`<commit>^{tree}` и пары блобов из `ls-tree`), а не то, что лежит на диске: в отвергнутом коммите
+# 2.1.0 диск совпал, а коммит — нет, и проверка диска дала ЛОЖНОЕ «0». Публикация — это коммит, значит
+# и мера — коммит. Для простой папки (её пишет `make-release-tree`) коммита нет: там содержимое
+# считается объектами git, и это честно называется в выводе.
 
 # ── РАЗРЕШЁННЫЙ СПИСОК (ADR-001 §5.2 п. 1, дословно) ──────────────────────────────────────────
 $script:ReleaseExactPaths = @(
@@ -31,12 +51,21 @@ $script:ReleaseExactPaths = @(
     'global.json'
     'NuGet.config'
     'engine-lock.json'
+    # ⚠️ ВТОРОЙ ЗАМОК НАБОРА (цикл 2.2.0, блок B) — И ЭТО НЕ «ЕЩЁ ОДИН ФАЙЛ РЯДОМ».
+    # С линии 0.2.x панель ставит движок ДВУМЯ наборами: `engine-lock.json` (наша 0.1.5-rc.2, 588
+    # пакетов) и `engine-lock-0.2.1-rc.2.json` (683 пакета). Оба ВСТРОЕНЫ В СБОРКУ как ресурсы
+    # (`DshPanel.csproj` → `EngineTreeLock`), и суммы обоих закреплены в коде
+    # (`EngineTreeLock.PinnedSum` / `PinnedSumOnKnown`). Значит без этого пути в дереве выпуска
+    # панель у людей не смогла бы поставить линию 0.2.x вовсе — файл обязан быть в дереве.
+    # Найдено проверкой дерева на ревизии `e51beb2` (задача `t16`): путь лежал в корне, а список
+    # его не знал, и выпуск 2.2.0 был НЕВОЗМОЖЕН (код 1, «НЕЗНАКОМЫЙ отброшенный путь»).
+    'engine-lock-0.2.1-rc.2.json'
     'engine-hints.json'
     '.github/FUNDING.yml'
 )
 $script:ReleaseDirs = @('assets/', 'installer/', 'src/', 'tests/', 'tools/')
 
-# ── 30 ПУТЕЙ ДАННЫХ ВЫПУСКА (ADR-001 §5.2 п. 1) ───────────────────────────────────────────────
+# ── 39 ПУТЕЙ ДАННЫХ ВЫПУСКА (ADR-001 §5.2 п. 1; 30 → 39 — решение владельца 18.10.2026, цикл 2.1.1) ──
 $script:ReleaseDataPaths = @(
     'README.md'
     'README.ru.md'
@@ -52,12 +81,17 @@ $script:ReleaseDataPaths = @(
     'docs/demo.png'
 )
 foreach ($lang in @('ru', 'en', 'zh')) {
-    foreach ($shot in @('panel', 'settings', 'peaks', 'pricing-history', 'about', 'update')) {
+    # ⚠️ ДЕВЯТЬ ВИДОВ КАДРОВ, А НЕ ШЕСТЬ (решение владельца 18.10.2026, вариант «А»): к шести кадрам
+    # 2.0.x добавлены три вида, которых на них не было, — раздел «Телефон», блок «Сервер DSH» и окно
+    # первого запуска. Число путей данных выросло 30 → 39 и это СЛОВО ВЛАДЕЛЬЦА, а не удобство:
+    # ADR-001 §5.2 п. 1 говорит «Число 30 — слово владельца; расхождение называется, а не подгоняется»,
+    # поэтому сторож ниже переставлен вместе со списком, а не отключён.
+    foreach ($shot in @('panel', 'settings', 'peaks', 'pricing-history', 'about', 'update', 'phone', 'server', 'first-run')) {
         $script:ReleaseDataPaths += ('docs/screenshots/' + $lang + '/' + $shot + '.png')
     }
 }
-if ($script:ReleaseDataPaths.Count -ne 30) {
-    throw ('путей данных выпуска не 30, а ' + $script:ReleaseDataPaths.Count + ' — общая часть испорчена')
+if ($script:ReleaseDataPaths.Count -ne 39) {
+    throw ('путей данных выпуска не 39, а ' + $script:ReleaseDataPaths.Count + ' — общая часть испорчена')
 }
 
 function Get-ReleaseGitFlags { return @('-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false') }
@@ -154,7 +188,8 @@ function Get-ReleaseInternalViolation {
 #
 # ⚠️ ЗАМЕНА — ЭТО НЕ «ЛИШНИЙ ПУТЬ» (конвенция счёта названа владельцем 17.10.2026). На `75db96b`
 # такой путь ОДИН: корневой внутренний `README.md` (блоб 7a4b7c44…, 95 630 Б) — на его место
-# публикуется `README.md` данных выпуска (36d7f89d…, 11 013 Б). Поэтому:
+# публикуется `README.md` данных выпуска (36d7f89d…, 11 013 Б). Числа ниже — замер ТОЙ ревизии
+# (тогда путей данных было 30; с 18.10.2026 их 39 — см. список выше), поэтому:
 #   * `git rm --cached` снимает 77 путей (42 внутренних docs + 5 AGENTS.md + 30 release/tree);
 #   * наложение данных даёт 30 = 29 НОВЫХ + 1 ЗАМЕНА; счёт: 489 − 77 + 29 = 441;
 #   * «не уехало содержимым» — 78: к 77 снятым добавляется внутреннее содержимое README.md.
@@ -218,19 +253,20 @@ function Get-ReleaseTreeEntries {
     return $map
 }
 
-# Наложение данных: 30 путей из `'<тег>:release/tree'`, префикс снимается — публикуются в КОРЕНЬ.
+# Наложение данных: 39 путей из `'<тег|ревизия>:release/tree'`, префикс снимается — публикуются в КОРЕНЬ.
 function Get-ReleaseDataOverlay {
-    param([string]$Repo, [string]$Tag)
-    $entries = Get-ReleaseTreeEntries -Repo $Repo -Spec ($Tag + ':release/tree')
+    param([string]$Repo, [string]$Spec)
+    $entries = Get-ReleaseTreeEntries -Repo $Repo -Spec ($Spec + ':release/tree')
     return $entries
 }
 
 # ОЖИДАНИЕ: полное дерево выпуска из объекта git (формула владельца, §3 записки).
+# `-Spec` — тег ИЛИ ревизия: и то, и другое git понимает как имя объекта, и формула одна и та же.
 function Get-ExpectedFullTree {
-    param([string]$Repo, [string]$Tag, $Selection, $DataOverlay, [string]$TempRoot)
+    param([string]$Repo, [string]$Spec, $Selection, $DataOverlay, [string]$TempRoot)
     if (-not (Test-Path -LiteralPath $TempRoot)) { New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null }
     # ⚠️ Имя `$tag` здесь НЕЛЬЗЯ: PowerShell не различает регистр, и локальная `$tag` затирает
-    # параметр `$Tag` — замерено 17.10.2026 (git read-tree уходил с обрывком guid вместо имени тега).
+    # одноимённый параметр — замерено 17.10.2026 (git read-tree уходил с обрывком guid вместо имени тега).
     $stamp = [guid]::NewGuid().ToString('N').Substring(0, 8)
     $indexFile = Join-Path $TempRoot ('index-expected-' + $stamp)
     $pathspecFile = Join-Path $TempRoot ('drop-' + $stamp + '.nul')
@@ -246,13 +282,17 @@ function Get-ExpectedFullTree {
     $oldIndex = $env:GIT_INDEX_FILE
     $env:GIT_INDEX_FILE = $indexFile
     try {
-        $r = Invoke-ReleaseGit -Repo $Repo -GitArgs @('read-tree', $Tag)
-        if ($r.Code -ne 0) { throw ('git read-tree ' + $Tag + ' не сработал: ' + $r.Text) }
+        $r = Invoke-ReleaseGit -Repo $Repo -GitArgs @('read-tree', $Spec)
+        if ($r.Code -ne 0) { throw ('git read-tree ' + $Spec + ' не сработал: ' + $r.Text) }
 
         if ($dropped.Count -gt 0) {
-            $r = Invoke-ReleaseGit -Repo $Repo -GitArgs @('rm', '--cached', '-r', '-q', '--ignore-unmatch',
+            # ⚠️ `-f` ОБЯЗАТЕЛЕН — см. шапку файла. Индекс здесь из тега/ревизии, а `HEAD` рабочего
+            # репозитория обычно ДРУГОЙ коммит; без `-f` git отказывает, и падение инструмента
+            # выдавалось за «дерево не совпало» (дефект 18.10.2026). Проверка на это — мутация
+            # «убрать -f» в `selftest-release-tree.ps1`, опыт 6.
+            $r = Invoke-ReleaseGit -Repo $Repo -GitArgs @('rm', '--cached', '-f', '-r', '-q', '--ignore-unmatch',
                 ('--pathspec-from-file=' + $pathspecFile), '--pathspec-file-nul')
-            if ($r.Code -ne 0) { throw ('git rm --cached не сработал: ' + $r.Text) }
+            if ($r.Code -ne 0) { throw ('ИНСТРУМЕНТ: git rm --cached не смог снять с индекса отброшенные пути (код ' + $r.Code + '): ' + $r.Text) }
         }
 
         foreach ($path in $DataOverlay.Keys) {
@@ -382,4 +422,118 @@ function Get-ReleaseArchiveEntries {
         while ($null -ne ($entry = $reader.GetNextEntry())) { $entries.Add($entry.Name.Replace('\', '/')) | Out-Null }
     } finally { $reader.Dispose() }
     return @($entries)
+}
+
+# ── ВХОД «РЕВИЗИЯ» И ПРОВЕРКА ВЕРСИИ В НЕЙ (приёмка 2.1.1, 18.10.2026) ───────────────────────
+#
+# Полный sha КОММИТА по любому имени ревизии (сокращение, `HEAD`, `refs/tags/...`) — или $null.
+# `^{commit}` намеренно: тег в git аннотированный, и «ревизия тега» — это коммит, а не объект тега.
+# Объект тега здесь НЕ создаётся и не нужен: приёмка 2.1.1 идёт ВРЕМЕННЫМ ИНДЕКСОМ, без тега.
+function Resolve-ReleaseCommit {
+    param([string]$Repo, [string]$Rev)
+    if (-not $Rev) { return $null }
+    $r = Invoke-ReleaseGit -Repo $Repo -GitArgs @('rev-parse', '--verify', '--quiet', ($Rev + '^{commit}'))
+    if ($r.Code -ne 0) { return $null }
+    $sha = @($r.Lines | Where-Object { $_ }) | Select-Object -First 1
+    if (-not $sha) { return $null }
+    return ([string]$sha).Trim()
+}
+
+# `<Version>` из `src\DshPanel\DshPanel.csproj` РЕВИЗИИ (не с диска). Возвращает $null, если файла нет.
+function Get-ReleaseProjectVersion {
+    param([string]$Repo, [string]$Spec)
+    $r = Invoke-ReleaseGit -Repo $Repo -GitArgs @('show', ($Spec + ':src/DshPanel/DshPanel.csproj'))
+    if ($r.Code -ne 0) { return $null }
+    $found = [regex]::Matches($r.Text, '<Version>([^<]+)</Version>')
+    if ($found.Count -eq 0) { return $null }
+    return $found[0].Groups[1].Value.Trim()
+}
+
+# Три CHANGELOG ревизии против её `<Version>` — ТЕ ЖЕ правила, что у `check-changelogs.ps1`: раздел
+# новой версии есть в каждом файле, стоит ПЕРВЫМ и НЕПУСТОЙ. Зачем здесь: в режиме `-Rev` сверки
+# «номер тега против <Version>» нет (тега нет), и единственная связка версии с историей — эта.
+#
+# ⚠️ Диапазон PowerShell ОБРАТНЫЙ, когда конец меньше начала: у ПУСТОГО раздела выражение
+# ($first+1)..($end-1) даёт «5..4», и телом «пустого» раздела становятся заголовок и строка перед ним.
+# Этот дефект ловили мутацией M2 (17.10.2026); здесь он закрыт тем же способом — диапазон собирается
+# только прямым. Мутация на эту проверку — опыт 10 в `selftest-release-tree.ps1`.
+function Get-ReleaseChangelogProblems {
+    param([string]$Repo, [string]$Spec, [string]$Version)
+    $problems = New-Object System.Collections.Generic.List[string]
+    $files = @(
+        [pscustomobject]@{ Name = 'CHANGELOG.ru.md'; Title = 'русский (оригинал)' }
+        [pscustomobject]@{ Name = 'CHANGELOG.md';    Title = 'английский' }
+        [pscustomobject]@{ Name = 'CHANGELOG.zh.md'; Title = 'китайский' }
+    )
+    foreach ($file in $files) {
+        $path = 'release/tree/' + $file.Name
+        $r = Invoke-ReleaseGit -Repo $Repo -GitArgs @('show', ($Spec + ':' + $path))
+        if ($r.Code -ne 0) {
+            $problems.Add($file.Name + ' (' + $file.Title + ') — файла нет в ревизии: ' + $path) | Out-Null
+            continue
+        }
+        $lines = @($r.Text.Replace("`r`n", "`n") -split "`n")
+        $headings = @()
+        for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^##\s+') { $headings += $i } }
+        if ($headings.Count -eq 0) {
+            $problems.Add($file.Name + ' (' + $file.Title + ') — ни одного раздела «## версия»') | Out-Null
+            continue
+        }
+        $first = $headings[0]
+        $firstTitle = $lines[$first].Trim()
+        if ($firstTitle -notmatch ('^##\s+' + [regex]::Escape($Version) + '(\s|$)')) {
+            $problems.Add($file.Name + ' (' + $file.Title + ') — первым разделом стоит «' + $firstTitle + '», а не «## ' + $Version + '»') | Out-Null
+            continue
+        }
+        $end = if ($headings.Count -gt 1) { $headings[1] } else { $lines.Count }
+        $body = @()
+        if ($end -gt $first + 1) { $body = @($lines[($first + 1)..($end - 1)] | Where-Object { $_.Trim().Length -gt 0 }) }
+        if ($body.Count -eq 0) {
+            $problems.Add($file.Name + ' — раздел «' + $Version + '» пуст: описание выпуска соберётся пустым') | Out-Null
+        }
+    }
+    return $problems.ToArray()
+}
+
+# ── МЕРА ДЛЯ `-Tree`: ДЕРЕВО КОММИТА, а не диск (Ф-9-2, 18.10.2026) ───────────────────────────
+#
+# Возвращает сведения о КОММИТЕ папки или $null, если папка — не корень репозитория (или у неё нет
+# `HEAD`). Тогда и только тогда вызывающий считает содержимое папки объектами git.
+# ⚠️ `--show-toplevel` сверяется с самой папкой: иначе подкаталог чужого репозитория молча сверялся
+# бы по ЧУЖОМУ коммиту — то есть проверка отвечала бы не на тот вопрос.
+function Get-RepositoryTree {
+    param([string]$Folder)
+    $top = Invoke-WorktreeGit -Repo $Folder -GitArgs @('rev-parse', '--show-toplevel')
+    if ($top.Code -ne 0) { return $null }
+    $topPath = @($top.Lines | Where-Object { $_ }) | Select-Object -First 1
+    if (-not $topPath) { return $null }
+    $topFull = [IO.Path]::GetFullPath(([string]$topPath).Trim())
+    $folderFull = [IO.Path]::GetFullPath($Folder).TrimEnd('\', '/')
+    if ($topFull.TrimEnd('\', '/') -ne $folderFull) { return $null }
+
+    $head = Invoke-WorktreeGit -Repo $Folder -GitArgs @('rev-parse', '--verify', '--quiet', 'HEAD')
+    if ($head.Code -ne 0) { return $null }
+    $commit = @($head.Lines | Where-Object { $_ }) | Select-Object -First 1
+    if (-not $commit) { return $null }
+    $commit = ([string]$commit).Trim()
+
+    $treeResult = Invoke-WorktreeGit -Repo $Folder -GitArgs @('rev-parse', '--verify', '--quiet', ($commit + '^{tree}'))
+    if ($treeResult.Code -ne 0) { return $null }
+    $tree = @($treeResult.Lines | Where-Object { $_ }) | Select-Object -First 1
+    if (-not $tree) { return $null }
+    $tree = ([string]$tree).Trim()
+
+    $entries = Get-ReleaseTreeEntries -Repo $Folder -Spec $tree
+    if ($null -eq $entries) { return $null }
+
+    $status = Invoke-WorktreeGit -Repo $Folder -GitArgs @('status', '--porcelain')
+    $dirty = if ($status.Code -eq 0) { @($status.Lines | Where-Object { $_ }).Count } else { -1 }
+
+    return [pscustomobject]@{
+        Commit     = $commit
+        Tree       = $tree
+        Paths      = @($entries.Keys | Sort-Object)
+        Entries    = $entries
+        DirtyLines = $dirty
+    }
 }

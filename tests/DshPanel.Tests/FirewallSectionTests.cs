@@ -471,4 +471,70 @@ public class FirewallSectionTests
 
         public FirewallChange Remove() => FirewallChange.No("нельзя");
     }
+
+    /// <summary>
+    /// ОКНО НАСТРОЕК БЕЗ НИТКИ ИНТЕРФЕЙСА — ГРОМКИЙ ОТКАЗ (t13), и отказ называет СВОЁ окно.
+    /// Постройку проверить нельзя (базовый `Window` падает первым), поэтому проверяется решение,
+    /// которое зовёт конструктор.
+    /// </summary>
+    [Fact]
+    public void Окно_настроек_без_нитки_интерфейса_отказывается_строиться()
+    {
+        var refusal = Assert.Throws<InvalidOperationException>(() => SettingsWindow.RequireUiThread(null));
+
+        Assert.Contains("ОКНО НАСТРОЕК БЕЗ НИТКИ ИНТЕРФЕЙСА", refusal.Message, StringComparison.Ordinal);
+        Assert.Contains("Стройте окно на нитке интерфейса", refusal.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ОТВЕТ ФОНОВОЙ РАБОТЫ ДОХОДИТ ДО ОКНА И ПОСЛЕ ЗАБЫВАНИЯ ДВЕРИ (t13) — третий путь класса Н-1.
+    ///
+    /// Через `OnUi` снимается занятость: пожарная кнопка выключается ДО фона
+    /// (`_firewallBusy = true; FirewallButton.IsEnabled = false`), и если ответ не дошёл,
+    /// она осталась бы выключенной навсегда, а строка результата — «ждём подтверждения».
+    /// Проверка детерминированная: окно построено (свою нитку знает) → дверь забыта → нажатие →
+    /// ответ обязан дойти. На `UiThread.Post` (без правки) ответ теряется.
+    /// </summary>
+    [AvaloniaFact]
+    public void Ответ_фоновой_работы_доходит_до_окна_и_после_забывания_двери()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var machine = new FakeFirewall { Slow = true };
+
+            var window = Stand(dir, machine);
+            window.ShowSection(SettingsWindow.PhoneSection);
+            window.Show();
+            Settle();
+
+            try
+            {
+                // Чужая проверка двери очищает память нитки интерфейса — ровно это и происходит
+                // в полном прогоне, когда UiThreadTests идёт параллельно с окнами.
+                UiThread.ForgetForTests();
+
+                var button = window.FindControl<Button>("FirewallButton")!;
+                button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+                var result = window.FindControl<TextBlock>("FirewallResultText")!;
+
+                WaitFor(() => result.Text == FirewallDecisions.DoneAdd(43127), "строку ПОСЛЕ");
+
+                // Занятость снята: кнопка снова доступна (состояние перечитано — правило стоит).
+                Assert.True(button.IsEnabled, "кнопка брандмауэра осталась выключенной после ответа");
+                Assert.Equal(1, machine.Adds);
+            }
+            finally
+            {
+                UiThread.Remember();
+                window.CloseQuietly();
+            }
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
 }

@@ -13,6 +13,9 @@ public enum EngineInstallRefusal
     /// <summary>Замка нет (файл не прочитался, чужая схема, сумма не сошлась) — ставить не по чему.</summary>
     NoLock,
 
+    /// <summary>Замка НЕТ ДЛЯ ЭТОЙ ВЕРСИИ: набор известен, а этого набора в сборке нет.</summary>
+    NoLockForVersion,
+
     /// <summary>Подсказок о версиях нет — а версию панель берёт ИМЕННО оттуда.</summary>
     NoHints,
 
@@ -97,6 +100,29 @@ public static class EngineInstallDecisions
         return new Plan(match, OwnEngine.BinPath(engineDir, match), EngineInstallRefusal.None);
     }
 
+    /// <summary>
+    /// КАКОЙ ДОРОГОЙ СТАВИТЬ НАЗВАННУЮ ВЕРСИЮ (задача `t4`, блок B): <c>null</c> — главной
+    /// (версия пришла из подсказок как проверенная, установщик сверит её с замком), иначе — дорогой
+    /// отдельной просьбы (у версии есть свой замок; так ставится линия 0.2.x, пока не проверена).
+    ///
+    /// **Зачем отдельной функцией.** Развилка «проверенная или нет» — РЕШЕНИЕ, и оно должно быть
+    /// проверяемым без окна, без сети и без диска: в двери обновления эта же развилка решалась бы
+    /// строкой кода, которую никакая проверка не увидит.
+    /// </summary>
+    public static string? RequestedFor(EngineHints? hints, string? version)
+    {
+        var wanted = (version ?? string.Empty).Trim();
+        if (wanted.Length == 0) return null;
+
+        var verified = Verified(hints ?? EngineHints.Empty);
+
+        var known = verified.Any(candidate => string.Equals(
+            Update.UpdateDecisions.Numeric(candidate),
+            Update.UpdateDecisions.Numeric(wanted),
+            StringComparison.OrdinalIgnoreCase));
+
+        return known ? null : wanted;
+    }
     /// <summary>Версии, отмеченные в подсказках проверенными, — в порядке файла.</summary>
     public static IReadOnlyList<string> Verified(EngineHints hints)
     {
@@ -127,6 +153,42 @@ public static class EngineInstallDecisions
             Update.UpdateDecisions.Numeric(known.EngineVersion),
             Update.UpdateDecisions.Numeric(version),
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// ЕСТЬ ЛИ ЗАМОК ДЛЯ ЭТОЙ ВЕРСИИ В НАБОРЕ ЗАМКОВ (задача `t4`, блок B: замков теперь два).
+    ///
+    /// Это тот же вопрос, что выше, но заданный ВСЕМУ набору: с 18.10.2026 панель знает два набора
+    /// (0.1.5 — 588 пакетов, 0.2.1 — 683), и «поставить свежую версию» перестало быть синонимом
+    /// «поставить нечего»: у 0.2.1 свой замок есть, и кнопка отдельной двери этим и живёт.
+    /// </summary>
+    public static bool HasLockForVersion(EngineTreeLocks? locks, string? version) =>
+        (locks ?? EngineTreeLocks.Empty).Has(version);
+
+    /// <summary>
+    /// РЕШЕНИЕ ДЛЯ НАЗВАННОЙ ВЕРСИИ — путь отдельной просьбы о версии, у которой ЕСТЬ свой замок,
+    /// но которая не отмечена в подсказках проверенной (так ставится 0.2.x до выпуска 2.2.0:
+    /// человек нажал отдельную кнопку и подтвердил).
+    ///
+    /// **Чем отличается от <see cref="Decide"/>.** Там версия берётся ИЗ ПОДСКАЗОК и сверяется
+    /// с замком («две правды об одном дереве»). Здесь версия названа человеком, и проверяется
+    /// только одно: для неё есть годный замок — целый, с суммами, с официального реестра.
+    /// Непроверенность версии — не отказ: это ровно то состояние, в котором живёт линия 0.2.x,
+    /// и «ставить по замку» от неё не перестаёт быть верным.
+    /// </summary>
+    public static Plan DecideFor(EngineTreeLocks? locks, string? version, string? engineDir)
+    {
+        var all = locks ?? EngineTreeLocks.Empty;
+
+        if (!all.Any) return Refuse(EngineInstallRefusal.NoLock);
+
+        var known = all.For(version);
+        if (!known.Any) return Refuse(EngineInstallRefusal.NoLockForVersion);
+
+        if (!known.Complete || !known.FullySummed) return Refuse(EngineInstallRefusal.Incomplete);
+        if (!known.AllFromRegistry) return Refuse(EngineInstallRefusal.ForeignSource);
+
+        return new Plan(known.EngineVersion, OwnEngine.BinPath(engineDir, known.EngineVersion), EngineInstallRefusal.None);
     }
 
     private static Plan Refuse(EngineInstallRefusal refusal) =>
@@ -227,6 +289,7 @@ public static class EngineInstallRefusals
     public static string Key(EngineInstallRefusal refusal) => refusal switch
     {
         EngineInstallRefusal.NoLock => NoLock,
+        EngineInstallRefusal.NoLockForVersion => NoLockForVersion,
         EngineInstallRefusal.NoHints => NoHints,
         EngineInstallRefusal.NotVerified => NotVerified,
         EngineInstallRefusal.Mismatch => Mismatch,

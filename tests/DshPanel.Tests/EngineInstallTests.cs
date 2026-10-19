@@ -56,6 +56,88 @@ public class EngineInstallTests
     }
 
     /// <summary>
+    /// ОТДЕЛЬНАЯ ПРОСЬБА: ВЕРСИЯ НАЗВАНА ЧЕЛОВЕКОМ, У НЕЁ ЕСТЬ СВОЙ ЗАМОК — СТАВИМ ЕЁ (задача `t4`,
+    /// блок B). Это дорога линии 0.2.x: она ещё НЕ проверена по подсказкам, но замок у неё свой
+    /// (683 пакета), и «ставить по замку» от непроверенности не перестаёт быть верным.
+    /// </summary>
+    [Fact]
+    public void Отдельная_просьба_ставит_версию_у_которой_есть_замок()
+    {
+        var locks = new EngineTreeLocks(new[] { LockFor("0.1.5-rc.2"), LockFor("0.2.1-rc.2") });
+
+        var plan = EngineInstallDecisions.DecideFor(locks, "0.2.1-rc.2", EngineDir);
+
+        Assert.True(plan.Any);
+        Assert.Equal("0.2.1-rc.2", plan.Version);
+        Assert.Equal(EngineInstallRefusal.None, plan.Refusal);
+        Assert.Equal(string.Empty, plan.RefusalKey);
+        Assert.Equal(OwnEngine.BinPath(EngineDir, "0.2.1-rc.2"), plan.BinPath);
+
+        // Сверка версии — та же, что у главной дороги: предрелизный хвост ЗНАЧИМ, поэтому «0.2.1»
+        // и «0.2.1-rc.2» — разные версии (правило панели, см. `EngineLockForVersionTests`).
+        Assert.True(EngineInstallDecisions.HasLockForVersion(locks, "0.2.1-rc.2"));
+        Assert.False(EngineInstallDecisions.HasLockForVersion(locks, "0.2.1"));
+        Assert.False(EngineInstallDecisions.HasLockForVersion(locks, "0.2.0-rc.2"));
+        Assert.False(EngineInstallDecisions.HasLockForVersion(null, "0.2.1-rc.2"));
+    }
+
+    /// <summary>
+    /// ОТДЕЛЬНАЯ ПРОСЬБА БЕЗ ЗАМКА — ОТКАЗ СЛОВАМИ, а не установка соседней версии: без этой
+    /// проверки панель поставила бы по главному замку 0.1.5 и объявила 0.2.1, то есть сказала бы
+    /// неправду. Два разных отказа: «замков нет вовсе» и «замка нет для этой версии».
+    /// </summary>
+    [Fact]
+    public void Отдельная_просьба_без_замка_отказывает_словами()
+    {
+        var only = new EngineTreeLocks(new[] { LockFor("0.1.5-rc.2") });
+
+        var plan = EngineInstallDecisions.DecideFor(only, "0.2.1-rc.2", EngineDir);
+
+        Assert.False(plan.Any);
+        Assert.Equal(EngineInstallRefusal.NoLockForVersion, plan.Refusal);
+        Assert.Equal(EngineInstallRefusals.NoLockForVersion, plan.RefusalKey);
+
+        var none = EngineInstallDecisions.DecideFor(EngineTreeLocks.Empty, "0.2.1-rc.2", EngineDir);
+
+        Assert.False(none.Any);
+        Assert.Equal(EngineInstallRefusal.NoLock, none.Refusal);
+        Assert.Equal(EngineInstallRefusals.NoLock, none.RefusalKey);
+    }
+
+    /// <summary>
+    /// БИТЫЙ ЗАМОК НЕ СТАВИТСЯ И ПО ОТДЕЛЬНОЙ ПРОСЬБЕ: замок без сумм — это список версий, а не замок.
+    /// Проверка та же, что у главной дороги, и это намеренно: «человек попросил» не делает набор целым.
+    /// </summary>
+    [Fact]
+    public void Отдельная_просьба_не_принимает_замок_без_сумм()
+    {
+        var cut = new EngineTreeLocks(new[] { LockFor("0.2.1-rc.2", summed: false) });
+
+        var plan = EngineInstallDecisions.DecideFor(cut, "0.2.1-rc.2", EngineDir);
+
+        Assert.False(plan.Any);
+        Assert.Equal(EngineInstallRefusal.Incomplete, plan.Refusal);
+        Assert.Equal(EngineInstallRefusals.Incomplete, plan.RefusalKey);
+    }
+    /// <summary>
+    /// РАЗВИЛКА ДОРОГ (блок B): ПРОВЕРЕННУЮ версию ставим главной дорогой (сверка с подсказками
+    /// остаётся), НЕПРОВЕРЕННУЮ — дорогой отдельной просьбы. Это решение, а не строка в двери:
+    /// поэтому оно и проверяется здесь, без окна и без сети.
+    /// </summary>
+    [Fact]
+    public void Проверенная_версия_идёт_главной_дорогой_а_прочая_отдельной()
+    {
+        var hints = HintsFor("0.1.5-rc.2", verified: true);
+
+        Assert.Null(EngineInstallDecisions.RequestedFor(hints, "0.1.5-rc.2"));
+        Assert.Equal("0.2.1-rc.2", EngineInstallDecisions.RequestedFor(hints, "0.2.1-rc.2"));
+
+        // Пустая версия — не просьба вовсе; подсказок нет — дорога отдельной просьбы (замок решит).
+        Assert.Null(EngineInstallDecisions.RequestedFor(hints, string.Empty));
+        Assert.Null(EngineInstallDecisions.RequestedFor(hints, null));
+        Assert.Equal("0.1.5-rc.2", EngineInstallDecisions.RequestedFor(EngineHints.Empty, "0.1.5-rc.2"));
+    }
+    /// <summary>
     /// ⚠️ САМ СЛУЧАЙ ИЗ СЛОВ ВЛАДЕЛЬЦА: подсказки говорят «проверена 0.2.0-rc.2», а замок снят
     /// с `0.1.5-rc.2`. Ставить **нельзя ни то, ни другое** — и панель говорит, что именно не так.
     /// </summary>

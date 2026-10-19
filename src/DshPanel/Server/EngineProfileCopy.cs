@@ -79,8 +79,17 @@ public static class EngineProfileCopy
     public static string Name(DateTimeOffset now) =>
         Prefix + now.ToString("yyyy-MM-dd-HHmmss", CultureInfo.InvariantCulture) + ".zip";
 
-    /// <summary>Префикс копии перед подменой движка — ВТОРОЙ предохранительный (см. правило уборки).</summary>
-    public const string Prefix = "dsh2-before-engine-";
+    /// <summary>
+    /// Префикс копии перед подменой движка — ВТОРОЙ предохранительный (см. правило уборки).
+    ///
+    /// ⚠️ **Своей строки здесь нет, и это правка блока D (18.10.2026).** Раньше префикс был записан
+    /// ЛИТЕРАЛОМ второй раз, рядом с <see cref="BackupNaming.EnginePrefix"/>, — то есть одно имя жило
+    /// в двух местах. Проверка «копия из предохранительного семейства» читала константу из продукта,
+    /// и мутация «сменить префикс» на ней **выживала** (найдено 18.10.2026). Теперь имя одно, а вид
+    /// файла — <see cref="BackupFileKind.Safety"/>: ротация обычные копии удаляет, предохранительные
+    /// не трогает, и это правило ей не приходится писать вторым местом.
+    /// </summary>
+    public const string Prefix = BackupNaming.EnginePrefix;
 
     /// <summary>Вид файла для правил уборки: предохранительная копия — её не удаляют никогда.</summary>
     public static BackupFileKind Kind(string? name) => BackupNaming.Kind(name);

@@ -214,7 +214,7 @@ public partial class App : Application
         // у обычного запуска человеком: прогон проверки сети не трогает вовсе, и дверь остаётся
         // умолчанием «пробы не было».
         //
-        // ⚠️ Проба ходит в сеть и зовёт движок по 84 именам, поэтому она ИДЁТ В ФОНЕ и не чаще,
+        // ⚠️ Проба ходит в сеть и зовёт движок по всем НУЖНЫМ именам (77), поэтому она ИДЁТ В ФОНЕ и не чаще,
         // чем один раз на свой сервер (`LiveSkillProbe` помнит пару «порт + процесс»). Отчёт
         // читает последние ГОТОВЫЕ факты и называет их момент — так «проверено здесь и сейчас»
         // не превращается в «панель замерла на секунды».
@@ -301,7 +301,7 @@ public partial class App : Application
                         // ЗАМОК — ВСТРОЕННЫЙ РЕСУРС СБОРКИ, и он один решает, какую версию панель
                         // вообще умеет поставить: свежая без замка не ставится, и окно говорит это
                         // словами ДО нажатия, а не подменяет её проверенной.
-                        HasLockFor = version => EngineInstallDecisions.HasLockFor(EngineTreeLock.Load(), version),
+                        HasLockFor = version => EngineInstallDecisions.HasLockForVersion(EngineTreeLocks.Load(), version),
 
                         // ОТКАТ ПО КНОПКЕ (E3.3): что стоит сейчас, какие папки версий есть и чем
                         // вернуться. Папки читает уборка версий — она же держит текущую и прежнюю.
@@ -320,6 +320,13 @@ public partial class App : Application
                         // не показывала ни одной кнопки — дорога к установке была тупиком.
                         ReadPresent = () => OwnEngine.Locate(paths) is not null,
                         RollbackDoors = EngineUpdateRealDoors.Rollback(paths, () => _server, log),
+
+                        // ЧИСЛА ЖУРНАЛА С ДИСКА (блок C плана 2.2.0): сколько сессий и в каком они
+                        // формате — `v3` или `v4`. Читаются ТОЛЬКО ИМЕНА файлов (`session.vN…`),
+                        // содержимое сессий не открывается вовсе. Из этих чисел панель говорит,
+                        // сколько сессий прежний движок не увидит после отката: сам движок об этом
+                        // молчит (замер `l2`: 197 → 196 без поля и без слова).
+                        ReadJournal = () => EngineJournalFormat.Read(EngineJournalFormat.SessionsDir(paths.DshHome)),
                     },
                     log)
                 : new EngineUpdateService(EngineUpdateSectionDoors.None, log);
@@ -1109,7 +1116,13 @@ public partial class App : Application
             log(PanelStrings.AutoStartStartingLog);
 
             // Занятость окна — ТОЛЬКО с нитки интерфейса: это состояние окна.
-            UiThread.Post(() => window.BeginServerStart(PanelStrings.ServerStarting));
+            //
+            // НАДПИСЬ — ПО ПРИЗНАКУ «ПЕРВЫЙ ЛИ ЗАПУСК» (t15, 18.10.2026, слово владельца):
+            // обещание «первый запуск достраивает профиль» здесь стояло безусловно и было
+            // неправдой (профиль DSH лежал с 26.09). Признак считает контроллер по каталогам
+            // своего дома движка, слова выбирает `EngineFirstRun`; окно по-прежнему ничего
+            // не решает.
+            window.PostToOwnUi(() => window.BeginServerStart(EngineFirstRun.StartingLabel(server.FirstRunLooks)));
 
             try
             {
@@ -1119,7 +1132,7 @@ public partial class App : Application
             {
                 // Чем бы подъём ни кончился — отказ, исключение, успех, — кнопки обязаны
                 // разблокироваться: занятость, пережившая неудачу, оставила бы окно мёртвым.
-                UiThread.Post(window.EndServerStart);
+                window.PostToOwnUi(window.EndServerStart);
             }
         });
     }

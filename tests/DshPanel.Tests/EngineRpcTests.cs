@@ -215,6 +215,115 @@ public sealed class EngineRpcTests
         Assert.False(string.IsNullOrWhiteSpace(EngineRpcSurface.MeasuredOn));
     }
 
+    /// <summary>
+    /// ВТОРОЙ СНИМОК ПОВЕРХНОСТИ (линия 0.2.x) НАЗВАН ЧИСЛАМИ И НЕ РАСХОДИТСЯ САМ С СОБОЙ.
+    ///
+    /// Замер 18.10.2026 (задача t3 плана 2.2.0, свой разбор 29 файлов объявлений): у `0.2.1-rc.2`
+    /// объявлено 144 имени — 77 наших живы, 7 пропали, 67 новых в 16 семействах. Здесь стерегутся
+    /// именно эти числа и устройство списков: снятые не пересекаются с нужными, нужные — подмножество
+    /// каталога, новые не пересекаются с каталогом вовсе, и все имена одной формы.
+    /// </summary>
+    [Fact]
+    public void Второй_снимок_поверхности_назван_числами()
+    {
+        var catalog = EngineRpcSurface.Methods.Select(m => m.Endpoint).ToList();
+
+        // Каталог 0.1.5 цел: 84 = 77 нужных + 7 снятых с надобности.
+        Assert.Equal(EngineRpcSurface.MeasuredCount, catalog.Count);
+        Assert.Equal(EngineRpcSurface.RequiredCountOnKnown, EngineRpcSurface.RequiredTotal);
+        Assert.Equal(77, EngineRpcSurface.RequiredTotal);
+        Assert.Equal(7, EngineRpcSurface.Retired.Count);
+        Assert.Equal(catalog.Count, EngineRpcSurface.RequiredTotal + EngineRpcSurface.Retired.Count);
+
+        // У 0.2.1: 67 новых в 16 семействах, и всего объявлено 144 = 77 + 67.
+        Assert.Equal(EngineRpcSurface.KnownAddedCount, EngineRpcSurface.KnownAdded.Count);
+        Assert.Equal(67, EngineRpcSurface.KnownAdded.Count);
+        Assert.Equal(EngineRpcSurface.KnownAddedFamilies, EngineRpcSurface.KnownAddedNamespaces.Count);
+        Assert.Equal(16, EngineRpcSurface.KnownAddedNamespaces.Count);
+        Assert.Equal(
+            EngineRpcSurface.KnownOnDeclaredCount,
+            EngineRpcSurface.RequiredTotal + EngineRpcSurface.KnownAdded.Count);
+        Assert.Equal(144, EngineRpcSurface.KnownOnDeclaredCount);
+
+        // Снятые — из каталога, нужные — каталог без них, новые — не из каталога вовсе.
+        Assert.All(EngineRpcSurface.Retired, name => Assert.Contains(name, catalog));
+        Assert.DoesNotContain(EngineRpcSurface.Retired, name => EngineRpcSurface.Required.Any(m => m.Endpoint == name));
+        Assert.DoesNotContain(EngineRpcSurface.KnownAdded, name => catalog.Contains(name));
+        Assert.Equal(EngineRpcSurface.KnownAdded.Count, EngineRpcSurface.KnownAdded.Distinct(StringComparer.Ordinal).Count());
+
+        // Форма имён у новых — та же, что у каталога: семейство/метод, без точек и повторов.
+        Assert.All(EngineRpcSurface.KnownAdded, name =>
+        {
+            var parts = name.Split('/');
+            Assert.True(parts.Length == 2, $"новое имя «{name}» не вида «семейство/метод»");
+            Assert.All(parts, part => Assert.False(string.IsNullOrWhiteSpace(part)));
+            Assert.False(name.Contains('.', StringComparison.Ordinal), $"новое имя «{name}» с точкой");
+        });
+
+        // Версия и дата второго замера названы — иначе «второй снимок» неотличим от выдумки.
+        Assert.False(string.IsNullOrWhiteSpace(EngineRpcSurface.KnownOnVersion));
+        Assert.False(string.IsNullOrWhiteSpace(EngineRpcSurface.KnownOn));
+    }
+
+    /// <summary>
+    /// НАША ВЕРСИЯ (0.1.5) ПРОХОДИТ СВЕРКУ ЦЕЛИКОМ: все 84 имени объявлены, потерь нет, незнакомых
+    /// нет, новых знакомых ноль. Это сторож того, что правка под 0.2.x не ослабила проверку старой линии.
+    /// </summary>
+    [Fact]
+    public void Движок_нашей_линии_проходит_сверку_целиком()
+    {
+        var declared = EngineRpcSurface.Methods.Select(m => m.Endpoint).ToList();
+
+        Assert.Empty(EngineRpcSurface.MissingRequired(declared));
+        Assert.Empty(EngineRpcSurface.LostKnown(declared));
+        Assert.Empty(EngineRpcSurface.UnknownAdded(declared));
+        Assert.Equal(0, EngineRpcSurface.KnownAddedPresent(declared));
+    }
+
+    /// <summary>
+    /// ЛИНИЯ 0.2.1 ПРОХОДИТ ПО НУЖНЫМ ИМЕНАМ: 77 нужных объявлены, 7 снятых отсутствуют — и это
+    /// законно, новых знакомых все 67, незнакомых ноль. Именно этот набор проба и назвала годным.
+    /// </summary>
+    [Fact]
+    public void Движок_линии_0_2_1_проходит_по_нужным_именам()
+    {
+        var declared = EngineRpcSurface.Required.Select(m => m.Endpoint)
+            .Concat(EngineRpcSurface.KnownAdded)
+            .ToList();
+
+        Assert.Equal(EngineRpcSurface.KnownOnDeclaredCount, declared.Count);
+        Assert.Empty(EngineRpcSurface.MissingRequired(declared));
+        Assert.Equal(EngineRpcSurface.Retired.Count, EngineRpcSurface.LostKnown(declared).Count);
+        Assert.Empty(EngineRpcSurface.UnknownAdded(declared));
+        Assert.Equal(EngineRpcSurface.KnownAddedCount, EngineRpcSurface.KnownAddedPresent(declared));
+    }
+
+    /// <summary>
+    /// ЛИНИЯ 0.2.0 — НЕ ПОДМНОЖЕСТВО 0.2.1, И ЭТО ИЗМЕРЕНО (разведка E4 оставляла разницу
+    /// неизмеренной; закрыто замером 18.10.2026): три имени есть ТОЛЬКО у `0.2.0-rc.2` —
+    /// `terminal/follow`, `terminal/resize`, `terminal/write`. Панель их не знает, поэтому проба
+    /// на 0.2.0 обязана назвать тревогой ровно их, а не «всё сломалось».
+    /// </summary>
+    [Fact]
+    public void Движок_линии_0_2_0_называет_три_чужих_имени()
+    {
+        var declared = EngineRpcSurface.Required.Select(m => m.Endpoint)
+            .Concat(EngineRpcSurface.KnownAdded)
+            .Where(name => name is not ("terminal/attach" or "cotTranslation/limits"
+                or "cotTranslation/translate" or "pluginMarket/listIndexes" or "pluginMarket/search"
+                or "pluginMarket/setIndexes" or "remoteAccess/follow"))
+            .Append("terminal/follow").Append("terminal/resize").Append("terminal/write")
+            .ToList();
+
+        Assert.Empty(EngineRpcSurface.MissingRequired(declared));
+
+        var unknown = EngineRpcSurface.UnknownAdded(declared);
+
+        Assert.Equal(
+            new[] { "terminal/follow", "terminal/resize", "terminal/write" },
+            unknown.ToArray());
+    }
+
     // ---- опись движка ------------------------------------------------------------------------
 
     /// <summary>

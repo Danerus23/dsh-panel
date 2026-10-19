@@ -91,25 +91,34 @@ public static class EngineRpcProbe
 
         var declaration = EngineRpcDeclarations.Read(binPath);
 
-        lines.Add($"движок: версия «{declaration.Version}»; список панели снят на «{EngineRpcSurface.MeasuredOnVersion}» ({EngineRpcSurface.MeasuredOn})");
-        lines.Add($"  объявлений у движка: {declaration.Endpoints.Count}; в списке панели: {EngineRpcSurface.Methods.Count}; семейств: {EngineRpcSurface.Namespaces.Count}");
+        lines.Add($"движок: версия «{declaration.Version}»; список панели снят на «{EngineRpcSurface.MeasuredOnVersion}» ({EngineRpcSurface.MeasuredOn}); линия 0.2.x знакома по «{EngineRpcSurface.KnownOnVersion}» ({EngineRpcSurface.KnownOn})");
+        lines.Add($"  объявлений у движка: {declaration.Endpoints.Count}; в списке панели: {EngineRpcSurface.Methods.Count} (нужных {EngineRpcSurface.RequiredTotal}, снятых с надобности {EngineRpcSurface.Retired.Count}); знакомых новых у движка: {EngineRpcSurface.KnownAddedPresent(declaration.Endpoints)} из {EngineRpcSurface.KnownAddedCount}");
 
         Check("опись движка прочитана", declaration.Endpoints.Count > 0);
 
         if (declaration.Endpoints.Count > 0)
         {
-            var gone = EngineRpcDeclarations.Gone(declaration, EngineRpcSurface.Methods);
-            var added = EngineRpcDeclarations.Missing(declaration, EngineRpcSurface.Methods);
+            // ⚠️ Сверка идёт по ТРЁМ разным множествам, и это не педантизм: нужное имя — провал
+            // при пропаже; снятое с надобности (7 имён линии 0.2.x) — законная потеря; незнакомое
+            // имя у движка — тревога «поверхность изменилась», и она обязана ронять пробу.
+            var goneRequired = EngineRpcSurface.MissingRequired(declaration.Endpoints);
 
             Check(
-                "ни одно имя из списка панели движок больше не объявляет"
-                    + (gone.Count > 0 ? $" — ПРОПАЛИ: {string.Join(", ", gone.Take(10))}" : string.Empty),
-                gone.Count == 0);
+                "движок объявляет КАЖДОЕ нужное панели имя"
+                    + (goneRequired.Count > 0 ? $" — ПРОПАЛИ: {string.Join(", ", goneRequired.Take(10))}" : string.Empty),
+                goneRequired.Count == 0);
+
+            var lost = EngineRpcSurface.LostKnown(declaration.Endpoints);
+            lines.Add(
+                $"  снятые с надобности имена, которых движок больше не объявляет: {lost.Count} из {EngineRpcSurface.Retired.Count}"
+                + " (панель их не зовёт — потеря законна, а не беда)");
+
+            var unknown = EngineRpcSurface.UnknownAdded(declaration.Endpoints);
 
             Check(
-                "у движка не появилось имён, которых нет в списке панели"
-                    + (added.Count > 0 ? $" — ПОЯВИЛИСЬ: {string.Join(", ", added.Take(10))}" : string.Empty),
-                added.Count == 0);
+                "у движка не появилось имён, с которыми панель не знакома"
+                    + (unknown.Count > 0 ? $" — ПОЯВИЛИСЬ: {string.Join(", ", unknown.Take(10))}" : string.Empty),
+                unknown.Count == 0);
         }
 
         // --- (2) вход: обмен ссылки на cookie и контроль без cookie ---
@@ -131,7 +140,7 @@ public static class EngineRpcProbe
         {
             // Без входа сверять имена нечем — и это честнее, чем «признал» на отказе входа.
             return new EngineRpcProbeResult(
-                false, declaration.Version, 0, EngineRpcSurface.Methods.Count, lines);
+                false, declaration.Version, 0, EngineRpcSurface.RequiredTotal, lines);
         }
 
         // --- (3) живой опрос имён, обратная сторона и настоящий вызов ---
@@ -142,7 +151,9 @@ public static class EngineRpcProbe
         var recognisedNames = new List<string>();
         var recognised = 0;
 
-        foreach (var method in EngineRpcSurface.Methods)
+        // ⚠️ Зовутся ТОЛЬКО нужные имена (77), а не все 84: снятые с надобности семь панель живьём
+        // не зовёт вовсе, и их отсутствие у 0.2.x не даёт права объявить годный движок негодным.
+        foreach (var method in EngineRpcSurface.Required)
         {
             var answer = client.Call(method.Endpoint, EngineRpcSurface.InvalidPayload);
 
@@ -157,10 +168,10 @@ public static class EngineRpcProbe
             }
         }
 
-        lines.Add($"живой опрос: признано {recognised} из {EngineRpcSurface.Methods.Count}");
+        lines.Add($"живой опрос: признано {recognised} из {EngineRpcSurface.RequiredTotal} нужных имён");
 
         Check(
-            "движок признаёт КАЖДОЕ имя из списка панели"
+            "движок признаёт КАЖДОЕ нужное имя из списка панели"
                 + (unrecognised.Count > 0 ? $" — НЕ ПРИЗНАЛ: {string.Join("; ", unrecognised.Take(10))}" : string.Empty),
             unrecognised.Count == 0);
 
@@ -228,7 +239,7 @@ public static class EngineRpcProbe
         }
 
         return new EngineRpcProbeResult(
-            ok, declaration.Version, recognised, EngineRpcSurface.Methods.Count, lines)
+            ok, declaration.Version, recognised, EngineRpcSurface.RequiredTotal, lines)
         {
             // ФАКТЫ УМЕНИЙ — ЗДЕСЬ ЖЕ, из этой самой пробы (см. комментарий у самого поля).
             // Момент ставит тот, кто пробу ЗАКАЗАЛ: он один знает, когда она шла.

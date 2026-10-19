@@ -82,20 +82,8 @@ public class WindowContentTests
     private static string TempDir() =>
         Path.Combine(Path.GetTempPath(), "dsh-panel-window-tests", Guid.NewGuid().ToString("N"));
 
-    private static void RemoveTemp(string dir)
-    {
-        try
-        {
-            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-
-            var parent = Path.GetDirectoryName(dir);
-            if (parent is not null && Directory.Exists(parent)) Directory.Delete(parent);
-        }
-        catch
-        {
-            // Родитель занят другой проверкой — это не ошибка.
-        }
-    }
+    /// <summary>Уборка только СВОЕГО каталога: общий родитель семейства не снимается (t3, `TempRoots`).</summary>
+    private static void RemoveTemp(string dir) => TempRoots.Remove(dir);
 
     /// <summary>Окно настроек с настоящим контроллером под СВОИМ временным корнем.</summary>
     private static SettingsWindow SettingsStand(string dir, bool allowed = true)

@@ -418,6 +418,39 @@ public static class PanelStrings
     /// <summary>Откат: сервер поднят заново уже на прежней версии.</summary>
     public static string EngineRollbackStartedAgainFormat => Loc.T(nameof(EngineRollbackStartedAgainFormat));
 
+    // --- предохранитель журнала сессий (блок C плана 2.2.0) --------------------
+    //
+    // ⚠️ Ключи заведены здесь, а не в разделе отката, потому что говорит ими не только откат:
+    // об одном и том же («сколько сессий исчезнет из списка прежнего движка») панель говорит
+    // в вопросе перед обновлением, в вопросе перед откатом и в строке после отката.
+
+    /// <summary>Журнал: перед откатом — сколько сессий прежний сервер DSH не увидит, с числом.</summary>
+    public static string EngineJournalRollbackHiddenFormat => Loc.T(nameof(EngineJournalRollbackHiddenFormat));
+
+    /// <summary>Журнал: после отката — то же в прошедшем времени («не видит N из M»).</summary>
+    public static string EngineJournalRollbackHiddenAfterFormat => Loc.T(nameof(EngineJournalRollbackHiddenAfterFormat));
+
+    /// <summary>Журнал: прятать нечего — сервер увидит все сессии.</summary>
+    public static string EngineJournalNothingHiddenFormat => Loc.T(nameof(EngineJournalNothingHiddenFormat));
+
+    /// <summary>Журнал: сессий на диске нет вовсе — честный ноль, а не «не знаю».</summary>
+    public static string EngineJournalNoSessions => Loc.T(nameof(EngineJournalNoSessions));
+
+    /// <summary>Журнал: числа узнать не удалось (причина в скобках) — «не знаю» словами.</summary>
+    public static string EngineJournalUnknownFormat => Loc.T(nameof(EngineJournalUnknownFormat));
+
+    /// <summary>Журнал: перед обновлением — сколько сессий переедет в новый формат при открытии.</summary>
+    public static string EngineJournalUpdateMigratesFormat => Loc.T(nameof(EngineJournalUpdateMigratesFormat));
+
+    /// <summary>Журнал: перед обновлением — все сессии уже в новом формате.</summary>
+    public static string EngineJournalUpdateNothingFormat => Loc.T(nameof(EngineJournalUpdateNothingFormat));
+
+    /// <summary>Журнал: выбранная версия нового формата не читает — сколько сессий она не увидит.</summary>
+    public static string EngineJournalTargetOldFormatFormat => Loc.T(nameof(EngineJournalTargetOldFormatFormat));
+
+    /// <summary>Журнал: числа журнала прочитать не удалось (в журнал панели — с причиной).</summary>
+    public static string EngineJournalUnavailableLog => Loc.T(nameof(EngineJournalUnavailableLog));
+
     /// <summary>Выжимка: заголовок поля с заметками про версии движка.</summary>
     /// <summary>Ссылка карточки движка: раскрыть или свернуть выжимку про версии.</summary>
     public static string EngineNotesShowAll => Loc.T(nameof(EngineNotesShowAll));
@@ -568,8 +601,19 @@ public static class PanelStrings
     /// <summary>Кнопка отказа. Не «Нет», а «Отмена»: человек должен видеть, что ничего не произошло.</summary>
     public static string ConfirmStopNo => Loc.T(nameof(ConfirmStopNo));
 
-    /// <summary>Состояние на время запуска. Честно предупреждает, что ждать долго.</summary>
+    /// <summary>
+    /// Состояние на время запуска: «Запускаю сервер…» — БЕЗ обещания первого запуска.
+    ///
+    /// **От какого случая (слово владельца 18.10.2026).** Здесь стояло «первый запуск достраивает
+    /// профиль, это до минуты» — и это была неправда на каждом обычном подъёме: профиль панель
+    /// не пересоздаёт. Обещание осталось, но переехало в
+    /// <see cref="ServerStartingFirstRun"/> и говорится только тогда, когда оно верно —
+    /// признак считает <see cref="Server.EngineFirstRun.Looks"/>.
+    /// </summary>
     public static string ServerStarting => Loc.T(nameof(ServerStarting));
+
+    /// <summary>Состояние на время ПЕРВОГО запуска: профиля движка ещё нет, ждать до минуты.</summary>
+    public static string ServerStartingFirstRun => Loc.T(nameof(ServerStartingFirstRun));
 
     /// <summary>Состояние на время остановки.</summary>
     public static string ServerStopping => Loc.T(nameof(ServerStopping));
@@ -2091,11 +2135,23 @@ public static class PanelStrings
     /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
     public static string SrvEngineExited => Loc.T(nameof(SrvEngineExited));
 
-    /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
-    public static string SrvEngineExitedItselfDetailFormat => Loc.T(nameof(SrvEngineExitedItselfDetailFormat));
+    /// <summary>Запись журнала: процесс движка остановила ПАНЕЛЬ (человек нажал «Остановить»).</summary>
+    public static string SrvEngineExitByPanelLogFormat => Loc.T(nameof(SrvEngineExitByPanelLogFormat));
 
-    /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
-    public static string SrvEngineExitedItselfFormat => Loc.T(nameof(SrvEngineExitedItselfFormat));
+    /// <summary>Запись журнала: процесс движка завершился САМ (падение, чужой kill, конец работы).</summary>
+    public static string SrvEngineExitItselfLogFormat => Loc.T(nameof(SrvEngineExitItselfLogFormat));
+
+    /// <summary>Слова вместо кода выхода: у процесса, которого у панели уже нет дескриптора, кода не спросить.</summary>
+    public static string SrvEngineExitNoCodeLog => Loc.T(nameof(SrvEngineExitNoCodeLog));
+
+    /// <summary>Слова вместо хвоста: движок ничего не напечатал.</summary>
+    public static string SrvEngineExitNoTailLog => Loc.T(nameof(SrvEngineExitNoTailLog));
+
+    /// <summary>Сколько строк хвоста попало в запись.</summary>
+    public static string SrvEngineExitTailCountLogFormat => Loc.T(nameof(SrvEngineExitTailCountLogFormat));
+
+    /// <summary>Префикс строки хвоста в записи о завершении (чтобы не путать с живым выводом).</summary>
+    public static string SrvEngineExitTailLineLogFormat => Loc.T(nameof(SrvEngineExitTailLineLogFormat));
 
     /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
     public static string SrvEngineLineLogFormat => Loc.T(nameof(SrvEngineLineLogFormat));
@@ -2114,6 +2170,12 @@ public static class PanelStrings
 
     /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
     public static string SrvEngineStillStartingFormat => Loc.T(nameof(SrvEngineStillStartingFormat));
+
+    /// <summary>
+    /// То же состояние, но профиль движка строится ВПЕРВЫЕ — здесь обещание минуты уместно.
+    /// Выбор между двумя строками — <see cref="Server.EngineFirstRun.StillStartingDetail"/>.
+    /// </summary>
+    public static string SrvEngineStillStartingFirstRunFormat => Loc.T(nameof(SrvEngineStillStartingFirstRunFormat));
 
     /// <summary>Строка сервера: состояние, отказ или строка журнала панели.</summary>
     public static string SrvForeignRunningFormat => Loc.T(nameof(SrvForeignRunningFormat));
@@ -3951,6 +4013,18 @@ public static class PanelStrings
 
     /// <summary>Отказ запуска: адреса в своей сети нет — открывать нечего.</summary>
     public static string PhoneGateNoAddressLog => Loc.T(nameof(PhoneGateNoAddressLog));
+
+    /// <summary>Отказ запуска: назван ВСЕСЕТЕВОЙ адрес («0.0.0.0» / «::») — калитка на нём не встаёт (B-04).</summary>
+    public static string PhoneGateAnyAddressLogFormat => Loc.T(nameof(PhoneGateAnyAddressLogFormat));
+
+    /// <summary>Ответ телефона: движок его НЕ принял (конверт без ошибки, но `value:false`) — вопрос открыт.</summary>
+    public static string PhoneGateAnswerNotTaken => Loc.T(nameof(PhoneGateAnswerNotTaken));
+
+    /// <summary>Журнал: сколько подчинённых сессий убрано из списка телефона (и из скольких).</summary>
+    public static string PhoneSessionsHiddenLogFormat => Loc.T(nameof(PhoneSessionsHiddenLogFormat));
+
+    /// <summary>Журнал: ответ `session/list` не той формы — отдан как есть, фильтра не было.</summary>
+    public static string PhoneSessionsShapeLogFormat => Loc.T(nameof(PhoneSessionsShapeLogFormat));
 
     /// <summary>Отказ запуска: порт «{0}» занят, а молчаливого переезда у панели нет.</summary>
     public static string PhoneGatePortBusyFormat => Loc.T(nameof(PhoneGatePortBusyFormat));
