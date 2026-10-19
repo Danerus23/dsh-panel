@@ -2,6 +2,28 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.2.1 - 2026-10-19
+
+**A background notification can no longer take the panel down, and the panel's own log no longer
+goes into a copy.** The version in "About": **2.2.1**.
+
+### Tray notification: a refusal does not kill the panel
+
+Before 2.2.1 the automatic notification was shown without protection: if the tray icon was not
+installed, or the shell refused to show the message, the exception went up and **the panel closed**.
+That is how it died on the startup backup when the backup failed — caught by a run on a clean Windows.
+Now the show goes through one door: any exception is caught, **the reason is written to the panel log**
+("notification not shown: <what> — <exception type>: <text>"), and the panel keeps running. The line
+"notification shown" is written only after a successful show — before, it appeared even when the show
+threw.
+
+### Copy: the panel log is not archived
+
+The panel's own log (`state\panel.log`) is no longer put into a copy: the panel keeps it open, and
+a copy reading that file sometimes failed ("copy not taken") — a person could be left without the
+nightly copy. **What this means for restoring:** the panel log is **not** brought back by a restore —
+it is not the person's data but the history of what the panel did; after a restore it starts over.
+Settings, state, sessions and working folders are restored as before.
 ## 2.2.0 - 2026-10-18
 
 **The panel keeps TWO versions of the DSH server side by side, installs each from its own verified
@@ -383,3 +405,4 @@ does not ship them.
 * **No code signing at all** - SmartScreen will warn on the first run.
 * **No DSH updates:** the panel updates only itself.
 * The peak table does not know Chinese holidays: the schedule is weekly.
+

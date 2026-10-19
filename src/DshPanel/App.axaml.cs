@@ -1679,6 +1679,13 @@ public partial class App : Application
     /// Показать автоматическое сообщение. Решение принимает ОБЩАЯ дверь изоляции
     /// (<see cref="IsolationRules.ShouldNotify"/>), и она одна на все виды: подавленное решение
     /// уходит строкой в журнал, иначе «панель молчала» ничем не объяснить.
+    ///
+    /// **Показ защищён ДВЕРЬЮ (<see cref="NotificationDoor"/>, 2.2.1).** До неё исключение из
+    /// <c>TrayIconHost.ShowNotification</c> (значок не поставлен, оболочка отказала) уходило на
+    /// нитку интерфейса и роняло процесс — так панель умирала на стартовой автокопии
+    /// (<c>_team\220\defekt-start-crash.md</c>). Теперь отказ назван в журнале
+    /// (<see cref="PanelStrings.NotifyFailedLogFormat"/>), а строка «показано» пишется только после
+    /// успешного показа: до 2.2.1 она писалась ДО вызова и врала при разборе.
     /// </summary>
     private void Notify(NoticeKind kind, string title, string text)
     {
@@ -1690,13 +1697,24 @@ public partial class App : Application
             return;
         }
 
-        _log(string.Format(
-            System.Globalization.CultureInfo.CurrentCulture,
-            PanelStrings.NotifyShownLogFormat, title));
+        var tray = _tray;
 
-        _tray?.ShowNotification(title, text);
+        if (tray is null)
+        {
+            // Показывать нечем: значок не построен (прогон проверки, отказ оболочки на старте).
+            // Это тоже отказ и он тоже называется словами — иначе «показано» было бы неправдой.
+            _log(string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.NotifyFailedLogFormat, title, nameof(NotificationDoor), PanelStrings.NotifyNoTrayReason));
+            return;
+        }
+
+        // Дверь сама пишет в журнал, чем кончилось: «показано» — только после успешного показа,
+        // иначе — причину отказа. Исключение из показа наверх не уходит (2.2.1).
+        NotificationDoor.Announce(() => tray.ShowNotification(title, text), _log, title);
     }
 }
+
 
 /// <summary>
 /// Переключатели, которыми проверки отделяют себя от обычного запуска человеком.

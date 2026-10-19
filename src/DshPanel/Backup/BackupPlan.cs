@@ -366,6 +366,29 @@ public static class BackupPlanner
             return names.Count == 0 ? null : names;
         }
 
+        // СОБСТВЕННЫЙ ЖУРНАЛ ПАНЕЛИ В КОПИЮ НЕ ИДЁТ — НИ В СВОЕЙ, НИ В «ДЛЯ ПЕРЕДАЧИ» (2.2.1).
+        //
+        // ⚠️ Почему. Писатель журнала держит файл без общего доступа, поэтому копия, читавшая СВОЙ ЖЕ
+        // `state\panel.log`, отказывала с IOException «being used by another process», отчёт говорил
+        // «копия не снята», и это вело к уведомлению — которое до 2.2.1 роняло панель
+        // (`_team\220\defekt-start-crash.md`). Журнал — не данные человека: он не возвращается накатом,
+        // и после наката история журнала начинается заново (сказано в отчёте копии замечанием
+        // и в CHANGELOG разделом 2.2.1).
+        //
+        // Пропуск получает КАЖДЫЙ корень, внутри которого файл лежит, — тот же урок, что у ключей
+        // доступа и ссылки входа (выше): корни пересекаются, и один файл иначе уехал бы ДРУГОЙ группой.
+        IReadOnlyList<string>? WithoutLiveLog(IReadOnlyList<string>? normal, string? directory)
+        {
+            if (!BackupPlanner.IsInside(paths.LogFile, directory)) return normal;
+
+            var names = normal is null ? new List<string>() : new List<string>(normal);
+
+            if (!names.Contains(AppPaths.LogFileName, StringComparer.OrdinalIgnoreCase))
+                names.Add(AppPaths.LogFileName);
+
+            return names;
+        }
+
         // ЧУЖОЙ ПУТЬ: у изолированного прогона (confineToRunRoot) корень вне его корня не берётся.
         // У обычного запуска человеком правило молчит — его копия и должна быть самодостаточной.
         // Функция от ПРАВА не зависит и работает для всех корней сразу: право отвечает на «чей это
@@ -380,7 +403,7 @@ public static class BackupPlanner
         Add(roots, notes, paths.DshHome, BackupRootKind.DshHome,
             PanelStrings.BackupRootDshHome,
             everything: full, skip: Skip(KeepModulesTrash), whole: full ? null : WholeGit,
-            files: Restricted(paths.DshHome));
+            files: WithoutLiveLog(Restricted(paths.DshHome), paths.DshHome));
 
         if (shareable)
         {
@@ -414,7 +437,7 @@ public static class BackupPlanner
                 Add(roots, notes, workingDirectory, BackupRootKind.WorkingFolder,
                     PanelStrings.BackupRootWorkingFolder,
                     everything: full, skip: Skip(ProjectTrash), whole: full ? null : WholeGit,
-                    files: Restricted(workingDirectory));
+                    files: WithoutLiveLog(Restricted(workingDirectory), workingDirectory));
             }
         }
         else
@@ -422,12 +445,19 @@ public static class BackupPlanner
             notes.Add(PanelStrings.BackupWorkDirNotSet);
         }
 
-        // 3. Настройки панели: вся её папка. Она мала, а рядом с настройками лежит журнал,
-        //    по которому разбираются, что панель делала.
+        // 3. Настройки и состояние панели: её папка. Собственный журнал (`state\panel.log`) в копию
+        //    НЕ идёт с 2.2.1 — почему, сказано у `WithoutLiveLog` выше и замечанием ниже.
         Add(roots, notes, paths.Root, BackupRootKind.Panel,
             PanelStrings.BackupRootPanel,
             everything: full, skip: Skip(ProjectTrash), whole: full ? null : WholeGit,
-            files: Restricted(paths.Root));
+            files: WithoutLiveLog(Restricted(paths.Root), paths.Root));
+
+        if (BackupPlanner.IsInside(paths.LogFile, paths.Root))
+        {
+            // Говорим человеку словами, а не молчим: журнал панели в копии не окажется, и после
+            // наката его история начнётся заново (это не данные человека — это журнал панели).
+            notes.Add(PanelStrings.BackupPanelLogNotCopiedNote);
+        }
 
         // 4. Свой движок и Node — иначе копия несамодостаточна, а критерий этапа
         //    «копия → чистая ВМ → работает».
@@ -929,3 +959,4 @@ public static class BackupPlanner
         }
     }
 }
+

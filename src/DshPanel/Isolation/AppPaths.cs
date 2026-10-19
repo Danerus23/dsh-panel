@@ -95,6 +95,21 @@ public sealed class AppPaths
     public const string EntryLinkFileName = "entry-link.txt";
 
     /// <summary>
+    /// Имя СОБСТВЕННОГО ЖУРНАЛА ПАНЕЛИ внутри состояния (<c>state\panel.log</c>).
+    ///
+    /// Имя вынесено сюда по той же причине, что и два выше: его знают ДВОЕ — писатель журнала
+    /// (<c>PanelLog.Write</c>) и состав копии, который обязан НЕ положить этот файл в архив
+    /// (<c>Backup\BackupPlan.cs</c>). Второе имя рядом означало бы, что однажды поправят одно.
+    ///
+    /// ⚠️ **Почему журнал не едет в копию (2.2.1).** Писатель держит файл без общего доступа,
+    /// поэтому копия, пытавшаяся прочитать СВОЙ ЖЕ журнал, отказывала («копия не снята», IOException
+    /// «being used by another process»), а отказ вёл к уведомлению — и до 2.2.1 ронял панель.
+    /// Журнал при этом не данные человека: после наката история журнала начинается заново, и это
+    /// сказано человеку замечанием в отчёте копии и разделом 2.2.1 в CHANGELOG.
+    /// </summary>
+    public const string LogFileName = "panel.log";
+
+    /// <summary>
     /// Ссылка входа в панель — ФАЙЛ-СЕКРЕТ: в ссылке токен (красная линия 7).
     ///
     /// Живёт под корнем панели (а не в памяти) намеренно: сервер панель при выходе не гасит,
@@ -205,7 +220,7 @@ public sealed class AppPaths
         NodeDir = node;
         DshHome = dshHome;
         SshDir = ssh;
-        LogFile = Path.Combine(state, "panel.log");
+        LogFile = Path.Combine(state, LogFileName);
         SettingsFile = Path.Combine(root, "settings.json");
         AutostartFile = Path.Combine(state, "autostart.txt");
         EntryLinkFile = Path.Combine(state, EntryLinkFileName);

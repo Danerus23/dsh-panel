@@ -168,7 +168,8 @@
   "BackupRootEnginePackages": "全局 npm 包：DSH和 shim",
   "BackupRootKeys": "私钥目录：用户允许放入备份的私钥",
   "BackupRootNode": "用于启动DSH 的 Node",
-  "BackupRootPanel": "面板的设置、日志和状态",
+  "BackupRootPanel": "面板的设置和状态",
+  "BackupPanelLogNotCopiedNote": "面板日志不会放入副本：还原后日志历史从头开始",
   "BackupRootsFormat": "备份根目录：{0}——{1}",
   "BackupRootWorkingFolder": "包含所有项目的工作目录",
   "BackupRotationDoneFormat": "轮换：已删除 {0}，释放 {1}",
@@ -308,8 +309,10 @@
   "NotifyPricingPriceRowFormat": "{0}{1}：{2} → {3}",
   "NotifyPricingPricesFormat": "价格有变化：{0}",
   "NotifyPricingWindowsFormat": "页面上价格的高峰时段有变化：原为 {0}，现为 {1}",
+  "NotifyFailedLogFormat": "未显示通知：{0} — {1}：{2}",
   "NotifyShownLogFormat": "已显示通知：{0}",
   "NotifySuppressedLogFormat": "已抑制通知：{0}",
+  "NotifyNoTrayReason": "托盘图标未建立",
   "NotifyPanelStartedTitle": "DSH Panel 已启动",
   "NotifyPanelStartedText": "面板正在运行，位于通知区域（时钟旁边）。点击其图标即可打开窗口。",
   "OpenAgentButton": "打开智能体",
@@ -1320,3 +1323,4 @@
   "TipFirstRunDoorUpdate": "打开“更新”部分：那里有“安装”按钮。",
   "TipFirstRunRecheck": "再次查看哪些已就绪、哪些仍然缺少。"
 }
+

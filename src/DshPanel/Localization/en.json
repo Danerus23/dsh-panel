@@ -168,7 +168,8 @@
   "BackupRootEnginePackages": "global npm packages: DSH and shims",
   "BackupRootKeys": "key folder: private keys the user allowed into the backup",
   "BackupRootNode": "the Node DSH is started with",
-  "BackupRootPanel": "panel settings, log and state",
+  "BackupRootPanel": "panel settings and state",
+  "BackupPanelLogNotCopiedNote": "the panel log is not included in a copy: after a restore the log history starts over",
   "BackupRootsFormat": "backup roots: {0} — {1}",
   "BackupRootWorkingFolder": "the working folder with all projects",
   "BackupRotationDoneFormat": "rotation: removed {0}, freed {1}",
@@ -308,8 +309,10 @@
   "NotifyPricingPriceRowFormat": "{0} {1}: {2} → {3}",
   "NotifyPricingPricesFormat": "prices changed: {0}",
   "NotifyPricingWindowsFormat": "the pricing page changed its peak windows: was {0}, now {1}",
+  "NotifyFailedLogFormat": "notification not shown: {0} — {1}: {2}",
   "NotifyShownLogFormat": "notification shown: {0}",
   "NotifySuppressedLogFormat": "notification suppressed: {0}",
+  "NotifyNoTrayReason": "tray icon was not built",
   "NotifyPanelStartedTitle": "DSH Panel is running",
   "NotifyPanelStartedText": "The panel is running in the notification area, next to the clock. Click its icon to open the window.",
   "OpenAgentButton": "Open agent",
@@ -1320,3 +1323,4 @@
   "TipFirstRunDoorUpdate": "Open the “Update” section: the “Install” button is there.",
   "TipFirstRunRecheck": "Look again at what is already in place and what is still missing."
 }
+

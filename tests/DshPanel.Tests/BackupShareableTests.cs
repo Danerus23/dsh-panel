@@ -67,8 +67,12 @@ public class BackupShareableTests
             // Панель СОДЕРЖИТ и домашний каталог движка, и файл ссылки входа, и ПРОПУСК ТЕЛЕФОНА —
             // без этого ключ уехал бы второй группой, ссылка входа с токеном уехала бы к другому
             // человеку, а по пропуску получатель копии вошёл бы в калитку того, кто её снял (A1).
+            //
+            // ⚠️ И ЧЕТВЁРТОЕ ИМЯ — собственный ЖУРНАЛ ПАНЕЛИ (2.2.1): он не едет в копию НИКОГДА,
+            // ни в «для передачи», ни в своей (писатель держит файл без общего доступа, и копия,
+            // читавшая его, отказывала — а до 2.2.1 этот отказ ещё и ронял панель).
             Assert.Equal(
-                new[] { AppPaths.CredentialsFileName, AppPaths.EntryLinkFileName, AppPaths.PhonePassFileName },
+                new[] { AppPaths.CredentialsFileName, AppPaths.EntryLinkFileName, AppPaths.PhonePassFileName, AppPaths.LogFileName },
                 panel.Source.SkipFileNames);
 
             // Рабочая папка ни того, ни другого не содержит — правило к ней не применяется.
@@ -83,9 +87,13 @@ public class BackupShareableTests
         }
     }
 
-    /// <summary>Своя копия пропуска файла ключей НЕ получает: она снимается со всем, как раньше.</summary>
+    /// <summary>
+    /// Своя копия пропуска файлов-секретов НЕ получает: она снимается со всем, как раньше.
+    /// ⚠️ Единственное исключение — собственный журнал панели (`state\panel.log`, 2.2.1): он
+    /// не данные человека, и в копию он не идёт ни в своей, ни в «для передачи».
+    /// </summary>
     [Fact]
-    public void План_своей_копии_ничего_не_исключает()
+    public void План_своей_копии_не_исключает_ничего_кроме_журнала_панели()
     {
         var root = NewRoot();
 
@@ -96,7 +104,19 @@ public class BackupShareableTests
 
             var plan = BackupPlanner.Full(paths, null, engine: null, withEngine: false, shareable: false);
 
-            foreach (var item in plan.Roots) Assert.Null(item.Source.SkipFileNames);
+            // Журнал панели — единственное имя, которое пропускает и СВОЯ копия (2.2.1).
+            foreach (var item in plan.Roots)
+            {
+                if (item.Kind == BackupRootKind.Panel)
+                {
+                    Assert.Equal(new[] { AppPaths.LogFileName }, item.Source.SkipFileNames);
+                }
+                else
+                {
+                    Assert.Null(item.Source.SkipFileNames);
+                }
+            }
+
             Assert.DoesNotContain(PanelStrings.BackupShareableNote, plan.Notes);
         }
         finally
@@ -710,3 +730,4 @@ public class BackupShareableTests
         }
     }
 }
+

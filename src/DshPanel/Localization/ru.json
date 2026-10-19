@@ -168,7 +168,8 @@
   "BackupRootEnginePackages": "глобальные пакеты npm: сервер DSH и шимы",
   "BackupRootKeys": "каталог ключей: приватные ключи, которые человек разрешил класть в копию",
   "BackupRootNode": "Node, которым поднимается сервер DSH",
-  "BackupRootPanel": "настройки, журнал и состояние панели",
+  "BackupRootPanel": "настройки и состояние панели",
+  "BackupPanelLogNotCopiedNote": "журнал панели в копию не берётся: после восстановления история журнала начинается заново",
   "BackupRootsFormat": "корней копии: {0} — {1}",
   "BackupRootWorkingFolder": "рабочая папка со всеми проектами",
   "BackupRotationDoneFormat": "ротация: удалено {0}, освобождено {1}",
@@ -308,8 +309,10 @@
   "NotifyPricingPriceRowFormat": "{0} {1}: {2} → {3}",
   "NotifyPricingPricesFormat": "цены изменились: {0}",
   "NotifyPricingWindowsFormat": "на странице цены окна пика изменились: было {0}, стало {1}",
+  "NotifyFailedLogFormat": "уведомление не показано: {0} — {1}: {2}",
   "NotifyShownLogFormat": "уведомление показано: {0}",
   "NotifySuppressedLogFormat": "уведомление подавлено: {0}",
+  "NotifyNoTrayReason": "значок не построен",
   "NotifyPanelStartedTitle": "DSH Panel запущена",
   "NotifyPanelStartedText": "Панель работает и живёт в трее — рядом с часами. Окно откроется по щелчку по значку.",
   "OpenAgentButton": "Открыть агента",
@@ -1320,3 +1323,5 @@
   "TipFirstRunDoorUpdate": "Открыть раздел «Обновление»: там кнопка «Установить».",
   "TipFirstRunRecheck": "Ещё раз посмотреть, что уже на месте, а чего ещё нет."
 }
+
+

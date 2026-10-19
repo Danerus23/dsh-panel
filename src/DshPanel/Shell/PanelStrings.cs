@@ -925,8 +925,17 @@ public static class PanelStrings
     /// <summary>Строка журнала: чем кончился запрос баланса.</summary>
     public static string BalanceLogFormat => Loc.T(nameof(BalanceLogFormat));
 
+    /// <summary>
+    /// Строка журнала: автоматическое сообщение НЕ показано, и вот причина (2.2.1). Подстановки:
+    /// что показывали, тип исключения, текст исключения.
+    /// </summary>
+    public static string NotifyFailedLogFormat => Loc.T(nameof(NotifyFailedLogFormat));
+
     /// <summary>Строка журнала: автоматическое сообщение показано.</summary>
     public static string NotifyShownLogFormat => Loc.T(nameof(NotifyShownLogFormat));
+
+    /// <summary>Причина отказа в журнале, когда показывать нечем: значок не построен.</summary>
+    public static string NotifyNoTrayReason => Loc.T(nameof(NotifyNoTrayReason));
 
     /// <summary>Строка журнала: автоматическое сообщение подавлено изоляцией.</summary>
     public static string NotifySuppressedLogFormat => Loc.T(nameof(NotifySuppressedLogFormat));
@@ -2554,6 +2563,12 @@ public static class PanelStrings
 
     /// <summary>Что кладёт в копию корень папки панели.</summary>
     public static string BackupRootPanel => Loc.T(nameof(BackupRootPanel));
+
+    /// <summary>
+    /// Замечание в отчёте копии (2.2.1): собственный журнал панели в копию не берётся — это не
+    /// данные человека, и после наката история журнала начинается заново.
+    /// </summary>
+    public static string BackupPanelLogNotCopiedNote => Loc.T(nameof(BackupPanelLogNotCopiedNote));
 
     /// <summary>Строка отчёта плана: сколько корней и что в них.</summary>
     public static string BackupRootsFormat => Loc.T(nameof(BackupRootsFormat));
