@@ -46,6 +46,10 @@
 #   9  регрессия «клон тега → коммит сверху → оба инструмента 0» и «-Rev от коммита БЕЗ тега» → 0;
 #      та же регрессия на копии с ОТКАТОМ фикса (без `-f`) → 1 (регрессия умеет быть красной)
 #  10  версия ревизии против трёх CHANGELOG: подложенный пустой раздел версии → 1 с именем файла
+#  11  долг приёмки 2.3.0: `-Out` с СОСЕДНИМ префиксом имени (и набранный прямыми слэшами) —
+#      РАЗРЕШЁН (0, дерево собрано); настоящий путь ВНУТРИ репозитория — отказ 1; мутация
+#      «всегда разрешать» — путь внутри проходит (отказ снят, проверка умеет падать); откат правки
+#      (`StartsWith` без разделителя) — ложный отказ вернулся (1, дерево не создано)
 #
 # КОДЫ: 0 — все опыты дали ожидаемое; 1 — хотя бы один опыт разошёлся (назван номер и числа);
 # 2 — стенд не поставить (нет git, нет репозитория, у ревизии нет csproj/<Version>).
@@ -457,6 +461,77 @@ try {
     $ok10 = ($r10.Code -eq 1) -and ($r10.Text -like '*CHANGELOG.zh.md*') -and ($r10.Text -like '*пуст*')
     Write-Step -Id '10' -Name 'версия ревизии против трёх CHANGELOG' -Expected 'код 1, назван CHANGELOG.zh.md и «пуст»' -Actual ('код ' + $r10.Code + ', имя файла в выводе: ' + ($r10.Text -like '*CHANGELOG.zh.md*')) -Ok $ok10 -Evidence 'в режиме -Rev сверки «номер тега против <Version>» нет — эту дыру закрывает проверка трёх CHANGELOG'
     [IO.File]::WriteAllBytes($brokenChangelog, $changelogBackup)
+
+    # ── Опыт 11: долг приёмки 2.3.0 — «соседний префикс» и путь ВНУТРИ репозитория ─────────────
+    Write-Host ''
+    Write-Host 'опыт 11: -Out: соседний префикс разрешён, путь внутри репозитория — отказ'
+    # Стенд после опыта 10 снова должен быть ЧИСТЫМ: `make` требует чистого рабочего дерева,
+    # иначе опыт упёрся бы в «грязно», не дойдя до проверки пути.
+    Invoke-Git -Path $stand -GitArgs @('reset', '--hard', 'HEAD') | Out-Null
+    Invoke-Git -Path $stand -GitArgs @('clean', '-q', '-fd') | Out-Null
+
+    $siblingOut = $stand + '-sibling'          # ТОТ ЖЕ префикс имени, что у стенда: ровно случай дефекта
+
+    # 11а: СОСЕДНИЙ префикс — РАЗРЕШЁН (было: ложный отказ «-Out внутри рабочего дерева»)
+    $r11a = Invoke-Tool -Script $makeTool -ToolArgs @('-Tag', $Tag, '-Repo', $stand, '-Out', $siblingOut)
+    $files11a = if (Test-Path -LiteralPath $siblingOut) { Get-FileCount -Folder $siblingOut } else { -1 }
+    $refused11a = $r11a.Text -like '*внутри рабочего дерева*'
+    $ok11a = ($r11a.Code -eq 0) -and ($files11a -gt 0) -and (-not $refused11a)
+
+    # 11б: настоящий путь ВНУТРИ репозитория — отказ по-прежнему, и НИЧЕГО не написано
+    $insideOut = Join-Path $stand 'release\tree\selftest-inside'
+    $r11b = Invoke-Tool -Script $makeTool -ToolArgs @('-Tag', $Tag, '-Repo', $stand, '-Out', $insideOut)
+    $insideWritten = Test-Path -LiteralPath $insideOut
+    $ok11b = ($r11b.Code -eq 1) -and ($r11b.Text -like '*внутри рабочего дерева репозитория*') -and (-not $insideWritten)
+
+    # 11в: мутация «ВСЕГДА РАЗРЕШАТЬ» — и путь внутри репозитория проходит: значит отказ делала
+    # именно проверка, а не что-то ещё.
+    $toolsAllow = Join-Path $work 'tools-allow'
+    New-Item -ItemType Directory -Path $toolsAllow -Force | Out-Null
+    foreach ($file in @(Get-ChildItem -LiteralPath $toolsDir -File -Filter '*.ps1')) {
+        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $toolsAllow $file.Name) -Force
+    }
+    $allowTool = Join-Path $toolsAllow 'make-release-tree.ps1'
+    $allowText = [IO.File]::ReadAllText($allowTool)
+    $allowMutated = $allowText.Replace('if (Test-PathInside $Out $repoFull) {', 'if ($false) {').Replace('if (Test-PathInside $Manifest $Out) {', 'if ($false) {')
+    $allowApplied = ($allowMutated -ne $allowText) -and ($allowMutated -notlike '*Test-PathInside $Out $repoFull*')
+    if ($allowApplied) {
+        [IO.File]::WriteAllText($allowTool, $allowMutated, (New-Object Text.UTF8Encoding($true)))   # ⚠️ .ps1 — с BOM
+    }
+    $r11c = if ($allowApplied) { Invoke-Tool -Script $allowTool -ToolArgs @('-Tag', $Tag, '-Repo', $stand, '-Out', $insideOut) } else { [pscustomobject]@{ Code = -1; Text = ''; Lines = @() } }
+    $insideAfterMutation = Test-Path -LiteralPath $insideOut
+    $ok11c = $allowApplied -and ($r11c.Code -eq 0) -and (-not ($r11c.Text -like '*внутри рабочего дерева*')) -and $insideAfterMutation
+
+    # после мутации стенд снова чистый: внутри репозитория могли остаться и дерево, и опись
+    if (Test-Path -LiteralPath $insideOut) { Remove-Item -LiteralPath $insideOut -Recurse -Force }
+    Invoke-Git -Path $stand -GitArgs @('reset', '--hard', 'HEAD') | Out-Null
+    Invoke-Git -Path $stand -GitArgs @('clean', '-q', '-fd') | Out-Null
+
+    # 11г: ОТКАТ правки (как было до 2.3.1) — соседний префикс снова получает ЛОЖНЫЙ отказ
+    $toolsBefore = Join-Path $work 'tools-before-u5'
+    New-Item -ItemType Directory -Path $toolsBefore -Force | Out-Null
+    foreach ($file in @(Get-ChildItem -LiteralPath $toolsDir -File -Filter '*.ps1')) {
+        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $toolsBefore $file.Name) -Force
+    }
+    $beforeTool = Join-Path $toolsBefore 'make-release-tree.ps1'
+    $beforeText = [IO.File]::ReadAllText($beforeTool)
+    $beforeMutated = $beforeText.Replace(
+        'if (Test-PathInside $Out $repoFull) {',
+        'if ($Out.StartsWith($repoFull, [StringComparison]::OrdinalIgnoreCase)) {').Replace(
+        'if (Test-PathInside $Manifest $Out) {',
+        'if ($Manifest.StartsWith($Out, [StringComparison]::OrdinalIgnoreCase)) {')
+    $beforeApplied = ($beforeMutated -ne $beforeText) -and ($beforeMutated -like '*StartsWith($repoFull*')
+    if ($beforeApplied) {
+        [IO.File]::WriteAllText($beforeTool, $beforeMutated, (New-Object Text.UTF8Encoding($true)))
+    }
+    $siblingBeforeOut = $stand + '-sibling-before'
+    $r11d = if ($beforeApplied) { Invoke-Tool -Script $beforeTool -ToolArgs @('-Tag', $Tag, '-Repo', $stand, '-Out', $siblingBeforeOut) } else { [pscustomobject]@{ Code = -1; Text = ''; Lines = @() } }
+    $refused11d = $r11d.Text -like '*внутри рабочего дерева репозитория*'
+    $written11d = Test-Path -LiteralPath $siblingBeforeOut
+    $ok11d = $beforeApplied -and ($r11d.Code -eq 1) -and $refused11d -and (-not $written11d)
+
+    $ok11 = $ok11a -and $ok11b -and $ok11c -and $ok11d
+    Write-Step -Id '11' -Name 'долг 2.3.0: соседний префикс -Out · путь внутри репозитория · мутация и откат' -Expected 'соседний префикс — код 0 и дерево · внутри репозитория — код 1 «внутри рабочего дерева» · мутация «всегда разрешать» — отказ снят · откат правки — ложный отказ вернулся' -Actual ('соседний ' + $r11a.Code + ' (файлов ' + $files11a + ', «внутри»: ' + $refused11a + '); внутри ' + $r11b.Code + ' (написано: ' + $insideWritten + '); мутация ' + $r11c.Code + ' (внутри появилось: ' + $insideAfterMutation + '); откат ' + $r11d.Code + ' («внутри»: ' + $refused11d + ', написано: ' + $written11d + ')') -Ok $ok11 -Evidence 'дефект найден приёмкой 2.3.0: сравнение без разделителя каталога; после правки — Test-PathInside; работает и на прямых слэшах'
 }
 catch {
     Write-Host ''

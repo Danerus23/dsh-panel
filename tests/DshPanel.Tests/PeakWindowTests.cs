@@ -96,6 +96,9 @@ public class PeakWindowTests
         /// <summary>Короткая строка главного окна — здесь не показывается, но её требует интерфейс.</summary>
         public string PeakCheckedText => PeakDecisions.CheckedText(Agent);
 
+        /// <summary>Дата из профиля движка — окну «Пики и тарифы» не нужна, но её требует дверь.</summary>
+        public string PeakProfileCheckedText => string.Empty;
+
         public TrayTone Tone => TrayTone.Neutral;
 
         public void Refresh()

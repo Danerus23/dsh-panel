@@ -166,7 +166,14 @@
                решения, что красит строку тарифа в меню значка (`TrayStatus.PeakTone`). -->
           <TextBlock x:Name="PeakText" Text="" FontSize="16" FontWeight="SemiBold" />
           <TextBlock x:Name="PeakNextText" Text="" TextWrapping="Wrap" Opacity="0.85" />
+          <!--
+            ДВЕ ДАТЫ — ДВЕ СТРОКИ (замечание владельца 20.10.2026, F-5, вариант «б»).
+            Первая — своя: когда цены разбирала САМА панель («Пики: проверено 19.10.2026»).
+            Вторая — из ПРОФИЛЯ ДВИЖКА и с подписью источника: это не дата проверки панели,
+            и читать её как свою человек не должен. Пустая вторая строка не показывается.
+          -->
           <TextBlock x:Name="PeakScheduleText" Classes="hint" Text="" />
+          <TextBlock x:Name="PeakProfileText" Classes="hint" Text="" IsVisible="False" />
 
           <!-- Две кнопки карточки баланса — ПЕРЕНОСИМЫМ рядом (WrapPanel), как ряд сервера:
                минимальная ширина окна 640, и жёсткий ряд однажды перестал бы вмещаться

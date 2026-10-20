@@ -11,7 +11,9 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using DshPanel.Agents;
 using DshPanel.Balance;
+using DshPanel.Localization;
 using DshPanel.Peak;
+using DshPanel.Pricing;
 using DshPanel.Settings;
 using DshPanel.Shell;
 using DshPanel.Views;
@@ -20,17 +22,23 @@ using Xunit;
 namespace DshPanel.Tests;
 
 /// <summary>
-/// КОРОТКАЯ СТРОКА ПРО ОКНА ПИКА В ГЛАВНОМ ОКНЕ (слова владельца 27.09.2026): *«Там где написано
-/// „окна пика“, проверено и дата с временем нужно… остальная информация не нужна в принципе»*.
+/// ДВЕ ДАТЫ ПРОВЕРКИ ЦЕН В ГЛАВНОМ ОКНЕ (слова владельца 27.09.2026 и 20.10.2026, F-5).
+///
+/// Слова 27.09.2026: *«Там где написано „окна пика“, проверено и дата с временем нужно… остальная
+/// информация не нужна в принципе»*. Слова 20.10.2026 (пункт 4 пакета 2.3.1, вариант «б»):
+/// карточка показывала дату из ПРОФИЛЯ движка (24.09.2026), а панель с тех пор разбирает цены
+/// САМА ежедневно — человек читал чужую дату как дату своей проверки.
 ///
 /// Отсюда четыре обещания, и каждое проверяется своим путём:
 ///
-/// 1. **строка короткая** — «Пики: проверено 24.09.2026»: ни источника (URL), ни расписания,
-///    ни дней недели. Прежняя строка была расписанием с источником, и она из главного окна ушла;
+/// 1. **в карточке ДВЕ даты двумя разными строками**: своя — когда цены разбирала панель
+///    (`PanelSettings.PricingCheckedAt`, формат <c>дд.ММ.гггг</c>), и профильная — ОТДЕЛЬНОЙ
+///    строкой с подписью источника («дата из профиля сервера DSH: …»). Своей отметки нет — честное
+///    «не проверяли», а не подставленная профильная;
 /// 2. **форма одна во всех состояниях баланса** — «ключ недоступен», «ответа нет», «ответ есть»
-///    показывают ОДНО И ТО ЖЕ: дата проверки таблицы не зависит от того, спросили ли баланс;
-/// 3. **дата читаемая** — ISO из профиля приводится к <c>дд.ММ.гггг</c>, а мусор возвращается
-///    как есть (ничего не выдумываем и не падаем);
+///    показывают ОДНО И ТО ЖЕ: даты проверки цен не зависят от того, спросили ли баланс;
+/// 3. **даты читаемые** — ISO из профиля приводится к <c>дд.ММ.гггг</c>, мусор возвращается
+///    как есть (ничего не выдумываем и не падаем); своя отметка без даты — пусто;
 /// 4. **дверь рядом** — «Пики и тарифы…» подписана строкой словаря, доступна всегда и щелчок
 ///    поднимает РОВНО ОДНУ просьбу; обе кнопки карточки стоят в переносимом ряду и вмещаются
 ///    в окно на минимальной ширине 640 (дефект Д2: жёсткий ряд однажды перестал бы вмещаться).
@@ -69,9 +77,32 @@ public class PeakLineTests
     /// <summary>Уборка только СВОЕГО каталога: общий родитель семейства не снимается (t3, `TempRoots`).</summary>
     private static void RemoveTemp(string dir) => TempRoots.Remove(dir);
 
-    /// <summary>Что строка обязана говорить: одна строка словаря и дата из профиля агента.</summary>
-    private static string Expected(AgentProfile agent) =>
-        string.Format(CultureInfo.CurrentCulture, PanelStrings.PeakCheckedFormat, PeakDecisions.CheckedText(agent));
+    /// <summary>
+    /// Отметка «панель сама разбирала цены» — МЕСТНЫЙ полдень: дата одна в любом часовом поясе
+    /// (полночь соседнего пояса дала бы вчерашний день и проверку, зависящую от машины).
+    /// </summary>
+    private static string OwnCheckedStamp() =>
+        PricingDecisions.Stamp(new DateTimeOffset(DateTime.Today.AddHours(12)));
+
+    /// <summary>Своя дата проверки в читаемом виде — как её покажет окно.</summary>
+    private static string OwnDate() => DateTime.Today.ToString("dd.MM.yyyy", CultureInfo.CurrentCulture);
+
+    /// <summary>Своя строка: «Пики: проверено {дата}» или честное «Пики: не проверяли».</summary>
+    private static string ExpectedOwn(string pricingCheckedAt)
+    {
+        var own = PricingDecisions.CheckedDateText(pricingCheckedAt);
+
+        return own.Length > 0
+            ? string.Format(CultureInfo.CurrentCulture, PanelStrings.PeakCheckedFormat, own)
+            : PanelStrings.PeakCheckedNever;
+    }
+
+    /// <summary>Профильная строка — ОТДЕЛЬНОЙ строкой и с подписью источника.</summary>
+    private static string ExpectedProfile(AgentProfile agent) =>
+        string.Format(
+            CultureInfo.CurrentCulture,
+            PanelStrings.PeakProfileCheckedFormat,
+            PeakDecisions.CheckedText(agent));
 
     // ---------------------------------------------------------------- 1. короткая строка
 
@@ -83,7 +114,8 @@ public class PeakLineTests
     [AvaloniaFact]
     public void Строка_пиков_короткая_и_без_источника()
     {
-        // Прогон без права читать ключ: запроса не будет вовсе, и в окне — честное «не спрашивали».
+        // Прогон без права читать ключ: запроса не будет вовсе; отметки разбора цен в настройках
+        // по умолчанию НЕТ — панель ещё не разбирала страницу.
         var controller = Controller(new PanelSettings(), "нет-такого-файла.yaml", allowed: false);
 
         var window = new MainWindow();
@@ -91,21 +123,86 @@ public class PeakLineTests
         window.Show();
         PanelTestStand.Settle();
 
-        var text = window.FindControl<TextBlock>("PeakScheduleText")?.Text ?? string.Empty;
+        var own = window.FindControl<TextBlock>("PeakScheduleText")?.Text ?? string.Empty;
+        var profile = window.FindControl<TextBlock>("PeakProfileText")!;
 
-        Assert.Equal(Expected(controller.Agent), text);
+        // СВОЯ строка: своей отметки нет — честное «не проверяли», а НЕ дата профиля
+        // (подставить чужую дату значило бы соврать про свою проверку — F-5, 20.10.2026).
+        Assert.Equal(PanelStrings.PeakCheckedNever, own);
+        Assert.DoesNotContain(PeakDecisions.CheckedText(controller.Agent), own, StringComparison.Ordinal);
 
-        // ИСТОЧНИК из главного окна исчез — это и просил владелец.
-        Assert.DoesNotContain("http", text, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(AgentCatalog.DeepSeek.PricingSource, text, StringComparison.Ordinal);
+        // ПРОФИЛЬНАЯ — отдельной строкой и с подписью источника.
+        Assert.Equal(ExpectedProfile(controller.Agent), profile.Text);
+        Assert.True(profile.IsVisible, "дата из профиля движка не показана");
+        Assert.Contains(
+            PanelStrings.PeakProfileCheckedFormat.Split('{')[0].Trim(),
+            profile.Text ?? string.Empty,
+            StringComparison.Ordinal);
 
-        // И перечисления окон больше нет: ни часов расписания, ни часового пояса.
-        Assert.DoesNotContain("01:00", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("06:00", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("UTC", text, StringComparison.Ordinal);
+        // Обе строки короткие: ни источника (URL), ни расписания, ни часового пояса, ни ISO.
+        foreach (var line in new[] { own, profile.Text ?? string.Empty })
+        {
+            Assert.DoesNotContain("http", line, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(AgentCatalog.DeepSeek.PricingSource, line, StringComparison.Ordinal);
+            Assert.DoesNotContain("01:00", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("06:00", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("UTC", line, StringComparison.Ordinal);
+            Assert.DoesNotContain(AgentCatalog.DeepSeek.PricingChecked, line, StringComparison.Ordinal);
+        }
 
-        // Дата показана ЧИТАЕМО: ISO-форма профиля в окно не попадает.
-        Assert.DoesNotContain(AgentCatalog.DeepSeek.PricingChecked, text, StringComparison.Ordinal);
+        window.Close();
+    }
+
+    /// <summary>
+    /// СВОЯ ДАТА И ДАТА ПРОФИЛЯ — ДВЕ РАЗНЫЕ СТРОКИ. Своя приходит из настроек панели
+    /// (<see cref="PanelSettings.PricingCheckedAt"/>, формат <c>дд.ММ.гггг</c>), профильная — из
+    /// профиля агента и ОТДЕЛЬНО, с подписью источника. Одна строка на обе давала бы человеку
+    /// неверное чтение (замечание владельца 20.10.2026, F-5).
+    ///
+    /// ⚠️ Мутации, которые обязаны упасть ИМЕННО здесь: **«показывать только профильную»**
+    /// (своя строка пошла бы из профиля), **«свою дату подставить чужим значением»** (в своей
+    /// строке оказалась бы профильная дата) и **«подпись источника убрать»** (вторая строка
+    /// осталась бы без подписи).
+    /// </summary>
+    [AvaloniaFact]
+    public void Своя_дата_и_дата_профиля_двумя_разными_строками()
+    {
+        var settings = new PanelSettings { PricingCheckedAt = OwnCheckedStamp() };
+        var controller = Controller(settings, "нет-такого-файла.yaml", allowed: false);
+
+        var ownDate = OwnDate();
+        var profileDate = PeakDecisions.CheckedText(AgentCatalog.DeepSeek);
+
+        // Даты ДЕЙСТВИТЕЛЬНО разные — иначе проверка ниже ничего бы не различала.
+        Assert.NotEqual(ownDate, profileDate);
+
+        Assert.Equal(
+            string.Format(CultureInfo.CurrentCulture, PanelStrings.PeakCheckedFormat, ownDate),
+            controller.PeakCheckedText);
+        Assert.Equal(ExpectedProfile(AgentCatalog.DeepSeek), controller.PeakProfileCheckedText);
+
+        Assert.Contains(ownDate, controller.PeakCheckedText, StringComparison.Ordinal);
+        Assert.DoesNotContain(profileDate, controller.PeakCheckedText, StringComparison.Ordinal);
+        Assert.Contains(profileDate, controller.PeakProfileCheckedText, StringComparison.Ordinal);
+        Assert.NotEqual(controller.PeakCheckedText, controller.PeakProfileCheckedText);
+
+        var window = new MainWindow();
+        window.AttachBalance(controller);
+        window.Show();
+        PanelTestStand.Settle();
+
+        var ownBlock = window.FindControl<TextBlock>("PeakScheduleText")!;
+        var profileBlock = window.FindControl<TextBlock>("PeakProfileText")!;
+
+        Assert.Equal(controller.PeakCheckedText, ownBlock.Text);
+        Assert.Equal(controller.PeakProfileCheckedText, profileBlock.Text);
+        Assert.True(profileBlock.IsVisible, "дата из профиля движка не показана");
+
+        // ПОДПИСЬ ИСТОЧНИКА — у профильной строки и только у неё.
+        var caption = PanelStrings.PeakProfileCheckedFormat.Split('{')[0].Trim();
+
+        Assert.StartsWith(caption, profileBlock.Text ?? string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain(caption, ownBlock.Text ?? string.Empty, StringComparison.Ordinal);
 
         window.Close();
     }
@@ -113,9 +210,10 @@ public class PeakLineTests
     // ---------------------------------------------------------------- 2. три состояния
 
     /// <summary>
-    /// ФОРМА СТРОКИ ОДНА В ТРЁХ СОСТОЯНИЯХ БАЛАНСА. Дата проверки таблицы цен не зависит от того,
+    /// ФОРМА ОБЕИХ СТРОК ОДНА В ТРЁХ СОСТОЯНИЯХ БАЛАНСА. Даты проверки цен не зависят от того,
     /// спросили ли баланс: «ключ недоступен», «ответа нет» и «ответ есть» обязаны показывать одно
-    /// и то же. Иначе строка про пики мигала бы вместе с балансом, а это про разные вещи.
+    /// и то же — и свою дату, и профильную. Иначе строки про пики мигали бы вместе с балансом,
+    /// а это про разные вещи.
     ///
     /// ⚠️ Проверка перебора обязана пройти через РАЗНЫЕ состояния: без утверждений о них она была
     /// бы зелёной и на трёх одинаковых контроллерах, то есть ничего не доказывала бы.
@@ -127,12 +225,14 @@ public class PeakLineTests
 
         try
         {
+            var settings = new PanelSettings { PricingCheckedAt = OwnCheckedStamp() };
+
             // 1. Ключ недоступен: прогон без права читать ключ владельца.
-            var locked = Controller(new PanelSettings(), Path.Combine(dir, "ключ.yaml"), allowed: false);
+            var locked = Controller(settings, Path.Combine(dir, "ключ.yaml"), allowed: false);
             Assert.False(locked.Allowed);
 
             // 2. Ответа нет: права есть, а ключа в файле нет.
-            var noAnswer = Controller(new PanelSettings(), Path.Combine(dir, "пусто.yaml"), allowed: true);
+            var noAnswer = Controller(settings, Path.Combine(dir, "пусто.yaml"), allowed: true);
             noAnswer.Refresh();
             Assert.True(SpinWait.SpinUntil(() => !noAnswer.Busy, 5000), "запрос баланса не завершился");
             Assert.False(noAnswer.Result.Ok);
@@ -142,7 +242,7 @@ public class PeakLineTests
             var keyPath = Path.Combine(dir, ".credentials.yaml");
             File.WriteAllText(keyPath, "DEEPSEEK_API_KEY: sk-1234567890abcdef\n", new UTF8Encoding(false));
 
-            var answered = Controller(new PanelSettings(), keyPath, allowed: true);
+            var answered = Controller(settings, keyPath, allowed: true);
             answered.Refresh();
             Assert.True(SpinWait.SpinUntil(() => !answered.Busy, 5000), "запрос баланса не завершился");
             Assert.True(answered.Result.Ok);
@@ -150,11 +250,16 @@ public class PeakLineTests
             // Три состояния ДЕЙСТВИТЕЛЬНО разные — иначе равенство ниже ничего не значит.
             Assert.NotEqual(locked.StatusText, answered.StatusText);
 
-            var expected = Expected(AgentCatalog.DeepSeek);
+            var expectedOwn = ExpectedOwn(settings.PricingCheckedAt);
+            var expectedProfile = ExpectedProfile(AgentCatalog.DeepSeek);
 
-            Assert.Equal(expected, locked.PeakCheckedText);
-            Assert.Equal(expected, noAnswer.PeakCheckedText);
-            Assert.Equal(expected, answered.PeakCheckedText);
+            Assert.Equal(expectedOwn, locked.PeakCheckedText);
+            Assert.Equal(expectedOwn, noAnswer.PeakCheckedText);
+            Assert.Equal(expectedOwn, answered.PeakCheckedText);
+
+            Assert.Equal(expectedProfile, locked.PeakProfileCheckedText);
+            Assert.Equal(expectedProfile, noAnswer.PeakProfileCheckedText);
+            Assert.Equal(expectedProfile, answered.PeakProfileCheckedText);
         }
         finally
         {
@@ -188,6 +293,50 @@ public class PeakLineTests
             Assert.Equal(
                 garbage,
                 PeakDecisions.CheckedText(AgentCatalog.DeepSeek with { PricingChecked = garbage }));
+        }
+
+        // СВОЯ отметка — только дата, и она МЕСТНАЯ: полдень местного дня, чтобы дата не зависела
+        // от часового пояса машины (полночь соседнего пояса дала бы вчерашний день).
+        Assert.Equal(OwnDate(), PricingDecisions.CheckedDateText(PricingDecisions.Stamp(new DateTimeOffset(DateTime.Today.AddHours(12)))));
+
+        // Разобрать нельзя — «отметки нет»: своя строка скажет «не проверяли», а не выдумает дату.
+        foreach (var garbage in new[] { string.Empty, "не дата", "2026-13-45" })
+        {
+            Assert.Equal(string.Empty, PricingDecisions.CheckedDateText(garbage));
+        }
+    }
+
+    /// <summary>
+    /// ТРИ ЯЗЫКА ПОКРЫТЫ ОДИНАКОВО. Своя строка, честная «не проверяли» и подпись источника
+    /// у профильной даты есть во всех трёх словарях, и в каждом языке из них собираются ДВЕ РАЗНЫЕ
+    /// строки: своя дата и дата профиля с подписью. Смысл перевода проверяет человек — здесь
+    /// механически проверяются наличие, подстановка и различие двух строк.
+    /// </summary>
+    [Fact]
+    public void Две_даты_названы_на_всех_трёх_языках()
+    {
+        foreach (var language in Loc.Known)
+        {
+            var ownFormat = Loc.TIn(language, nameof(PanelStrings.PeakCheckedFormat));
+            var never = Loc.TIn(language, nameof(PanelStrings.PeakCheckedNever));
+            var profileFormat = Loc.TIn(language, nameof(PanelStrings.PeakProfileCheckedFormat));
+
+            Assert.False(string.IsNullOrWhiteSpace(ownFormat), $"{language}: нет строки «проверено»");
+            Assert.False(string.IsNullOrWhiteSpace(never), $"{language}: нет строки «не проверяли»");
+            Assert.False(string.IsNullOrWhiteSpace(profileFormat), $"{language}: нет подписи источника");
+
+            var caption = profileFormat.Split('{')[0].Trim();
+
+            Assert.True(caption.Length > 0, $"{language}: у профильной строки НЕТ подписи источника");
+            Assert.NotEqual(ownFormat, profileFormat);
+
+            var own = string.Format(CultureInfo.CurrentCulture, ownFormat, "19.10.2026");
+            var profile = string.Format(CultureInfo.CurrentCulture, profileFormat, "24.09.2026");
+
+            Assert.Contains("19.10.2026", own, StringComparison.Ordinal);
+            Assert.Contains("24.09.2026", profile, StringComparison.Ordinal);
+            Assert.DoesNotContain("24.09.2026", own, StringComparison.Ordinal);
+            Assert.NotEqual(own, profile);
         }
     }
 

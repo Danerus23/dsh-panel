@@ -2,6 +2,56 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.3.1 - 2026-10-20
+
+**A small patch that follows a live update from 2.2.1 to 2.3.0: an update no longer looks broken,
+and the screen tells the truth about what it is doing.** There are no new capabilities — only what
+a person sees and reads. The version is in "About": it says **2.3.1**.
+
+### After preparation the action is in plain sight
+
+Before, when "Download and prepare" finished, the button went grey while "Update and restart the
+panel" sat **below** the "What's new" card — past the edge of the window. All the person saw was a
+disabled button, so an update read as broken: exactly how the live 2.2.1 → 2.3.0 update looked.
+
+Now the replacement card sits **right under the row of buttons, above "What's new"**, and after a
+successful preparation the panel **scrolls to it** and puts **focus** on it — the focus ring is
+visible. Focus is on the card, not on the replacement button: that button cannot be undone (the
+panel closes and is replaced), so it must not sit under Enter right after the step. Measured on a
+1080×900 window with a 706-point viewport: the card occupies **435–540** — fully visible, with 166
+points to spare; "What's new" starts at 602. Before the fix: top **702** against a **706**-point
+viewport — four points of the frame showed, neither a line nor a button.
+
+### The progress line is cleared, the progress bar hidden
+
+After "Download and prepare" the progress line kept the last stage ("Panel archive: 100 %"), so a
+frozen stage read as "work is still going". Now, when the attempt ends — **either way** (success,
+refusal, or an exception in the background task) — the line is **empty** and the bar is **hidden**;
+while work is in progress nothing changes. No new words: just an empty line.
+
+### "Stage: …" where there are no percentages
+
+"The file size is unknown" was also said where there is no size at all — checksum verification,
+unpacking, the safety copy and the replacement script: a lie by meaning. Those steps now say
+"**stage: …**" ("stage: Checksum verification", "stage: Unpacking the archive", "stage: Safety copy
+of the current panel", "stage: Replacement script"), and the panel mentions the file size **only**
+while downloading — the checksum file, the panel archive and the release installer — where the size
+matters.
+
+### "Peak hours: checked" — two dates, each labelled
+
+The balance card showed **one** date — from the DSH server profile — and the person read it as the
+date of **their own** check, even though the panel parses prices by itself every day. Now there are
+**two** lines: the panel's own — "Peak hours: checked 12.10.2026" (when the panel parsed prices; if
+it has not, "Peak hours: not checked yet", and the profile date is **not** substituted for it) —
+and the profile one on its own line with the source named: "date from the DSH server profile:
+24.09.2026".
+
+**Under the hood (no visible effect):** checks are now **2164** (was 2153); dictionaries —
+**1328 keys × 3 languages** (was 1325). The engine and its set are untouched: the verified default
+version is still `0.2.1-rc.2`. Build — 0 warnings / 0 errors; the personal-data, encoding and
+dictionary guards — 0.
+
 ## 2.3.0 - 2026-10-20
 
 **The default DSH server version is now the 0.2.x line: `0.2.1-rc.2`.** The panel installs it with the

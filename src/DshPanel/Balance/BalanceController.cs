@@ -3,6 +3,7 @@ using Avalonia.Threading;
 using DshPanel.Agents;
 using DshPanel.Isolation;
 using DshPanel.Peak;
+using DshPanel.Pricing;
 using DshPanel.Settings;
 using DshPanel.Shell;
 
@@ -105,14 +106,28 @@ public interface IBalanceControl
     string NextText { get; }
 
     /// <summary>
-    /// КОРОТКАЯ строка главного окна: «Пики: проверено 24.09.2026» — когда окна пика проверены.
+    /// СВОЯ дата проверки цен — та, когда страницу цен разбирала САМА панель
+    /// (<see cref="PanelSettings.PricingCheckedAt"/>): «Пики: проверено 19.10.2026».
     ///
-    /// Слова владельца 27.09.2026: *«Там где написано „окна пика“, проверено и дата с временем
-    /// нужно… остальная информация не нужна в принципе»*. Поэтому здесь НЕТ ни источника (URL),
-    /// ни расписания, ни дней недели: они остались в настройках и в отдельном окне
-    /// «Пики и тарифы» (там работает <see cref="PeakDecisions.SourceText"/>).
+    /// ⚠️ **Зачем отдельно от профиля (замечание владельца 20.10.2026, F-5, вариант «б»).**
+    /// Прежде здесь стояла дата из профиля движка (<see cref="AgentProfile.PricingChecked"/>,
+    /// сегодня 24.09.2026), а панель с тех пор разбирает цены сама — ежедневно
+    /// (`PricingController`, отметка `PanelSettings.PricingCheckedAt`). Человек читал ЧУЖУЮ дату
+    /// как дату СВОЕЙ проверки. Теперь у панели своя строка, у профиля — своя с подписью источника
+    /// (<see cref="PeakProfileCheckedText"/>).
+    ///
+    /// Своей отметки ещё нет (панель не разбирала страницу) — честное «не проверяли»
+    /// (<see cref="PanelStrings.PeakCheckedNever"/>); подставлять дату профиля вместо своей нельзя.
     /// </summary>
     string PeakCheckedText { get; }
+
+    /// <summary>
+    /// Дата проверки цен ИЗ ПРОФИЛЯ СЕРВЕРА DSH — ОТДЕЛЬНОЙ строкой и с подписью источника:
+    /// «дата из профиля сервера DSH: 24.09.2026». Это НЕ дата проверки панели, и одна строка на обе
+    /// дала бы человеку неверное чтение (замечание владельца 20.10.2026, F-5).
+    /// Пусто — профиль даты не несёт: тогда строки нет (в живом профиле дата есть).
+    /// </summary>
+    string PeakProfileCheckedText { get; }
 
     /// <summary>
     /// Тон состояния баланса — тот же, что у строки агента в меню значка: баланс известен —
@@ -284,15 +299,45 @@ public sealed class BalanceController : IBalanceControl, IDisposable
     public string NextText => PeakTable.NextText(Peak);
 
     /// <summary>
-    /// Короткая строка «когда таблица цен проверена» — из ОДНОЙ строки словаря и решения
-    /// <see cref="PeakDecisions.CheckedText"/>: дату приводит к читаемому виду чистая функция,
-    /// а не контроллер.
+    /// СВОЯ строка «когда таблица цен проверена» — из отметки САМОЙ панели
+    /// (<see cref="PanelSettings.PricingCheckedAt"/>) и решения
+    /// <see cref="PricingDecisions.CheckedDateText"/>: дату приводит к читаемому виду чистая
+    /// функция, а не контроллер.
+    ///
+    /// Своей отметки нет — «Пики: не проверяли» (<see cref="PanelStrings.PeakCheckedNever"/>),
+    /// а НЕ дата профиля: человек читает эту строку как дату своей проверки, и подставлять туда
+    /// чужую значит врать (замечание владельца 20.10.2026, F-5).
     /// </summary>
-    public string PeakCheckedText =>
-        string.Format(
-            CultureInfo.CurrentCulture,
-            PanelStrings.PeakCheckedFormat,
-            PeakDecisions.CheckedText(Agent));
+    public string PeakCheckedText
+    {
+        get
+        {
+            var own = PricingDecisions.CheckedDateText(_settings().PricingCheckedAt);
+
+            return own.Length > 0
+                ? string.Format(CultureInfo.CurrentCulture, PanelStrings.PeakCheckedFormat, own)
+                : PanelStrings.PeakCheckedNever;
+        }
+    }
+
+    /// <summary>
+    /// Дата проверки цен из ПРОФИЛЯ СЕРВЕРА DSH — отдельной строкой и с подписью источника
+    /// («дата из профиля сервера DSH: 24.09.2026»): это не дата проверки панели.
+    ///
+    /// Профиль даты не несёт (правят руками) — строка пустая, и окно её не показывает: подпись
+    /// источника без даты читалась бы как «дата есть, но неизвестно какая».
+    /// </summary>
+    public string PeakProfileCheckedText
+    {
+        get
+        {
+            var profile = PeakDecisions.CheckedText(Agent);
+
+            return profile.Length > 0
+                ? string.Format(CultureInfo.CurrentCulture, PanelStrings.PeakProfileCheckedFormat, profile)
+                : string.Empty;
+        }
+    }
 
     /// <summary>
     /// Тон строки баланса — то же решение, что у строки агента в меню значка

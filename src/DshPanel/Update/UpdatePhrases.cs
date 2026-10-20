@@ -248,6 +248,24 @@ public static class UpdateStageLines
     /// <summary>Есть ли у этого этапа своя подпись.</summary>
     public static bool Knows(UpdateStage stage) => Text(stage).Length > 0;
 
+    /// <summary>
+    /// БЫВАЮТ ЛИ У ЭТАПА ПРОЦЕНТЫ — и это свойство САМОГО ЭТАПА, а не числа, которое пришло
+    /// с ним: иначе правило выбора формулировки пришлось бы выводить из «Total меньше нуля»,
+    /// и один и тот же этап в двух прогонах получал бы разные слова про разное.
+    ///
+    /// Проценты есть только у СКАЧИВАНИЯ: сервер называет размер, и «Архив панели: 42 %» честно
+    /// говорит, сколько принято. У сверки контрольной суммы, распаковки, страховочной копии
+    /// и записи сценария размера нет вовсе — и «размер файла неизвестен» там было ложью
+    /// по смыслу (замечание владельца 20.10.2026, пункт 3 пакета 2.3.1). Такой этап называется
+    /// словами «этап: …» — без обещания процентов, которых не будет.
+    /// </summary>
+    public static bool HasPercent(UpdateStage stage) => stage switch
+    {
+        UpdateStage.Sums or UpdateStage.Archive or UpdateStage.Setup => true,
+        UpdateStage.Verify or UpdateStage.Unpack or UpdateStage.Backup or UpdateStage.Script => false,
+        _ => false,
+    };
+
     /// <summary>Подпись этапа. Незнакомое значение — пустая строка: выдумывать этап нельзя.</summary>
     public static string Text(UpdateStage stage) => stage switch
     {

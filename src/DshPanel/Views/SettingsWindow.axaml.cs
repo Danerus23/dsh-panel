@@ -1,6 +1,7 @@
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
@@ -2036,6 +2037,55 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         UpdateReplaceButton.IsEnabled = prepared;
     }
 
+    /// <summary>
+    /// ПОДВЕСТИ КАРТОЧКУ ЗАМЕНЫ К ГЛАЗАМ И ПОСТАВИТЬ НА НЕЁ ФОКУС — после УСПЕШНОЙ подготовки.
+    ///
+    /// **От какого случая** (пункт 1 владельца 20.10.2026; класс — живое обновление
+    /// 2.2.1 → 2.3.0): после «Скачать и подготовить» кнопка гаснет, а кнопка «Обновить
+    /// и перезапустить панель» оказывается за краем окна — владелец решил, что обновление
+    /// сломалось. Одного переноса карточки под ряд кнопок мало: окно настроек тянется до
+    /// `MinHeight 420`, и в нём места может не хватить. Норма банка (`60-states.md` §7):
+    /// **действие, появившееся после шага, видно без прокрутки; не помещается — панель
+    /// прокручивает к нему и ставит фокус.**
+    ///
+    /// **Почему фокус — на карточку, а не на её кнопку** (`60-states.md` §12(5), вариант А):
+    /// кнопка замены необратима — панель закрывается и подменяется, — и держать её под Enter
+    /// сразу после шага значило бы дать одному нажатию запустить замену. Карточка `Focusable`
+    /// и в обходе стоит перед кнопкой замены: читалка скажет, что появилось, а Enter/Space
+    /// на карточке ничего не делают.
+    ///
+    /// ⚠️ **Фокус ставится «с клавиатуры»** (<see cref="NavigationMethod.Directional"/>): только
+    /// тогда каркас зажигает `:focus-visible` и кольцо фокуса карточки видно. Замер дизайн-лидера
+    /// 20.10.2026: `Focusable` + `Focus()` без этого кадр НЕ менял — фокус был невидим.
+    ///
+    /// ⚠️ **Прокрутка откладывается до конца прохода вёрстки** — как у плана наката в окне копий
+    /// (`BackupWindow.ShowPlanOnScreen`): карточка только что стала видимой, вёрстка её ещё
+    /// не измерила, и прямой `BringIntoView()` ушёл бы в `ScrollViewer` со старыми координатами.
+    /// </summary>
+    private void RevealReplaceCard()
+    {
+        // Человек ушёл в другой раздел (или окно закрыли) — трогать органы нечего: карточка
+        // скрыта, фокуса у неё не будет, а прокручивать чужой раздел нельзя.
+        if (!IsVisible || !UpdateSectionPanel.IsVisible) return;
+
+        UpdateReplaceCard.Focus(NavigationMethod.Directional);
+
+        if (!UiThread.PostTo(
+                _ui,
+                () =>
+                {
+                    if (!UpdateReplaceCard.IsVisible) return;
+
+                    UpdateReplaceCard.BringIntoView();
+                },
+                DispatcherPriority.Loaded))
+        {
+            // Ветка НЕДОСТИЖИМА по конструкции (_ui non-nullable), но названа вслух: здесь
+            // теряется не занятость окна, а прокрутка к появившемуся действию.
+            PanelLog.Write("ОКНО НАСТРОЕК: отложенная прокрутка к карточке замены не отправлена — нитка интерфейса окна недоступна");
+        }
+    }
+
     /// <summary>«Проверить сейчас»: суточный гейт не спрашивается — человек попросил.</summary>
     public void CheckUpdateNow() => _update?.Check();
 
@@ -2089,6 +2139,10 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         _updateBusy = true;
         _updatePrepared = null;
         _updateStatus = string.Empty;
+
+        // Новая попытка начинается с ПУСТОЙ строки хода: иначе после отказа на экране до первого
+        // сообщения движка висела бы строка прошлой попытки, и человек читал бы её как текущую.
+        ClearProgress();
         RenderUpdateSection();
 
         Task.Run(() =>
@@ -2103,7 +2157,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
                 {
                     _updateStatus = $"{error.GetType().Name}: {error.Message}";
                     _updateBusy = false;
-                    UpdateProgressBar.IsVisible = false;
+                    ClearProgress();
                     RenderUpdateSection();
                 });
             }
@@ -2146,8 +2200,18 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
             }
 
             _updateBusy = false;
-            UpdateProgressBar.IsVisible = false;
+
+            // Ход кончился ЛЮБЫМ исходом — успехом и отказом одинаково: строка хода очищается,
+            // полоса прогресса прячется. Прежде строка оставалась на экране («висит» после
+            // подготовки — замечание владельца 20.10.2026), и последнее «50 %» читалось как
+            // продолжающаяся работа. Вызов ОДИН на оба исхода: второй такой строки в разделе
+            // быть не должно — разойдясь, успех и отказ показывали бы разное про одно и то же.
+            ClearProgress();
             RenderUpdateSection();
+
+            // Появилось новое действие (карточка замены) — подвести его к глазам и поставить на него
+            // фокус. Только на успехе: у отказа карточки нет, и подводить нечего.
+            if (preparation.Ok) RevealReplaceCard();
         });
     }
 
@@ -2159,6 +2223,27 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         UpdateProgressBar.IsIndeterminate = progress.Percent < 0;
 
         if (progress.Percent >= 0) UpdateProgressBar.Value = progress.Percent;
+    }
+
+    /// <summary>
+    /// УБРАТЬ ХОД С ЭКРАНА — ОДНО МЕСТО для всех исходов попытки: строка хода пуста, полоса
+    /// прогресса не видна.
+    ///
+    /// **Зачем отдельной дверью.** Требование владельца 20.10.2026: после подготовки строка хода
+    /// «висит» — человек видит последний этап и проценты уже после того, как работа кончилась,
+    /// и читает это как продолжающуюся работу. Правило одно на успех, отказ и исключение фоновой
+    /// задачи: разойдясь по веткам, они однажды показали бы в одном исходе пустую строку, а в
+    /// другом — застывшее «50 %». Никаких новых слов здесь нет: пустая строка и скрытая полоса.
+    ///
+    /// ⚠️ **Только КОНЕЦ попытки, не любая перерисовка.** Ход по-прежнему показывается, пока
+    /// работа идёт (<see cref="ReportProgress"/>): очистка, позванная из
+    /// <see cref="RenderUpdateSection"/>, стирала бы строку на каждом изменении состояния и
+    /// превратила бы «видно, что делается» в молчание.
+    /// </summary>
+    private void ClearProgress()
+    {
+        UpdateProgressText.Text = string.Empty;
+        UpdateProgressBar.IsVisible = false;
     }
 
     /// <summary>

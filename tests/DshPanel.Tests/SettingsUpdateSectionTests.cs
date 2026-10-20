@@ -153,11 +153,18 @@ public class SettingsUpdateSectionTests
     /// </summary>
     private sealed class FakeInstall : IUpdateInstall
     {
-        public FakeInstall(bool allowed = true, UpdatePreparation? answer = null, string launch = "")
+        public FakeInstall(
+            bool allowed = true,
+            UpdatePreparation? answer = null,
+            string launch = "",
+            Action? afterProgress = null,
+            Exception? failure = null)
         {
             Allowed = allowed;
             Answer = answer;
             LaunchError = launch;
+            AfterProgress = afterProgress;
+            Failure = failure;
         }
 
         public bool Allowed { get; }
@@ -166,6 +173,20 @@ public class SettingsUpdateSectionTests
         public UpdatePreparation? Answer { get; set; }
 
         public string LaunchError { get; }
+
+        /// <summary>
+        /// Зовётся СРАЗУ ПОСЛЕ сообщения о ходе и ДО ответа: проверке нужно увидеть состояние
+        /// «работа идёт» тем же путём, каким его видит человек. Иначе «в процессе — как было»
+        /// нечем опровергнуть, и очистка, позванная на каждой перерисовке, прошла бы незамеченной.
+        /// </summary>
+        public Action? AfterProgress { get; }
+
+        /// <summary>
+        /// Исключение ВМЕСТО ответа — беда, от которой заведена ветка <c>catch</c> в
+        /// <c>SettingsWindow.PrepareUpdate</c>. Настоящий движок бросает при неожиданности
+        /// (диск, права, разбор), и ход подготовки обязан исчезнуть и здесь.
+        /// </summary>
+        public Exception? Failure { get; }
 
         public int Prepared { get; private set; }
 
@@ -182,6 +203,9 @@ public class SettingsUpdateSectionTests
             LastAssets = assets;
 
             progress?.Invoke(new UpdateProgress(UpdateStage.Archive, "DshPanel.zip", 50, 100));
+            AfterProgress?.Invoke();
+
+            if (Failure is not null) throw Failure;
 
             if (!Allowed)
             {
@@ -694,6 +718,435 @@ public class SettingsUpdateSectionTests
             Assert.DoesNotContain("person", staged, StringComparison.Ordinal);
 
             window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    // ------------------------------------------- ХОД ПОДГОТОВКИ КОНЧАЕТСЯ ЧИСТО
+    //
+    // ⚠️ Требование владельца 20.10.2026 (пункт 2 пакета 2.3.1): после успеха И отказа строка
+    // хода пуста, полоса прогресса не видна. Прежде последняя строка хода («скачивание: 50 %»)
+    // оставалась на экране и после ответа движка — человек читал застывшие проценты как
+    // продолжающуюся работу. Мутации названы у самых проверок.
+
+    /// <summary>Строка хода пуста, полоса прогресса скрыта — одно утверждение на оба исхода.</summary>
+    private static void AssertProgressCleared(SettingsWindow window, string outcome)
+    {
+        var line = window.FindControl<TextBlock>("UpdateProgressText")!;
+        var bar = window.FindControl<ProgressBar>("UpdateProgressBar")!;
+
+        Assert.Equal(string.Empty, line.Text ?? string.Empty);
+        Assert.False(bar.IsVisible, $"после {outcome} полоса прогресса осталась на экране");
+    }
+
+    /// <summary>
+    /// ПОСЛЕ УСПЕХА СТРОКА ХОДА ПУСТА, ПОЛОСА ПРОГРЕССА СКРЫТА. Идёт ЖИВЫМ путём: нажатие настоящей
+    /// кнопки, работа в фоне, готовый ответ — тот же шов, каким идёт человек.
+    ///
+    /// ⚠️ Мутация «не очищать после успеха» (финализация зовёт очистку только на отказе) падает
+    /// ИМЕННО здесь: до ответа движок уже назвал ход, значит строка была на экране.
+    /// </summary>
+    [AvaloniaFact]
+    public void После_успеха_строка_хода_пуста_и_полоса_прогресса_скрыта()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var install = new FakeInstall(answer: Prepared());
+            var window = Stand(dir, new FakeUpdate(), install);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.FindControl<Button>("UpdatePrepareButton")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            WaitFor(
+                () => window.UpdatePrepared is not null,
+                "нажатие «Скачать и подготовить» не дошло до готового ответа");
+
+            AssertProgressCleared(window, "успешной подготовки");
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ПОСЛЕ ОТКАЗА — ТО ЖЕ САМОЕ: строка хода пуста, полоса прогресса скрыта. Отказ здесь не
+    /// выдуман проверкой: движок сам отвечает отказом (у прогона нет права готовить замену), и
+    /// ход он называет ДО отказа — на экране успевает побывать и строка, и полоса.
+    ///
+    /// ⚠️ Мутация «не очищать после отказа» (финализация зовёт очистку только на успехе) падает
+    /// ИМЕННО здесь.
+    /// </summary>
+    [AvaloniaFact]
+    public void После_отказа_строка_хода_пуста_и_полоса_прогресса_скрыта()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var install = new FakeInstall(allowed: false, answer: Prepared());
+            var window = Stand(dir, new FakeUpdate(), install);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.PrepareNow();
+
+            Assert.Null(window.UpdatePrepared);
+            Assert.Equal(PanelStrings.UpdateRefusedLocked, window.UpdateStatusLine);
+            AssertProgressCleared(window, "отказа подготовки");
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ИСКЛЮЧЕНИЕ ФОНОВОЙ ЗАДАЧИ — ТОТ ЖЕ КОНЕЦ ХОДА: строка пуста, полоса скрыта. Прежде здесь
+    /// пряталась ТОЛЬКО полоса, и последняя строка хода висела рядом со словами беды — человек
+    /// читал застывший этап как «работа ещё идёт». Ветка <c>catch</c> в нажатии — единственный
+    /// путь, которым эта беда приходит.
+    ///
+    /// ⚠️ Мутация «не чистить ход на исключении» (убрать очистку из <c>catch</c>) падает здесь.
+    /// </summary>
+    [AvaloniaFact]
+    public void После_исключения_фоновой_задачи_строка_хода_пуста_и_полоса_прогресса_скрыта()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var install = new FakeInstall(
+                answer: Prepared(),
+                failure: new InvalidOperationException("сеть оборвалась"));
+            var window = Stand(dir, new FakeUpdate(), install);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.FindControl<Button>("UpdatePrepareButton")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            WaitFor(
+                () => window.UpdateStatusLine.Contains("InvalidOperationException", StringComparison.Ordinal),
+                "исключение фоновой подготовки не дошло до раздела словами");
+
+            AssertProgressCleared(window, "исключения фоновой задачи");
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// В ПРОЦЕССЕ — КАК БЫЛО: пока движок называет ход, строка хода и полоса прогресса видны.
+    /// Утверждение стережёт другую крайность, чем две проверки выше: очистка, позванная на каждой
+    /// перерисовке раздела (а не в конце попытки), стёрла бы ход сразу же — и «видно, что делается»
+    /// превратилось бы в молчание.
+    /// </summary>
+    [AvaloniaFact]
+    public void В_процессе_подготовки_строка_хода_и_полоса_прогресса_видны()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            SettingsWindow? window = null;
+            string? midLine = null;
+            var midBar = false;
+
+            var install = new FakeInstall(answer: Prepared(), afterProgress: () =>
+            {
+                midLine = window?.FindControl<TextBlock>("UpdateProgressText")?.Text;
+                midBar = window?.FindControl<ProgressBar>("UpdateProgressBar")?.IsVisible == true;
+            });
+
+            window = Stand(dir, new FakeUpdate(), install);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.PrepareNow();
+
+            Assert.False(
+                string.IsNullOrEmpty(midLine),
+                "в процессе подготовки строка хода пуста — человек не видит, что делается");
+            Assert.True(midBar, "в процессе подготовки полоса прогресса скрыта");
+
+            // И после ответа — чисто: это тот же конец попытки, что и у успеха.
+            AssertProgressCleared(window, "подготовки");
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    // ------------------------------------------- КАРТОЧКА ЗАМЕНЫ ВИДНА БЕЗ РУЧНОЙ ПРОКРУТКИ
+    //
+    // ⚠️ Требование владельца 20.10.2026 (пункт 1 пакета 2.3.1; класс — живое обновление
+    // 2.2.1 → 2.3.0): после успешной подготовки карточка замены видна БЕЗ РУЧНОЙ ПРОКРУТКИ.
+    // Прежде она стояла после «Что нового»: верх 702 при видимой области 706 — человек видел
+    // 4 точки рамки и решал, что обновление сломалось. Теперь карточка стоит под рядом кнопок,
+    // выше заметок, а панель ещё и прокручивает к ней и ставит на неё фокус.
+    //
+    // Настоящую видимость подтверждает кадр дизайн-лидера (`_team\231\u0-design.md` §4.4):
+    // он меряет то же число — верх карточки против `ScrollViewer.Viewport` — и после правки
+    // обязан сказать «ВИДНА БЕЗ ПРОКРУТКИ = ДА». Здесь тот же расчёт повторён проверками.
+
+    /// <summary>Карточка замены — тот самый орган, который появляется после подготовки.</summary>
+    private static Border ReplaceCard(SettingsWindow window) =>
+        window.FindControl<Border>("UpdateReplaceCard")!;
+
+    /// <summary>Панель раздела «Обновление» — карточки лежат в ней прямыми детьми.</summary>
+    private static StackPanel UpdatePanel(SettingsWindow window) =>
+        window.FindControl<StackPanel>("UpdateSectionPanel")!;
+
+    /// <summary>Карточка раздела, внутри которой лежит названный орган (Border — ребёнок панели).</summary>
+    private static Control CardContaining(SettingsWindow window, Control inside)
+    {
+        var panel = UpdatePanel(window);
+        Control? node = inside;
+
+        while (node is not null && !ReferenceEquals(node.Parent, panel))
+        {
+            node = node.Parent as Control;
+        }
+
+        Assert.NotNull(node);
+
+        return node!;
+    }
+
+    /// <summary>Геометрия карточки замены против видимой области прокрутки — число из кадра u0.</summary>
+    private static (double Top, double Bottom, double Viewport) ReplaceGeometry(SettingsWindow window)
+    {
+        var scroll = window.FindControl<ScrollViewer>("ContentScroll")!;
+        var card = ReplaceCard(window);
+        var top = card.TranslatePoint(new Point(0, 0), scroll) ?? default;
+
+        return (top.Y, top.Y + card.Bounds.Height, scroll.Viewport.Height);
+    }
+
+    /// <summary>
+    /// Заметки, из-за которых карточка «Что нового» занимает свою постоянную высоту (180): ровно
+    /// в этом состоянии дефект владельца и случился — у выпуска были заметки, и карточка замены
+    /// уезжала за нижний край. С пустыми заметками карточка короче и дефект «не помещается»
+    /// не воспроизводится вовсе.
+    /// </summary>
+    private static string Notes() =>
+        "## Что нового\n\n- Карточка замены видна без прокрутки\n- Строка хода очищается после шага";
+
+    /// <summary>
+    /// КАРТОЧКА ЗАМЕНЫ СТОИТ ДО «ЧТО НОВОГО» — перенос, ради которого заведён пункт 1.
+    /// Порядок меряется в ДЕРЕВЕ ЭЛЕМЕНТОВ, а не по координатам: координаты зависят от высоты окна
+    /// и темы, а порядок — это и есть решение («сразу под ряд кнопок, выше заметок»).
+    ///
+    /// ⚠️ Мутация «вернуть карточку под заметки» падает ИМЕННО здесь (и следом — проверка
+    /// геометрии: карточка снова уезжает за нижний край).
+    /// </summary>
+    [AvaloniaFact]
+    public void Карточка_замены_стоит_до_заметок_о_выпуске()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = Stand(dir, new FakeUpdate(), new FakeInstall(answer: Prepared()));
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.PrepareNow();
+            PanelTestStand.Settle();
+
+            Assert.NotNull(window.UpdatePrepared);
+
+            var panel = UpdatePanel(window);
+            var card = ReplaceCard(window);
+            var notes = CardContaining(window, window.FindControl<ScrollViewer>("UpdateNotesScroll")!);
+
+            Assert.Equal(panel, card.Parent);
+            Assert.Equal(panel, notes.Parent);
+            Assert.True(
+                panel.Children.IndexOf(card) < panel.Children.IndexOf(notes),
+                "карточка замены стоит ПОСЛЕ «Что нового» — её снова придётся искать прокруткой");
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ПОСЛЕ ПОДГОТОВКИ КАРТОЧКА ВИДНА БЕЗ ПРОКРУТКИ — в обычном окне, человек не трогал колесо.
+    /// Меряется число: верх карточки и её низ против `ScrollViewer.Viewport`, в исходном положении
+    /// прокрутки (сдвиг 0).
+    ///
+    /// ⚠️ Мутация «вернуть карточку под заметки» краснеет: низ карточки оказывается ниже области.
+    /// </summary>
+    [AvaloniaFact]
+    public void Карточка_замены_видна_без_прокрутки_после_подготовки()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            // Заметки — не пустые: именно в этом состоянии дефект владельца и случился.
+            var window = Stand(dir, new FakeUpdate(notes: Notes()), new FakeInstall(answer: Prepared()));
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.PrepareNow();
+            PanelTestStand.Settle();
+
+            Assert.NotNull(window.UpdatePrepared);
+
+            // Исходное положение человека: раздел открыт сверху, колесо не трогали.
+            var scroll = window.FindControl<ScrollViewer>("ContentScroll")!;
+            scroll.Offset = new Vector(0, 0);
+            PanelTestStand.Settle();
+
+            Assert.Equal(0, scroll.Offset.Y);
+
+            var (top, bottom, viewport) = ReplaceGeometry(window);
+
+            Assert.True(
+                top >= 0 && bottom <= viewport,
+                $"карточка замены: верх {top:0.#}, низ {bottom:0.#} при видимой области {viewport:0.#} — без прокрутки не видна");
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// В ОКНЕ, ГДЕ ПЕРЕНОСА НЕ ХВАТАЕТ, ПАНЕЛЬ ПРОКРУЧИВАЕТ К КАРТОЧКЕ САМА. Окно настроек тянется
+    /// до `MinHeight 420`; проверка ставит его в эту высоту и убеждается, что после подготовки
+    /// сдвиг прокрутки ненулевой, а карточка попала в видимую область целиком.
+    ///
+    /// ⚠️ Мутация «не прокручивать» (убрать `BringIntoView`) краснеет ИМЕННО здесь: в обычном окне
+    /// карточка видна и без прокрутки, и эта проверка — единственная, где прокрутка обязательна.
+    /// </summary>
+    [AvaloniaFact]
+    public void В_низком_окне_панель_сама_прокручивает_к_карточке_замены()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = Stand(dir, new FakeUpdate(), new FakeInstall(answer: Prepared()));
+
+            // Минимальная высота окна настроек: столько человек может отвести панели.
+            window.Height = 420;
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            var scroll = window.FindControl<ScrollViewer>("ContentScroll")!;
+
+            Assert.True(
+                scroll.Extent.Height > scroll.Viewport.Height,
+                $"прокручивать нечего: Extent={scroll.Extent.Height:0.#}, Viewport={scroll.Viewport.Height:0.#}");
+
+            scroll.Offset = new Vector(0, 0);
+            PanelTestStand.Settle();
+
+            window.PrepareNow();
+            PanelTestStand.Settle();
+
+            Assert.NotNull(window.UpdatePrepared);
+
+            var (top, bottom, viewport) = ReplaceGeometry(window);
+
+            Assert.True(scroll.Offset.Y > 0, "панель не прокрутила к карточке замены: сдвиг прокрутки 0");
+            Assert.True(
+                top >= 0 && bottom <= viewport,
+                $"после автопрокрутки карточка замены: верх {top:0.#}, низ {bottom:0.#} при видимой области {viewport:0.#}");
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ПОСЛЕ ПОДГОТОВКИ ФОКУС — НА КАРТОЧКЕ, И КОЛЬЦО ФОКУСА ВИДНО. Это норма банка
+    /// (`60-states.md` §7: действие после шага «панель прокручивает к нему и ставит фокус»)
+    /// и замер дизайн-лидера: `Focusable` + `Focus()` без видимого кольца кадр НЕ менял,
+    /// а это провал WCAG 2.4.7 / F78.
+    ///
+    /// ⚠️ Кольцо меряется КАДРОМ, а не только свойством: у карточки и без фокуса есть тень, поэтому
+    /// «тень есть» ничего не доказывает. Кадр с фокусом обязан отличаться от кадра без фокуса —
+    /// иначе человек фокуса не видит.
+    ///
+    /// ⚠️ Мутации, которые обязаны упасть здесь: «не ставить фокус» · «убрать правило кольца».
+    /// </summary>
+    [AvaloniaFact]
+    public void После_подготовки_фокус_на_карточке_замены_и_кольцо_видно()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = Stand(dir, new FakeUpdate(), new FakeInstall(answer: Prepared()));
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.PrepareNow();
+            PanelTestStand.Settle();
+
+            var card = ReplaceCard(window);
+
+            Assert.Same(card, window.FocusManager!.GetFocusedElement());
+            Assert.Contains(":focus-visible", card.Classes);
+
+            // КОЛЬЦО НАРИСОВАНО, а не только свойство: полоска у ЛЕВОГО края карточки. Без фокуса
+            // там подложка карточки, с фокусом — акцентная тень кольца, поэтому разных цветов
+            // в полоске становится больше.
+            var at = card.TranslatePoint(new Point(0, 0), window) ?? default;
+            var strip = new Rect(at.X + 1, at.Y + 12, 3, 20);
+            var ringedColors = PanelTestStand.ColorsIn(window, strip);
+            var ringedShadow = card.BoxShadow;
+            var height = card.Bounds.Height;
+
+            // Снять фокус — карточка обязана перестать рисовать кольцо: иначе «фокус виден»
+            // не доказано, а кадр одинаков с фокусом и без него.
+            window.FocusManager!.Focus(null);
+            PanelTestStand.Settle();
+
+            Assert.False(card.IsFocused);
+            Assert.DoesNotContain(":focus-visible", card.Classes);
+            Assert.NotEqual(ringedShadow, card.BoxShadow);
+
+            var plainColors = PanelTestStand.ColorsIn(window, strip);
+
+            Assert.True(
+                ringedColors > plainColors,
+                $"кольца фокуса на карточке не видно: цветов в полоске {plainColors} без фокуса и {ringedColors} с фокусом");
+
+            // И РАЗМЕР НЕ ПОЕХАЛ: кольцо — тень, раскладку оно не двигает.
+            Assert.Equal(height, card.Bounds.Height);
         }
         finally
         {

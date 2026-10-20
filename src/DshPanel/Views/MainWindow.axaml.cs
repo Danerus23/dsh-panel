@@ -544,7 +544,13 @@ public partial class MainWindow : Window
         BalanceDetailText.Text = _balance.DetailText;
         PeakText.Text = _balance.PeakText;
         PeakNextText.Text = _balance.NextText;
+
+        // ДВЕ ДАТЫ — ДВЕ СТРОКИ: своя (когда цены разбирала панель) и профильная с подписью
+        // источника. Одна строка на обе дала бы человеку неверное чтение (F-5, 20.10.2026).
         PeakScheduleText.Text = _balance.PeakCheckedText;
+        PeakProfileText.Text = _balance.PeakProfileCheckedText;
+        PeakProfileText.IsVisible = PeakProfileText.Text.Length > 0;
+
         RefreshBalanceButton.IsEnabled = _balance.Allowed && !_balance.Busy;
 
         // ЦВЕТ СОСТОЯНИЯ: тон берётся у тех же решений, что красят строки меню значка

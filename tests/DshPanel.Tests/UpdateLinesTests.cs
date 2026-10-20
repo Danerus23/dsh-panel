@@ -161,8 +161,8 @@ public class UpdateLinesTests
     }
 
     /// <summary>
-    /// ХОД ПОДГОТОВКИ НАЗЫВАЕТ ЭТАП И ПРОЦЕНТЫ, а когда размер файла не назван — говорит
-    /// «размер неизвестен»: «0 %» вместо этого показало бы, что загрузка встала.
+    /// ХОД ПОДГОТОВКИ НАЗЫВАЕТ ЭТАП И ПРОЦЕНТЫ, а когда размер файла не назван — у СКАЧИВАНИЯ
+    /// говорит «размер неизвестен»: «0 %» вместо этого показало бы, что загрузка встала.
     /// </summary>
     [Fact]
     public void Ход_подготовки_называет_этап_и_проценты()
@@ -176,6 +176,73 @@ public class UpdateLinesTests
 
         Assert.Contains(UpdateStageLines.Text(UpdateStage.Archive), unknown, StringComparison.Ordinal);
         Assert.DoesNotContain("0 %", unknown, StringComparison.Ordinal);
+
+        // ФРАЗА ПРО РАЗМЕР ОСТАЁТСЯ У СКАЧИВАНИЯ: там дело именно в размере, который сервер
+        // не назвал (слово владельца 20.10.2026: «остаётся только для скачивания»).
+        Assert.Contains("размер файла", unknown, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// У ЭТАПОВ БЕЗ ПРОЦЕНТОВ СЛОВ ПРО РАЗМЕР ФАЙЛА НЕТ — только «этап: …». Размер у сверки
+    /// контрольной суммы, распаковки, страховочной копии и записи сценария ни при чём, и прежняя
+    /// фраза «размер файла неизвестен» на них была ложью по смыслу (слово владельца 20.10.2026,
+    /// пункт 3 пакета 2.3.1).
+    ///
+    /// ⚠️ Группы этапов названы здесь ЦЕЛИКОМ, а их сумма сверена с числом значений
+    /// <see cref="UpdateStage"/>: новый этап в перечислении обязан попасть в одну из групп,
+    /// а не проскользнуть мимо правила.
+    ///
+    /// ⚠️ Мутации, которые обязаны упасть ИМЕННО здесь: **«вернуть старую формулировку на этапах
+    /// без процентов»** (строка пошла бы через ключ «размер файла неизвестен») и **«перевернуть
+    /// правило выбора»** (`HasPercent` отвечает не про те этапы).
+    /// </summary>
+    [Fact]
+    public void Этапы_без_процентов_не_говорят_про_размер_файла()
+    {
+        var withoutPercent = new[]
+        {
+            UpdateStage.Verify, UpdateStage.Unpack, UpdateStage.Backup, UpdateStage.Script,
+        };
+
+        var downloads = new[] { UpdateStage.Sums, UpdateStage.Archive, UpdateStage.Setup };
+
+        Assert.Equal(
+            Enum.GetValues<UpdateStage>().Length,
+            withoutPercent.Length + downloads.Length);
+
+        // У этапов без процентов — «этап: …» и НИ СЛОВА про размер.
+        foreach (var stage in withoutPercent)
+        {
+            var text = UpdateLines.ProgressLine(new UpdateProgress(stage, "update.cmd", 0, -1));
+
+            Assert.False(
+                UpdateStageLines.HasPercent(stage),
+                $"этап {stage}: процентов у него нет, а правило говорит, что есть");
+            Assert.Contains(UpdateStageLines.Text(stage), text, StringComparison.Ordinal);
+            Assert.StartsWith(
+                PanelStrings.UpdateProgressStageFormat.Split('{')[0].Trim(),
+                text,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("размер файла", text, StringComparison.Ordinal);
+        }
+
+        // У скачивания при неизвестном размере — прежняя честная фраза, и никакого «этап:».
+        foreach (var stage in downloads)
+        {
+            var text = UpdateLines.ProgressLine(new UpdateProgress(stage, "DshPanel.zip", 0, -1));
+
+            Assert.True(
+                UpdateStageLines.HasPercent(stage),
+                $"этап {stage}: он скачивание, а правило говорит, что процентов нет");
+            Assert.Contains("размер файла", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("этап:", text, StringComparison.Ordinal);
+        }
+
+        // И то самое имя из слова владельца: на «сценарии замены» слов про размер файла нет.
+        var script = UpdateLines.ProgressLine(new UpdateProgress(UpdateStage.Script, "update.cmd", 0, -1));
+
+        Assert.Contains(UpdateStageLines.Text(UpdateStage.Script), script, StringComparison.Ordinal);
+        Assert.DoesNotContain("размер файла", script, StringComparison.Ordinal);
     }
 
     /// <summary>

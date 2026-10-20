@@ -493,6 +493,11 @@ public sealed class ShotServer : IServerControl
 /// ⚠️ **Счёта владельца здесь нет и быть не может:** <see cref="Result"/> — литерал, ключ модели
 /// не читается вовсе, в сеть никто не ходит. Окна пика считаются ЧИСТОЙ функцией по расписанию
 /// агента — им сеть и не нужна.
+///
+/// ⚠️ **Дат проверки — ДВЕ, как и в живом окне** (замечание владельца 20.10.2026, F-5):
+/// своя — образцовая отметка разбора страницы цен (<see cref="ShotSamples.CheckedAt"/>, формат
+/// <c>dd.MM.yyyy</c> через настоящее решение), профильная — дата из образцового профиля агента,
+/// с подписью источника.
 /// </summary>
 public sealed class ShotBalance : IBalanceControl
 {
@@ -540,9 +545,16 @@ public sealed class ShotBalance : IBalanceControl
 
     public string NextText => PeakTable.NextText(Peak);
 
+    /// <summary>Своя дата на кадре — из образцовой отметки, тем же решением, что и в живом окне.</summary>
     public string PeakCheckedText => string.Format(
         System.Globalization.CultureInfo.CurrentCulture,
         PanelStrings.PeakCheckedFormat,
+        PricingDecisions.CheckedDateText(PricingDecisions.Stamp(ShotSamples.CheckedAt)));
+
+    /// <summary>Дата из профиля движка — отдельной строкой и с подписью источника, как в окне.</summary>
+    public string PeakProfileCheckedText => string.Format(
+        System.Globalization.CultureInfo.CurrentCulture,
+        PanelStrings.PeakProfileCheckedFormat,
         PeakDecisions.CheckedText(Agent));
 
     public TrayTone Tone => TrayTone.Good;

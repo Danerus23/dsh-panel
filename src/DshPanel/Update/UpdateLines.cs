@@ -168,14 +168,29 @@ public static class UpdateLines
     }
 
     /// <summary>
-    /// Ход подготовки словами: этап и проценты. Размер файла сервер не назвал — процентов нет,
-    /// и «0 %» вместо честного «размер неизвестен» показало бы, что загрузка встала.
+    /// Ход подготовки словами — ОДНО правило выбора формулировки, и выбирается оно ПО ШАГУ
+    /// (<see cref="UpdateStageLines.HasPercent"/>):
+    ///
+    /// * у СКАЧИВАНИЯ проценты есть; сервер размер не назвал — говорим «размер файла неизвестен»,
+    ///   потому что дело именно в размере, и «0 %» показало бы, что загрузка встала;
+    /// * у этапов БЕЗ процентов (сверка контрольной суммы, распаковка, страховочная копия,
+    ///   сценарий замены) размер файла ни при чём — говорим «этап: …». Прежде здесь стояло то же
+    ///   «размер файла неизвестен», и это было ложью по смыслу (замечание владельца 20.10.2026,
+    ///   пункт 3 пакета 2.3.1).
+    ///
+    /// Текстов у панели два источника, как и раньше: слова — в словарях трёх языков, выбор — здесь.
     /// </summary>
     public static string ProgressLine(UpdateProgress progress)
     {
         ArgumentNullException.ThrowIfNull(progress);
 
         var stage = UpdateStageLines.Text(progress.Stage);
+
+        if (!UpdateStageLines.HasPercent(progress.Stage))
+        {
+            return string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateProgressStageFormat, stage);
+        }
+
         var percent = progress.Percent;
 
         return percent < 0

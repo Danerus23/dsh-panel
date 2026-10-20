@@ -97,6 +97,23 @@ public static class PricingDecisions
         return at.ToLocalTime().ToString("dd.MM.yyyy, HH:mm", CultureInfo.CurrentCulture);
     }
 
+    /// <summary>
+    /// ТОЛЬКО ДАТА проверки цен — «19.10.2026» — для короткой строки главного окна
+    /// (<see cref="DshPanel.Balance.BalanceController.PeakCheckedText"/>). Пусто — отметки нет: панель ещё
+    /// не разбирала страницу цен.
+    ///
+    /// ⚠️ Отдельно от <see cref="CheckedText"/>, а не «взять первые десять знаков»: формат — это
+    /// решение, и в окне истории цен время проверки нужно («28.09.2026, 14:32»), а в карточке
+    /// главного окна владелец просил дату (пункт 4 пакета 2.3.1 — формат <c>dd.MM.yyyy</c>).
+    /// Дата — МЕСТНАЯ: панель проверяла цены в то мгновение, которое было на часах человека.
+    /// </summary>
+    public static string CheckedDateText(string? stamp)
+    {
+        if (!TryParse(stamp, out var at)) return string.Empty;
+
+        return at.ToLocalTime().ToString("dd.MM.yyyy", CultureInfo.CurrentCulture);
+    }
+
     /// <summary>Разбор отметки; неразобранное (в том числе пустое) — «отметки нет».</summary>
     public static bool TryParse(string? stamp, out DateTimeOffset at) =>
         DateTimeOffset.TryParse(

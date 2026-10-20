@@ -105,7 +105,14 @@ public class BalanceTests
         public string DetailText => "пополнено 12.34";
         public string PeakText => PanelStrings.PeakOffPeak;
         public string NextText => "Пик начнётся через 2 ч 0 мин (13:00)";
-        public string PeakCheckedText => "Пики: проверено 24.09.2026";
+
+        /// <summary>Своя дата проверки цен — строка контроллера, здесь готовой.</summary>
+        public string PeakCheckedText => string.Format(
+            System.Globalization.CultureInfo.CurrentCulture, PanelStrings.PeakCheckedFormat, "19.10.2026");
+
+        /// <summary>Дата из профиля движка — отдельной строкой с подписью источника.</summary>
+        public string PeakProfileCheckedText => string.Format(
+            System.Globalization.CultureInfo.CurrentCulture, PanelStrings.PeakProfileCheckedFormat, "24.09.2026");
     }
 
     private static string TempDir() =>
@@ -891,6 +898,15 @@ public class BalanceTests
         // прежде здесь стояло полное расписание с источником. Теперь это ровно то, что дал
         // контроллер, — дата проверки и ничего больше.
         Assert.Equal(balance.PeakCheckedText, window.FindControl<TextBlock>("PeakScheduleText")!.Text);
+
+        // ⚠️ ДАТ ПРОВЕРКИ — ДВЕ, И ОНИ НЕ СЛИВАЮТСЯ (F-5, 20.10.2026): своя и профильная
+        // отдельными строками, вторая — с подписью источника. Одна строка на обе дала бы
+        // человеку неверное чтение.
+        Assert.Equal(balance.PeakProfileCheckedText, window.FindControl<TextBlock>("PeakProfileText")!.Text);
+        Assert.True(window.FindControl<TextBlock>("PeakProfileText")!.IsVisible, "дата профиля не показана");
+        Assert.NotEqual(
+            window.FindControl<TextBlock>("PeakScheduleText")!.Text,
+            window.FindControl<TextBlock>("PeakProfileText")!.Text);
 
         window.FindControl<Button>("RefreshBalanceButton")!
             .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));

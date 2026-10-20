@@ -3167,6 +3167,21 @@ public static class PanelStrings
     /// <summary>Короткая строка главного окна: «Пики: проверено 24.09.2026, 19:40».</summary>
     public static string PeakCheckedFormat => Loc.T(nameof(PeakCheckedFormat));
 
+    /// <summary>
+    /// Своей проверки цен ещё не было: «Пики: не проверяли». Подставлять вместо неё дату из профиля
+    /// движка нельзя — это дата ЧУЖОЙ проверки (замечание владельца 20.10.2026, F-5).
+    /// </summary>
+    public static string PeakCheckedNever => Loc.T(nameof(PeakCheckedNever));
+
+    /// <summary>
+    /// Дата проверки цен из профиля СЕРВЕРА DSH — ОТДЕЛЬНОЙ строкой и с подписью источника:
+    /// «дата из профиля сервера DSH: 24.09.2026». Это не дата проверки панели, и путать их нельзя.
+    ///
+    /// ⚠️ Слово «движок» в подписи не стоит: решение владельца 13.10.2026 — это жаргон, замена —
+    /// «Сервер DSH», и словарные строки для человека стережёт `WordingRulesTests`.
+    /// </summary>
+    public static string PeakProfileCheckedFormat => Loc.T(nameof(PeakProfileCheckedFormat));
+
     /// <summary>Кнопка-дверь в окно «Пики и тарифы».</summary>
     public static string PeakButton => Loc.T(nameof(PeakButton));
 
@@ -3520,6 +3535,12 @@ public static class PanelStrings
 
     /// <summary>Ход подготовки: «Архив панели: 42 %».</summary>
     public static string UpdateProgressFormat => Loc.T(nameof(UpdateProgressFormat));
+
+    /// <summary>
+    /// Ход подготовки у этапа БЕЗ процентов: «этап: Сценарий замены». Размера файла здесь нет —
+    /// у сверки суммы, распаковки, страховочной копии и записи сценария его не бывает.
+    /// </summary>
+    public static string UpdateProgressStageFormat => Loc.T(nameof(UpdateProgressStageFormat));
 
     /// <summary>Ход подготовки, когда размер файла неизвестен: процент был бы выдумкой.</summary>
     public static string UpdateProgressUnknownFormat => Loc.T(nameof(UpdateProgressUnknownFormat));

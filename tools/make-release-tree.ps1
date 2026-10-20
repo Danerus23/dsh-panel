@@ -59,6 +59,13 @@
 # сходится с `<Version>`, в ревизии нет `<Version>`, названы оба входа или ни одного).
 # «Неприменимо» — не «зелено» и не «красно».
 #
+# ⚠️ ПРАВКА 20.10.2026 (долг приёмки 2.3.0). Отказ «-Out внутри рабочего дерева репозитория» стоял
+# на сравнении строк БЕЗ разделителя каталога и ЛОЖНО срабатывал на соседнем каталоге с тем же
+# префиксом имени (`<repo>-sibling`); V 2.3.0 обходила это переименованием. Теперь сравнение —
+# `Test-PathInside` (общая функция ниже): нормализация `[IO.Path]::GetFullPath` + сравнение
+# с `DirectorySeparatorChar`, поэтому соседний префикс разрешён, а настоящий путь внутри
+# репозитория по-прежнему получает отказ. Тем же правилом проверяется опись против дерева выпуска.
+#
 # ЧЕГО ЭТОТ ИНСТРУМЕНТ НЕ ДЕЛАЕТ (названо, а не спрятано): не ставит тег и не пушит (только печатает
 # команды); не собирает установщик и архив раздачи (это следующий шаг выпуска); не проверяет смысл
 # README/CHANGELOG и свежесть кадров; не сверяет пары `(path, blob-sha)` с публичным клоном.
@@ -77,6 +84,45 @@ $ErrorActionPreference = 'Stop'
 
 $problems = @()
 $tempRoot = $null
+
+# ── «Путь лежит ВНУТРИ каталога» — сравнение С РАЗДЕЛИТЕЛЕМ (правка 2.3.1, 20.10.2026) ───────────
+#
+# ⚠️ ОТ КАКОГО СЛУЧАЯ. Здесь стояло `$Out.StartsWith($repoFull, …)` — сравнение БЕЗ разделителя
+# каталога. Соседний каталог с тем же префиксом имени (`<repo>-sibling`, `<repo>-x`) получал ЛОЖНЫЙ
+# отказ «-Out внутри рабочего дерева репозитория», и приёмка 2.3.0 обходила его переименованием.
+# `C:\work\repo` — НЕ родитель `C:\work\repo-sibling`, но сравнение строк без разделителя этого
+# не знает. Та же болезнь была у проверки описи: `<out>-manifest.txt` считался «внутри» дерева.
+#
+# ⚠️ РАЗДЕЛИТЕЛИ. Оба пути нормализуются `[IO.Path]::GetFullPath` (на Windows `/` становится `\`),
+# а хвостовой разделитель снимается: «C:\work\repo\» и «C:\work\repo» — один каталог. Поэтому
+# «C:\…/repo-sibling» и «C:\…\repo-sibling» ведут себя одинаково: отказ не зависит от того, каким
+# разделителем набран путь.
+#
+# ⚠️ ЧЕГО ФУНКЦИЯ НЕ ДЕЛАЕТ: не разворачивает симлинки/junction (ссылка внутрь репозитория не
+# распознаётся как «внутри») и сравнивает регистр так же, как сравнивал прежний код на Windows
+# (OrdinalIgnoreCase). Для отказа «-Out внутри рабочего дерева» этого достаточно: предмет — путь
+# на диске, а не физический объект за ссылкой.
+function Test-PathInside {
+    param(
+        [string]$Path,
+        [string]$Root
+    )
+
+    if (-not $Path -or -not $Root) { return $false }
+
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $pathFull = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+
+    if ($rootFull.Length -eq 0) { return $false }
+
+    # Корень диска («C:\») после TrimEnd стал бы «C:» — префикс с разделителем не собрать.
+    # Такой корень содержит всё на своём диске.
+    if ($rootFull.Length -eq 2 -and $rootFull[1] -eq ':') { return $true }
+
+    if ($pathFull.Equals($rootFull, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+
+    return $pathFull.StartsWith($rootFull + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)
+}
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Host 'неприменимо: git не найден в PATH — собирать не из чего'
@@ -291,7 +337,7 @@ try {
     if (-not $Out) { $Out = Join-Path (Split-Path -Parent $repoRoot) ('release-out-' + $projectVersion) }
     $Out = [IO.Path]::GetFullPath($Out)
     $repoFull = [IO.Path]::GetFullPath($repoRoot)
-    if ($Out.StartsWith($repoFull, [StringComparison]::OrdinalIgnoreCase)) {
+    if (Test-PathInside $Out $repoFull) {
         Write-Host ('СБОРКА НЕ ПОЙДЁТ: -Out внутри рабочего дерева репозитория («' + $Out + '») — дерево выпуска стало бы лишним путём в нём')
         exit 1
     }
@@ -306,7 +352,7 @@ try {
 
     if (-not $Manifest) { $Manifest = Join-Path (Split-Path -Parent $Out) 'release-tree.txt' }
     $Manifest = [IO.Path]::GetFullPath($Manifest)
-    if ($Manifest.StartsWith($Out, [StringComparison]::OrdinalIgnoreCase)) {
+    if (Test-PathInside $Manifest $Out) {
         Write-Host ('СБОРКА НЕ ПОЙДЁТ: опись внутри дерева выпуска («' + $Manifest + '») — внутри она стала бы лишним файлом и сломала бы сверку')
         exit 1
     }
