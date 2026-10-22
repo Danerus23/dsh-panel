@@ -239,6 +239,10 @@ public sealed class PhoneGateTests
     /// Послать калитке запрос. <paramref name="cookie"/> — ЗНАЧЕНИЕ нашей cookie (то, что лежит
     /// в <c>Set-Cookie</c> после `dsh-phone=`): заголовок собирается здесь, чтобы проверки не
     /// повторяли его форму по-своему.
+    ///
+    /// <paramref name="host"/> и <paramref name="origin"/> — СОВРАТЬ ПРО ДВЕРЬ (B-03): по умолчанию
+    /// `HttpClient` ставит `Host` из адреса подключения и `Origin` не шлёт вовсе — ровно так ходит
+    /// настоящий телефон. Доводы нужны проверкам, которые изображают подмену имени и чужую страницу.
     /// </summary>
     private static async Task<Reply> Send(
         HttpClient http,
@@ -247,7 +251,9 @@ public sealed class PhoneGateTests
         string? json = null,
         string? cookie = null,
         string? language = null,
-        int? bodyBytes = null)
+        int? bodyBytes = null,
+        string? host = null,
+        string? origin = null)
     {
         using var request = new HttpRequestMessage(method, path);
 
@@ -262,6 +268,10 @@ public sealed class PhoneGateTests
 
         if (language is not null) request.Headers.TryAddWithoutValidation("Accept-Language", language);
 
+        if (host is not null) request.Headers.Host = host;
+
+        if (origin is not null) request.Headers.TryAddWithoutValidation("Origin", origin);
+
         using var response = await http.SendAsync(request);
         var text = await response.Content.ReadAsStringAsync();
 
@@ -274,6 +284,79 @@ public sealed class PhoneGateTests
             : null;
 
         return new Reply((int)response.StatusCode, text, setCookie, location);
+    }
+
+    /// <summary>
+    /// СЫРОЙ ЗАПРОС — там, где `HttpClient` не даёт соврать: `Host` из адреса он ставит всегда,
+    /// а второй такой заголовок не пошлёт. Возвращает код из первой строки ответа
+    /// (<c>0</c> — ответа не было вовсе).
+    /// </summary>
+    private static async Task<int> Raw(Stand stand, string head) => StatusOf(await RawResponse(stand, head));
+
+    /// <summary>
+    /// СЫРОЙ ОТВЕТ ЦЕЛИКОМ — голова как она пришла по проводу, до пустой строки.
+    ///
+    /// ⚠️ **Именно по проводу, а не через `HttpClient`:** тот РАЗБИРАЕТ `Cache-Control` в своё
+    /// свойство и УБИРАЕТ строку из набора заголовков — на нём «заголовок есть» не докажешь
+    /// (проверено: `TryGetValues("Cache-Control")` на разобранном ответе пуст).
+    /// </summary>
+    private static async Task<string> RawResponse(Stand stand, string head)
+    {
+        using var client = new TcpClient();
+
+        await client.ConnectAsync(IPAddress.Loopback, stand.Port);
+
+        using var stream = client.GetStream();
+        stream.ReadTimeout = 20000;
+        stream.WriteTimeout = 20000;
+
+        var bytes = Encoding.UTF8.GetBytes(head);
+        await stream.WriteAsync(bytes);
+        await stream.FlushAsync();
+
+        var buffer = new byte[4096];
+        var text = new StringBuilder();
+
+        // Читаем до конца заголовков ответа: тело (страница входа) для головы не нужно.
+        while (text.Length < 262144)
+        {
+            var read = await stream.ReadAsync(buffer);
+            if (read <= 0) break;
+
+            text.Append(Encoding.ASCII.GetString(buffer, 0, read));
+
+            if (text.ToString().Contains("\r\n\r\n", StringComparison.Ordinal)) break;
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>Код ответа из первой строки головы (<c>0</c> — ответа не было вовсе).</summary>
+    private static int StatusOf(string head)
+    {
+        var first = head.Split("\r\n")[0].Split(' ');
+
+        return first.Length >= 2 && int.TryParse(first[1], out var status) ? status : 0;
+    }
+
+    /// <summary>Запрос, собранный руками: метод, путь, своя дверь, cookie и тело по надобности.</summary>
+    private static string RawRequest(
+        string method, string path, string host, string cookie = "", string body = "", long? contentLength = null)
+    {
+        var request = method + " " + path + " HTTP/1.1\r\nHost: " + host + "\r\n";
+
+        if (cookie.Length > 0) request += "Cookie: " + PhoneGate.CookieName + "=" + cookie + "\r\n";
+
+        var length = contentLength ?? (body.Length == 0 ? 0 : Encoding.UTF8.GetByteCount(body));
+
+        if (length > 0)
+        {
+            request += "Content-Type: "
+                + (body.StartsWith('{') ? "application/json" : "application/x-www-form-urlencoded") + "\r\n";
+            request += "Content-Length: " + length + "\r\n";
+        }
+
+        return request + "\r\n" + body;
     }
 
     /// <summary>Сопрячь телефон по-настоящему: код, страница, cookie. Возвращает значение cookie.</summary>
@@ -1180,6 +1263,434 @@ public sealed class PhoneGateTests
         Assert.False(string.IsNullOrWhiteSpace(post.Body));
     }
 
+    // ---- заголовки безопасности ответов (B-10) ----------------------------------------------
+
+    /// <summary>Значение заголовка из СЫРОЙ головы ответа. Пусто — заголовка нет.
+    /// ⚠️ Разбор свой, а не `HttpClient`: тот разбирает `Cache-Control` в типизированное свойство
+    /// и убирает строку из набора — «заголовок есть» на нём не докажешь (замерено).</summary>
+    private static string HeaderValue(string head, string name)
+    {
+        foreach (var line in head.Split("\r\n"))
+        {
+            if (line.Length == 0) break;
+
+            var colon = line.IndexOf(':');
+            if (colon <= 0) continue;
+
+            if (string.Equals(line[..colon].Trim(), name, StringComparison.OrdinalIgnoreCase))
+                return line[(colon + 1)..].Trim();
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// ВСЕ ВИДЫ ОТВЕТОВ КАЛИТКИ — ПО ОДНОМУ РАЗУ, СЫРЫМ ПУТЁМ. Возвращает «чем это было», код
+    /// и голову ответа как она пришла по проводу: на ней и проверяются заголовки безопасности.
+    ///
+    /// Семь исходов, и каждый пишется СВОЕЙ дверью ответа: страница входа (200), страница телефона
+    /// с cookie (200 — в ней личное), перенаправление после входа (303), отказ «вопроса нет» (403),
+    /// «здесь ничего нет» (404), «не тот метод» (405), «слишком большое тело» (413). Если заголовки
+    /// ставить не в одном месте, а «там, где не забыли», эти семь разойдутся — и проверка увидит.
+    /// </summary>
+    private static async Task<IReadOnlyList<(string Where, int Status, string Head)>> AllGateReplies(Stand stand)
+    {
+        var host = "127.0.0.1:" + stand.Port;
+
+        // Телефон сопрягается ПО-НАСТОЯЩЕМУ: страница телефона и отказ по ответу — только с cookie.
+        var cookie = await Pair(stand);
+        var code = stand.Gate.IssueCode();
+
+        var requests = new (string Where, string Request, int Status)[]
+        {
+            ("страница входа", RawRequest("GET", "/", host), 200),
+            ("страница телефона", RawRequest("GET", "/", host, cookie), 200),
+            ("перенаправление после входа", RawRequest("POST", "/pair", host, body: "code=" + code), 303),
+            ("отказ: вопроса нет",
+                RawRequest("POST", "/answer", host, cookie, "{\"eventId\":\"event-7\",\"answers\":[]}"), 403),
+            ("незнакомый путь", RawRequest("GET", "/plugins/events", host), 404),
+            ("не тот метод", RawRequest("GET", "/pair", host), 405),
+            ("слишком большое тело",
+                RawRequest("POST", "/api/session/list", host, cookie, "{}", PhoneGate.MaxBodyBytes + 4096), 413),
+        };
+
+        var replies = new List<(string, int, string)>();
+
+        foreach (var item in requests)
+        {
+            var head = await RawResponse(stand, item.Request);
+            var status = StatusOf(head);
+
+            // КОД СВЕРЯЕТСЯ ПЕРВЫМ: если запрос не дал ожидаемого исхода, проверка заголовков
+            // проверяла бы не тот ответ — и падать обязана здесь, а не молча на пустом заголовке.
+            Assert.Equal(item.Status, status);
+
+            replies.Add((item.Where, status, head));
+        }
+
+        return replies;
+    }
+
+    /// <summary>
+    /// ОТВЕТЫ КАЛИТКИ НЕ КЭШИРУЮТСЯ (B-10): `Cache-Control: no-store` на КАЖДОМ ответе, включая
+    /// ошибки. Не «не кэшируй надолго», а «не сохраняй вовсе»: в ответах личное — вопрос агента
+    /// (в нём бывает текст чужой переписки), список сессий, имя устройства, — а телефон может
+    /// перейти к другому человеку; и после «Отключить телефон» страница не должна остаться в кэше.
+    ///
+    /// Мутация, которая обязана упасть: **«убрать no-store»**.
+    /// </summary>
+    [Fact]
+    public async Task Каждый_ответ_калитки_запрещает_кэш()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        foreach (var reply in await AllGateReplies(stand))
+            Assert.Equal("no-store", HeaderValue(reply.Head, "Cache-Control"));
+    }
+
+    /// <summary>
+    /// ОТВЕТЫ КАЛИТКИ НЕ ДАЮТ УГАДЫВАТЬ ТИП (B-10): `X-Content-Type-Options: nosniff` на каждом
+    /// ответе. Без него браузер может отрисовать как HTML ответ, который мы объявили
+    /// `application/json` (ASVS 5.0 3.4.4, L2).
+    ///
+    /// Мутация, которая обязана упасть: **«убрать nosniff»**.
+    /// </summary>
+    [Fact]
+    public async Task Каждый_ответ_калитки_запрещает_подмену_типа()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        foreach (var reply in await AllGateReplies(stand))
+            Assert.Equal("nosniff", HeaderValue(reply.Head, "X-Content-Type-Options"));
+    }
+
+    /// <summary>
+    /// ОТВЕТЫ КАЛИТКИ НЕЛЬЗЯ ВСТАВИТЬ В РАМКУ (B-10): `Content-Security-Policy: frame-ancestors
+    /// 'none'` на каждом ответе. Выбран ИМЕННО CSP, а не `X-Frame-Options`: ASVS 5.0 3.4.6 требует
+    /// `frame-ancestors` для каждого ответа и называет `X-Frame-Options` устаревшим.
+    ///
+    /// ⚠️ Отсутствие `X-Frame-Options` — тоже проверка: это ЗАПИСАННОЕ решение, а не забывчивость.
+    /// Появится второй заголовок — проверка покраснеет и заставит назвать причину.
+    ///
+    /// Мутация, которая обязана упасть: **«убрать frame-ancestors»**.
+    /// </summary>
+    [Fact]
+    public async Task Каждый_ответ_калитки_запрещает_фреймы()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        foreach (var reply in await AllGateReplies(stand))
+        {
+            Assert.Equal("frame-ancestors 'none'", HeaderValue(reply.Head, "Content-Security-Policy"));
+            Assert.Equal(string.Empty, HeaderValue(reply.Head, "X-Frame-Options"));
+        }
+    }
+
+    // ---- своя дверь: `Host` и `Origin` (B-03) ------------------------------------------------
+
+    /// <summary>
+    /// СВЕРКА ДВЕРИ — ЧИСТОЕ РЕШЕНИЕ, ПОЭТОМУ ПРОВЕРЯЕТСЯ БЕЗ СЕТИ: все формы имени, которые
+    /// бывают у настоящего телефона, и все, которые приходят от чужого.
+    ///
+    /// Своё имя — ровно то, что показывает раздел «Телефон»: адрес и порт калитки. Плюс `localhost`
+    /// на петле (второе имя той же двери; так ходят прогоны проверки) и IPv6 в скобках.
+    /// </summary>
+    [Fact]
+    public void Своё_имя_двери_пускается()
+    {
+        var lan = IPAddress.Parse("192.168.1.5");
+        var loop = IPAddress.Loopback;
+        var v6 = IPAddress.Parse("fe80::12");
+
+        // Обычный адрес калитки в своей сети и его порт — так приходит настоящий телефон.
+        Assert.Equal(PhoneGate.DoorVerdict.Own, PhoneGate.JudgeDoor("192.168.1.5:43127", string.Empty, lan, 43127));
+
+        // Регистр в имени — не смысл: имена без регистра.
+        Assert.Equal(PhoneGate.DoorVerdict.Own, PhoneGate.JudgeDoor("LOCALHOST:8080", string.Empty, loop, 8080));
+
+        // Петля: `localhost` — второе имя ТОЙ ЖЕ двери.
+        Assert.Equal(PhoneGate.DoorVerdict.Own, PhoneGate.JudgeDoor("localhost:8080", string.Empty, loop, 8080));
+        Assert.Equal(PhoneGate.DoorVerdict.Own, PhoneGate.JudgeDoor("127.0.0.1:8080", string.Empty, loop, 8080));
+
+        // IPv6: имя двери — в скобках, как требует HTTP.
+        Assert.Equal(PhoneGate.DoorVerdict.Own, PhoneGate.JudgeDoor("[fe80::12]:43127", string.Empty, v6, 43127));
+
+        // Своя страница: ровно `http://` + своё имя.
+        Assert.Equal(
+            PhoneGate.DoorVerdict.Own,
+            PhoneGate.JudgeDoor("192.168.1.5:43127", "http://192.168.1.5:43127", lan, 43127));
+
+        // Заголовка `Origin` нет вовсе — это обычный переход GET, и это не чужая страница.
+        Assert.Equal(PhoneGate.DoorVerdict.Own, PhoneGate.JudgeDoor("192.168.1.5:43127", null, lan, 43127));
+    }
+
+    /// <summary>
+    /// ЧУЖОЕ ИМЯ ДВЕРИ — ОТКАЗ. Это подмена имени (DNS rebinding): подключение идёт на наш адрес,
+    /// а зовут дверь чужим именем. Каждая строка — отдельный способ соврать.
+    /// </summary>
+    [Fact]
+    public void Чужое_имя_двери_отвергается()
+    {
+        var lan = IPAddress.Parse("192.168.1.5");
+        var loop = IPAddress.Loopback;
+
+        // Чужой адрес и чужой порт.
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("evil.example:43127", string.Empty, lan, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("192.168.1.6:43127", string.Empty, lan, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("192.168.1.5:43128", string.Empty, lan, 43127));
+
+        // Порт не назван, а дверь не на порту по умолчанию: браузер так не пишет, но пусть не проходит.
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("192.168.1.5", string.Empty, lan, 43127));
+
+        // Машинное имя вместо адреса — это НОВОЕ имя двери, а поверхность калитки не растёт.
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("my-pc:43127", string.Empty, lan, 43127));
+
+        // `localhost` — только для двери на петле: на адресе своей сети это чужое имя.
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("localhost:43127", string.Empty, lan, 43127));
+
+        // Пустое имя и мусор: «дверь не назвали» — не «своя».
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor(string.Empty, string.Empty, lan, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("192.168.1.5:43127, evil.example:43127", string.Empty, lan, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("192.168.1.5:43127:9", string.Empty, lan, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("192.168.1.5:", string.Empty, lan, 43127));
+
+        // IPv6 без скобок — не имя двери, а мусор: `fe80::12` не отличить от имени с портом.
+        Assert.Equal(
+            PhoneGate.DoorVerdict.ForeignHost,
+            PhoneGate.JudgeDoor("fe80::12", string.Empty, IPAddress.Parse("fe80::12"), 43127));
+    }
+
+    /// <summary>
+    /// ДВЕРЬ НА ПОРТУ 80: браузер ВЫБРАСЫВАЕТ `:80` из адреса, поэтому имя без порта обязано
+    /// признаваться — иначе калитка, поставленная на 80, закрылась бы для своего же телефона.
+    /// На всяком другом порту имя без порта — чужое.
+    /// </summary>
+    [Fact]
+    public void Дверь_на_порту_80_принимает_имя_без_порта()
+    {
+        var lan = IPAddress.Parse("192.168.1.5");
+
+        Assert.Equal(PhoneGate.DoorVerdict.Own, PhoneGate.JudgeDoor("192.168.1.5", string.Empty, lan, 80));
+        Assert.Equal(PhoneGate.DoorVerdict.Own, PhoneGate.JudgeDoor("192.168.1.5:80", string.Empty, lan, 80));
+        Assert.Equal(PhoneGate.DoorVerdict.Own, PhoneGate.JudgeDoor("192.168.1.5", "http://192.168.1.5", lan, 80));
+
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("192.168.1.5", string.Empty, lan, 8080));
+    }
+
+    /// <summary>
+    /// ДВЕРИ НЕТ ВОВСЕ (калитка не встала): своё имя не пускает НИКОГО. Это правило fail-closed:
+    /// «своего имени нет» не значит «своё», иначе незакрытая калитка пускала бы по любому адресу.
+    /// </summary>
+    [Fact]
+    public void Без_своего_имени_двери_отказ()
+    {
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("127.0.0.1:43127", string.Empty, null, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignHost, PhoneGate.JudgeDoor("127.0.0.1:43127", "http://127.0.0.1:43127", null, 43127));
+    }
+
+    /// <summary>
+    /// ЧУЖАЯ СТРАНИЦА В `Origin` — ОТКАЗ, и `null` тоже. `null` присылает песочница, файл и
+    /// `data:` — ни один из них не наша страница. Отдельно проверено, что `https://` чужой:
+    /// калитка отдаёт страницу только по HTTP (шифрования у неё нет — F3).
+    /// </summary>
+    [Fact]
+    public void Чужая_страница_в_Origin_отвергается()
+    {
+        var loop = IPAddress.Loopback;
+        const string host = "127.0.0.1:43127";
+
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignOrigin, PhoneGate.JudgeDoor(host, "null", loop, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignOrigin, PhoneGate.JudgeDoor(host, "http://192.168.1.5:43127", loop, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignOrigin, PhoneGate.JudgeDoor(host, "https://127.0.0.1:43127", loop, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignOrigin, PhoneGate.JudgeDoor(host, "http://127.0.0.1:43128", loop, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignOrigin, PhoneGate.JudgeDoor(host, "http://127.0.0.1:43127/", loop, 43127));
+        Assert.Equal(PhoneGate.DoorVerdict.ForeignOrigin, PhoneGate.JudgeDoor(host, "file://127.0.0.1:43127", loop, 43127));
+    }
+
+    /// <summary>
+    /// ПОДМЕНЁННОЕ ИМЯ ДВЕРИ НЕ ДЕЛАЕТ НИЧЕГО — и это проверено на САМОМ ДЕЙСТВИИ: сопряжение
+    /// кода не требует, поэтому чужое имя двери с ВЕРНЫМ кодом обязано кончиться отказом
+    /// **до** записи устройства. Заодно видно, что чужое имя не получает и страницу входа:
+    /// «отказ до действия» — это не только порядок строк в коде.
+    /// </summary>
+    [Fact]
+    public async Task Чужой_Host_отвергается_до_действия()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        var code = stand.Gate.IssueCode();
+        var foreign = "evil.example:" + stand.Port;
+
+        var pair = await Send(stand.Http, HttpMethod.Post, "/pair", "{\"code\":\"" + code + "\"}", host: foreign);
+
+        Assert.Equal(403, pair.Status);
+        Assert.Contains(Loc.T(PanelStrings.PhoneGateForeignDoor), pair.Body, StringComparison.Ordinal);
+
+        // ДЕЙСТВИЯ НЕ БЫЛО: устройства не завелось, код остался жив, cookie не выдали.
+        Assert.Equal(0, stand.Gate.DeviceCount);
+        Assert.True(stand.Gate.HasLiveCode());
+        Assert.Null(pair.Cookie);
+
+        // И страницы не было: чужое имя двери не видит даже вход.
+        var page = await Send(stand.Http, HttpMethod.Get, "/", host: foreign);
+
+        Assert.Equal(403, page.Status);
+        Assert.DoesNotContain(Loc.T(PanelStrings.PhonePageCodeLabel), page.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// СВОИ `Host` И `Origin` ПРОХОДЯТ — иначе отказ выше доказывал бы только то, что калитка
+    /// закрыта для всех. Это НАСТОЯЩАЯ форма запроса телефона: форма входа уходит POST'ом со своей
+    /// же страницы, и браузер прикладывает к ней свой `Origin`.
+    /// </summary>
+    [Fact]
+    public async Task Свой_Host_и_свой_Origin_проходят()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        var ownHost = "127.0.0.1:" + stand.Port;
+        var ownOrigin = "http://" + ownHost;
+
+        var code = stand.Gate.IssueCode();
+
+        var pair = await Send(
+            stand.Http, HttpMethod.Post, "/pair", "{\"code\":\"" + code + "\"}",
+            host: ownHost, origin: ownOrigin);
+
+        Assert.Equal(200, pair.Status);
+        Assert.NotNull(pair.Cookie);
+
+        // Обычный переход GET — без `Origin` вовсе: браузер его к переходу не прикладывает.
+        var page = await Send(stand.Http, HttpMethod.Get, "/", host: ownHost);
+
+        Assert.Equal(200, page.Status);
+        Assert.Contains(Loc.T(PanelStrings.PhonePageCodeLabel), page.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// `ORIGIN: NULL` — ОТКАЗ, И ОТВЕТ НЕ УХОДИТ: `null` присылает песочница (чужой iframe), файл
+    /// и `data:` — ни один из них не наша страница, а ответ на вопрос агента — действие.
+    /// Проверено по последствию: в движок не ушло ничего, вопрос остался ждать.
+    /// </summary>
+    [Fact]
+    public async Task Origin_null_отвергается_и_ответ_не_уходит()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        events.Emit("{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"ready\",\"clientId\":\"client-42\"}}");
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-7\",\"request\":{\"questions\":[]}}}");
+
+        var reply = await Send(
+            stand.Http, HttpMethod.Post, "/answer",
+            "{\"eventId\":\"event-7\",\"answers\":[{\"id\":\"q1\",\"selected\":[\"Да\"]}]}",
+            cookie, origin: "null");
+
+        Assert.Equal(403, reply.Status);
+        Assert.Contains(Loc.T(PanelStrings.PhoneGateForeignDoor), reply.Body, StringComparison.Ordinal);
+
+        // ДЕЙСТВИЯ НЕ БЫЛО: ответа в движке нет, вопрос на месте.
+        Assert.Empty(stand.Calls);
+
+        var question = await Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie);
+
+        Assert.Contains("\"state\":\"question\"", question.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ЧУЖАЯ СТРАНИЦА ОТВЕТИТЬ НЕ МОЖЕТ — и это не про cookie: `/pair` кода не требует ни от кого,
+    /// и форма с чужого сайта завела бы устройство. Проверены оба вида чужой страницы — чужой
+    /// адрес и наша же схема с чужим портом.
+    /// </summary>
+    [Fact]
+    public async Task Чужой_Origin_отвергается_до_действия()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        events.Emit("{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"ready\",\"clientId\":\"client-42\"}}");
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-7\",\"request\":{\"questions\":[]}}}");
+
+        foreach (var origin in new[] { "https://evil.example", "http://127.0.0.1:" + (stand.Port + 1) })
+        {
+            var reply = await Send(
+                stand.Http, HttpMethod.Post, "/answer",
+                "{\"eventId\":\"event-7\",\"answers\":[{\"id\":\"q1\",\"selected\":[\"Да\"]}]}",
+                cookie, origin: origin);
+
+            Assert.Equal(403, reply.Status);
+            Assert.Contains(Loc.T(PanelStrings.PhoneGateForeignDoor), reply.Body, StringComparison.Ordinal);
+        }
+
+        Assert.Empty(stand.Calls);
+
+        var question = await Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie);
+
+        Assert.Contains("\"state\":\"question\"", question.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ЗАПРОС БЕЗ ИМЕНИ ДВЕРИ И ЗАПРОС С ДВУМЯ ИМЕНАМИ — ОТКАЗ. `HttpClient` так не умеет (он
+    /// всегда ставит `Host` из адреса и второй не пошлёт), поэтому запросы сырые. Заодно видно,
+    /// что сырой запрос со СВОИМ именем проходит: иначе проверка доказывала бы только то, что
+    /// калитка молчит для всех.
+    /// </summary>
+    [Fact]
+    public async Task Запрос_без_имени_двери_и_с_двумя_именами_отвергается()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        var own = "127.0.0.1:" + stand.Port;
+
+        Assert.Equal(403, await Raw(stand, "GET / HTTP/1.1\r\n\r\n"));
+        Assert.Equal(
+            403,
+            await Raw(stand, "GET / HTTP/1.1\r\nHost: " + own + "\r\nHost: evil.example:9\r\n\r\n"));
+        Assert.Equal(200, await Raw(stand, "GET / HTTP/1.1\r\nHost: " + own + "\r\n\r\n"));
+    }
+
+    /// <summary>
+    /// СЛИШКОМ БОЛЬШОЙ ЗАПРОС ОТВЕЧАЕТ <c>413</c> РАНЬШЕ СВЕРКИ ДВЕРИ, и это НАМЕРЕННО: у такого
+    /// запроса заголовки не разобраны вовсе, и «чужая дверь» вместо «слишком много» соврала бы
+    /// своему же телефону (предел 64 КиБ — настоящий, телефон в него упирается текстом задачи).
+    /// Проверка держит порядок: перенос сверки выше уронит её.
+    /// </summary>
+    [Fact]
+    public async Task Слишком_большой_запрос_отвечает_413_раньше_сверки_двери()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        var reply = await Send(
+            stand.Http, HttpMethod.Post, "/api/session/list",
+            cookie: cookie,
+            bodyBytes: PhoneGate.MaxBodyBytes + 4096,
+            host: "evil.example:" + stand.Port);
+
+        Assert.Equal(413, reply.Status);
+        Assert.Empty(stand.Calls);
+    }
+
     // ---- подписка на события и вопрос агента ------------------------------------------------
 
     /// <summary>ПОДПИСКА ОТКРЫВАЕТСЯ ПРИ ЗАПУСКЕ И ПЕРЕОТКРЫВАЕТСЯ ПОСЛЕ ОБРЫВА. Без подписчика
@@ -1346,6 +1857,255 @@ public sealed class PhoneGateTests
 
         Assert.Contains("\"state\":\"cancelled\"", after.Body, StringComparison.Ordinal);
         Assert.False(string.IsNullOrWhiteSpace(after.Body));
+    }
+
+    // ---- один слот вопроса: второй не затирает первый молча, и ожидание имеет предел (B-05) ----
+
+    /// <summary>
+    /// ВТОРОЙ ВОПРОС ОТМЕНЯЕТ ПЕРВЫЙ — а не выбрасывает его молча (B-05). Слот один, и прежний ход
+    /// агента ОСВОБОЖДАЕТСЯ отменой: `session/cancel` с `sessionId` ПРЕЖНЕГО вопроса. После этого
+    /// телефон видит НОВЫЙ вопрос, а не пустоту.
+    ///
+    /// Мутации, которые обязаны упасть: **M1 «второй затирает первый без отмены»** · «отменить не
+    /// прежнего, а нового».
+    /// </summary>
+    [Fact]
+    public async Task Второй_вопрос_отменяет_первый_а_не_затирает()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        events.Emit("{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"ready\",\"clientId\":\"client-42\"}}");
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-1\",\"agentId\":\"session-1\","
+            + "\"request\":{\"questions\":[{\"id\":\"q1\",\"header\":\"Первый\",\"question\":\"Делать?\","
+            + "\"options\":[{\"label\":\"Да\"},{\"label\":\"Нет\"}]}]}}}");
+
+        var first = await Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie);
+
+        Assert.Contains("\"eventId\":\"event-1\"", first.Body, StringComparison.Ordinal);
+
+        // ВТОРОЙ ВОПРОС — ДРУГОГО АГЕНТА.
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-2\",\"agentId\":\"session-2\","
+            + "\"request\":{\"questions\":[{\"id\":\"q2\",\"header\":\"Второй\",\"question\":\"Тоже делать?\","
+            + "\"options\":[{\"label\":\"Да\"},{\"label\":\"Нет\"}]}]}}}");
+
+        // ХОД ПЕРВОГО АГЕНТА ОТМЕНЁН — и именно ПЕРВОГО: чужой `sessionId` в отмене означал бы
+        // «снят вопрос, а ход стоит», то есть ровно тот дефект, ради которого правка.
+        var cancel = Assert.Single(stand.Calls);
+
+        Assert.Equal(PhoneDecisions.SessionCancelEndpoint, cancel.Endpoint);
+        Assert.Contains("\"sessionId\":\"session-1\"", cancel.Args, StringComparison.Ordinal);
+        Assert.DoesNotContain("session-2", cancel.Args, StringComparison.Ordinal);
+
+        // И телефону показан ВТОРОЙ вопрос.
+        var second = await Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie);
+
+        Assert.Contains("\"eventId\":\"event-2\"", second.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ОТВЕТ НА ПРЕЖНИЙ ВОПРОС ПОСЛЕ ЗАМЕНЫ В ЧУЖОЙ ХОД НЕ УХОДИТ (B-05). Это не про подпись
+    /// и не про cookie: `eventId` сверяется с ТЕКУЩИМ вопросом, и ответ на снятый вопрос получает
+    /// отказ словами, а ответ на новый — уходит.
+    ///
+    /// Мутация, которая обязана упасть: «проверять `eventId` только у формы» (машинный путь
+    /// отправил бы ответ старого вопроса с `clientId` нового хода).
+    /// </summary>
+    [Fact]
+    public async Task Ответ_на_первый_вопрос_после_замены_в_чужой_ход_не_уходит()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        events.Emit("{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"ready\",\"clientId\":\"client-42\"}}");
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-1\",\"agentId\":\"session-1\","
+            + "\"request\":{\"questions\":[]}}}");
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-2\",\"agentId\":\"session-2\","
+            + "\"request\":{\"questions\":[]}}}");
+
+        var old = await Send(
+            stand.Http, HttpMethod.Post, "/answer",
+            "{\"eventId\":\"event-1\",\"answers\":[]}", cookie);
+
+        Assert.Equal(403, old.Status);
+
+        // В ДВИЖОК НЕ УШЛО НИЧЕГО, КРОМЕ ОТМЕНЫ ПРЕЖНЕГО ХОДА.
+        Assert.DoesNotContain(stand.Calls, call => call.Endpoint == PhoneDecisions.EventsResultEndpoint);
+
+        // А НА НОВЫЙ — уходит, и именно на него.
+        var fresh = await Send(
+            stand.Http, HttpMethod.Post, "/answer",
+            "{\"eventId\":\"event-2\",\"answers\":[]}", cookie);
+
+        Assert.Equal(200, fresh.Status);
+
+        var result = Assert.Single(
+            stand.Calls, call => call.Endpoint == PhoneDecisions.EventsResultEndpoint);
+
+        Assert.Contains("\"eventId\":\"event-2\"", result.Args, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ВОПРОС БЕЗ ОТВЕТЧИКА СНИМАЕТСЯ ПО ПРЕДЕЛУ — ход агента не ждёт вечно (B-05). Часы стенда
+    /// двигает проверка, а зовёт она ТЕ ЖЕ часы, что и калитка (`Tick`), поэтому проверяется
+    /// настоящий путь, а не копия решения.
+    ///
+    /// Требуется три вещи и все три проверяются: ход ОТМЕНЁН (`session/cancel` с `sessionId`
+    /// вопроса) · телефону сказано, ЧТО случилось (слова о пределе, а не «на него ответили») ·
+    /// в журнале предел назван ЧИСЛОМ.
+    ///
+    /// Мутация, которая обязана упасть: **M2 «ожидание без предела»** (предел убран).
+    /// </summary>
+    [Fact]
+    public async Task Вопрос_без_ответчика_снимается_по_пределу()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        events.Emit("{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"ready\",\"clientId\":\"client-42\"}}");
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-7\",\"agentId\":\"session-1\","
+            + "\"request\":{\"questions\":[]}}}");
+
+        Assert.Empty(stand.Calls);
+
+        // ПРЕДЕЛ ИСТЁК: часы стенда уходят за него, и калитка делает то же, что делает её таймер.
+        stand.Now += PhoneGate.QuestionWaitLimit + TimeSpan.FromSeconds(1);
+
+        stand.Gate.Tick();
+
+        var cancel = Assert.Single(stand.Calls);
+
+        Assert.Equal(PhoneDecisions.SessionCancelEndpoint, cancel.Endpoint);
+        Assert.Contains("\"sessionId\":\"session-1\"", cancel.Args, StringComparison.Ordinal);
+
+        // ТЕЛЕФОНУ — СЛОВА О ПРЕДЕЛЕ: «ответа не было 10 мин., ход отменён», а не «на него уже ответили».
+        var minutes = (int)PhoneGate.QuestionWaitLimit.TotalMinutes;
+        var expected = string.Format(Loc.T(PanelStrings.PhoneGateQuestionNoAnswerFormat), minutes);
+        var after = await Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie);
+
+        Assert.Contains("\"state\":\"cancelled\"", after.Body, StringComparison.Ordinal);
+        Assert.Contains(expected, after.Body, StringComparison.Ordinal);
+
+        // И В ЖУРНАЛЕ ПРЕДЕЛ НАЗВАН ЧИСЛОМ, а не «давно».
+        var logged = string.Format(
+            Loc.T(PanelStrings.PhoneGateQuestionNoAnswerLogFormat), minutes, "event-7");
+
+        Assert.Contains(logged, stand.Log);
+    }
+
+    /// <summary>
+    /// СВЕЖИЙ ВОПРОС ПРЕДЕЛОМ НЕ СНИМАЕТСЯ — иначе «предел» был бы «снимать всегда», то есть
+    /// человек никогда не успевал бы ответить. Мутация, которая обязана упасть: «сравнение предела
+    /// перевёрнуто» (снимается сразу).
+    /// </summary>
+    [Fact]
+    public async Task Свежий_вопрос_пределом_не_снимается()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        events.Emit("{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-7\",\"agentId\":\"session-1\","
+            + "\"request\":{\"questions\":[]}}}");
+
+        // Прошла ПОЛОВИНА предела — вопрос ещё ждёт человека.
+        stand.Now += TimeSpan.FromTicks(PhoneGate.QuestionWaitLimit.Ticks / 2);
+
+        stand.Gate.Tick();
+
+        Assert.Empty(stand.Calls);
+
+        var page = await Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie);
+
+        Assert.Contains("\"state\":\"question\"", page.Body, StringComparison.Ordinal);
+        Assert.Contains("\"eventId\":\"event-7\"", page.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ПОВТОР ТОГО ЖЕ ВОПРОСА ХОД НЕ ОТМЕНЯЕТ: тот же `eventId` — это ТОТ ЖЕ вопрос (так бывает
+    /// после переоткрытия подписки), и «замена» здесь означала бы отмену живого хода.
+    /// </summary>
+    [Fact]
+    public async Task Повтор_того_же_вопроса_ход_не_отменяет()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        for (var time = 0; time < 2; time++)
+        {
+            events.Emit(
+                "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+                + "\"event\":\"user-questions/request\",\"eventId\":\"event-7\",\"agentId\":\"session-1\","
+                + "\"request\":{\"questions\":[]}}}");
+        }
+
+        Assert.Empty(stand.Calls);
+
+        var page = await Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie);
+
+        Assert.Contains("\"eventId\":\"event-7\"", page.Body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ДВА ВОПРОСА ОТ ОДНОЙ СЕССИИ — БЕЗ ОТМЕНЫ: `session/cancel` отменяет ТЕКУЩИЙ ход сессии, и при
+    /// совпавшем `agentId` отмена погасила бы НОВЫЙ ход, то есть ровно то, что надо сохранить.
+    /// Такого в движке быть не может (ждущий ход второго вопроса не задаёт), но код обязан быть
+    /// безопасным и здесь: вопрос уступает место, в журнале — строка о замене, отмены нет.
+    /// </summary>
+    [Fact]
+    public async Task Два_вопроса_одной_сессии_отмены_не_шлют()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+        Assert.True(Started(stand));
+
+        var cookie = await Pair(stand);
+
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-7\",\"agentId\":\"session-1\","
+            + "\"request\":{\"questions\":[]}}}");
+        events.Emit(
+            "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"waterfall\","
+            + "\"event\":\"user-questions/request\",\"eventId\":\"event-8\",\"agentId\":\"session-1\","
+            + "\"request\":{\"questions\":[]}}}");
+
+        Assert.Empty(stand.Calls);
+
+        var page = await Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie);
+
+        Assert.Contains("\"eventId\":\"event-8\"", page.Body, StringComparison.Ordinal);
     }
 
     // ---- страница телефона (этап F2) --------------------------------------------------------

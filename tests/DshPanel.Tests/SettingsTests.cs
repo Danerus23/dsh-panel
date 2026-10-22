@@ -1369,23 +1369,31 @@ public class SettingsTests
 }
 
 /// <summary>
-/// ГДЕ ИЩЕТСЯ npm И pnpm (задача F-3, слово владельца 20.10.2026).
+/// ГДЕ ИЩЕТСЯ npm И pnpm (задача F-3, слово владельца 20.10.2026; шимы и кэш corepack — аудит 22.10.2026).
 ///
 /// **От какого случая.** Раздел «Сервер» показывал npm и pnpm «не найден», хотя `npm.cmd` лежал
 /// рядом с Node (этим npm панель ставит движок), а `pnpm.cmd` — в `%APPDATA%\npm`. Поиск смотрел
-/// ОДНО место: `node_modules\npm` в каталоге пакетов, выведенном из пути движка панели.
+/// ОДНО место: `node_modules\npm` в каталоге пакетов, выведенном из пути движка панели. Второй
+/// случай того же класса — **corepack**: Node 25+ его в поставке не несёт, а поставленный через
+/// него pnpm оставляет на машине только шим (`\shims\pnpm.cmd`) и пакет в кэше (`\v1\pnpm\<версия>`).
 ///
-/// **Что здесь доказано.** Каждое из трёх мест (рядом с Node · `%APPDATA%\npm` · PATH) даёт
-/// «найден»; «не найден» — только когда нет НИ В ОДНОМ; версия берётся из `package.json`, а когда
-/// пакета нет, а команда есть — версия НЕ выдумывается (жёлтая «версия не прочитана», а не зелёная
-/// «найден»); пустой и мусорный PATH не мешает остальным местам и остальным строкам отчёта.
+/// **Что здесь доказано.** Каждое место (рядом с Node · `%APPDATA%\npm` · PATH · шим corepack ·
+/// кэш corepack) даёт «найден»; «не найден» — только когда нет НИ В ОДНОМ; версия читается из
+/// `package.json` УСТАНОВЛЕННОГО пакета (в том числе из кэша corepack и из `node_modules` рядом
+/// с командой в PATH), а когда пакета нет, а команда/шим есть — версия НЕ выдумывается (жёлтая
+/// «версия не прочитана», а не зелёная «найден»); чужой пакет (`name` не совпал) установкой не
+/// считается; пустой и мусорный PATH не мешает остальным местам и остальным строкам отчёта.
 ///
 /// **Мутации, которые обязаны упасть:** «вернуть поиск в одно место (пакеты движка)» ·
 /// «считать найденным только пакет, но не команду» · «выдать версию, когда пакета нет» ·
-/// «пустой PATH ломает поиск».
+/// «пустой PATH ломает поиск» · **«убрать corepack-места»** · **«читать версию не из
+/// установленного пакета»** · **«„не найден“ при наличии только шима»** · «верить имени папки,
+/// а не полю name».
 ///
-/// ⚠️ Пути — ПОДСТАВНЫЕ (<see cref="EnvironmentReport.ToolPlaces.For"/>): проверка не читает PATH
-/// и `%APPDATA%` машины, на которой идёт, — иначе она проверяла бы машину, а не правило.
+/// ⚠️ Пути — ПОДСТАВНЫЕ (<see cref="EnvironmentReport.ToolPlaces.For"/>): проверка не читает PATH,
+/// `%APPDATA%`, `%LOCALAPPDATA%` и `COREPACK_HOME` машины, на которой идёт, — иначе она проверяла
+/// бы машину, а не правило. Имена домов corepack тоже сверяются с подставными (см.
+/// <see cref="Ни_в_одном_месте_нет_не_найден"/>).
 /// </summary>
 public sealed class EnvironmentToolTests
 {
@@ -1398,16 +1406,24 @@ public sealed class EnvironmentToolTests
         EnvironmentReport.ToolPlaces.For(
             Engine(root),
             appDataDirectory: Path.Combine(root, "appdata"),
-            pathVariable: path);
+            pathVariable: path,
+            // ⚠️ Все три дома corepack — ПОДСТАВНЫЕ и лежат под корнем проверки: ни настоящий
+            // `%LOCALAPPDATA%`/`%APPDATA%`/`COREPACK_HOME` машины, ни её PATH сюда не попадают.
+            localAppDataDirectory: Path.Combine(root, "localappdata"),
+            corepackHome: Path.Combine(root, "corepack"));
 
     /// <summary>Положить пакет с версией — то, из чего читается `package.json`.</summary>
-    private static void PutPackage(string directory, string version)
+    private static void PutPackage(string directory, string name, string version)
     {
         Directory.CreateDirectory(directory);
         File.WriteAllText(
             Path.Combine(directory, "package.json"),
-            "{\"name\":\"x\",\"version\":\"" + version + "\"}");
+            "{\"name\":\"" + name + "\",\"version\":\"" + version + "\"}");
     }
+
+    /// <summary>Положить пакет в кэш corepack так, как его кладёт сам corepack: `<дом>\v1\<имя>\<версия>`.</summary>
+    private static void PutCorepackPackage(string home, string name, string version) =>
+        PutPackage(Path.Combine(home, "v1", name, version), name, version);
 
     /// <summary>Положить команду-обёртку (`npm.cmd`/`pnpm.cmd`) — без пакета и без версии.</summary>
     private static void PutCommand(string directory, string name)
@@ -1459,7 +1475,7 @@ public sealed class EnvironmentToolTests
 
         try
         {
-            PutPackage(Path.Combine(root, "nodejs", "node_modules", "npm"), "10.9.2");
+            PutPackage(Path.Combine(root, "nodejs", "node_modules", "npm"), "npm", "10.9.2");
 
             var places = Places(root);
 
@@ -1489,7 +1505,7 @@ public sealed class EnvironmentToolTests
 
         try
         {
-            PutPackage(Path.Combine(root, "appdata", "npm", "node_modules", "npm"), "11.1.0");
+            PutPackage(Path.Combine(root, "appdata", "npm", "node_modules", "npm"), "npm", "11.1.0");
 
             var places = Places(root);
 
@@ -1509,6 +1525,7 @@ public sealed class EnvironmentToolTests
 
     /// <summary>
     /// npm НАЙДЕН ПО PATH — третье место: там лежит только команда-обёртка, пакета рядом нет.
+    /// Найденное одной командой ВЕРСИИ НЕ ДАЁТ: жёлтая «версия не прочитана», ложного зелёного нет.
     /// **Мутация «считать найденным только пакет» обязана уронить эту проверку.**
     /// </summary>
     [Fact]
@@ -1524,6 +1541,48 @@ public sealed class EnvironmentToolTests
             var places = Places(root, path: bin);
 
             Assert.True(EnvironmentReport.ToolFound(places, "npm"), "npm в PATH не найден");
+
+            // Пакета нет ни в одном месте — версия пустая, и строка говорит об этом СЛОВАМИ.
+            Assert.Equal(string.Empty, EnvironmentReport.ToolVersion(places, "npm"));
+
+            var line = Line(Report(places, Engine(root)), PanelStrings.EnvNpm);
+
+            Assert.Equal(EnvLineState.Warning, line.State);
+            Assert.Equal(PanelStrings.EnvValueUnknown, line.Word);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// ПАКЕТ В КАТАЛОГЕ PATH: команда нашлась в PATH, а её пакет лежит в `node_modules` РЯДОМ
+    /// с ней (так уложен портативный Node: `<папка>\npm.cmd` и `<папка>\node_modules\npm`).
+    /// Версия читается из установленного пакета, а не из версии Node и не из имени команды.
+    /// **Мутация «искать пакет только рядом с Node и в %APPDATA%\npm» обязана уронить эту проверку.**
+    /// </summary>
+    [Fact]
+    public void Npm_в_каталоге_PATH_версия_из_пакета_рядом()
+    {
+        var root = TempDir();
+
+        try
+        {
+            var bin = Path.Combine(root, "portable-node");
+            PutCommand(bin, "npm.cmd");
+            PutPackage(Path.Combine(bin, "node_modules", "npm"), "npm", "10.9.2");
+
+            var places = Places(root, path: bin);
+
+            Assert.True(EnvironmentReport.ToolFound(places, "npm"), "npm в каталоге PATH не найден");
+            Assert.Equal("10.9.2", EnvironmentReport.ToolVersion(places, "npm"));
+
+            var line = Line(Report(places, Engine(root)), PanelStrings.EnvNpm);
+
+            Assert.Equal(EnvLineState.Ok, line.State);
+            Assert.Equal(PanelStrings.EnvFound, line.Word);
+            Assert.Contains("10.9.2", line.Detail, StringComparison.Ordinal);
         }
         finally
         {
@@ -1576,6 +1635,15 @@ public sealed class EnvironmentToolTests
         {
             var places = Places(root);
 
+            // ⚠️ Проверка не смотрит на МАШИНУ: все три дома corepack выведены из подставных
+            // каталогов и лежат под корнем проверки. Если бы `For` читал настоящий `%LOCALAPPDATA%`,
+            // `%APPDATA%` или `COREPACK_HOME`, здесь были бы чужие пути — и «не найден» ниже стал бы
+            // зависеть от чужой установки corepack.
+            Assert.Equal(3, places.CorepackHomes.Count);
+            Assert.Contains(Path.Combine(root, "corepack"), places.CorepackHomes);
+            Assert.Contains(Path.Combine(root, "localappdata", "node", "corepack"), places.CorepackHomes);
+            Assert.Contains(Path.Combine(root, "appdata", "node", "corepack"), places.CorepackHomes);
+
             Assert.False(EnvironmentReport.ToolFound(places, "npm"), "npm найден там, где его нет");
             Assert.Equal(string.Empty, EnvironmentReport.ToolVersion(places, "npm"));
 
@@ -1604,7 +1672,7 @@ public sealed class EnvironmentToolTests
 
         try
         {
-            PutPackage(Path.Combine(root, "appdata", "npm", "node_modules", "pnpm"), "9.12.0");
+            PutPackage(Path.Combine(root, "appdata", "npm", "node_modules", "pnpm"), "pnpm", "9.12.0");
 
             var places = Places(root);
 
@@ -1630,6 +1698,114 @@ public sealed class EnvironmentToolTests
         {
             TempRoots.Remove(root);
             TempRoots.Remove(bare);
+        }
+    }
+
+    /// <summary>
+    /// pnpm ПОСТАВЛЕН ЧЕРЕЗ COREPACK: НА МАШИНЕ ЕСТЬ ТОЛЬКО ШИМ (`&lt;дом corepack&gt;\shims\pnpm.cmd`),
+    /// пакета в кэше нет. Node 25+ corepack в поставке не несёт, и это ровно тот случай, которого
+    /// прежние три места не видели: «не найден» при живом pnpm.
+    ///
+    /// **Честный ответ — «найден» и «версия не прочитана»:** шим есть, пакета нет, и номер не
+    /// выдумывается (мутация «не найден при наличии только шима» обязана уронить эту проверку).
+    /// **Мутация «убрать corepack-места» тоже роняет её.**
+    /// </summary>
+    [Fact]
+    public void Pnpm_в_шиме_corepack_найден_но_версия_не_прочитана()
+    {
+        var root = TempDir();
+
+        try
+        {
+            // COREPACK_HOME (подставной): там же corepack держит шимы.
+            PutCommand(Path.Combine(root, "corepack", "shims"), "pnpm.cmd");
+
+            var places = Places(root);
+
+            Assert.True(EnvironmentReport.ToolFound(places, "pnpm"), "pnpm-шим corepack не найден");
+            Assert.Equal(string.Empty, EnvironmentReport.ToolVersion(places, "pnpm"));
+
+            var line = Line(Report(places, Engine(root)), PanelStrings.EnvPnpm);
+
+            Assert.Equal(EnvLineState.Warning, line.State);
+            Assert.Equal(PanelStrings.EnvValueUnknown, line.Word);
+            Assert.NotEqual(PanelStrings.EnvNotFound, line.Word);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// pnpm УСТАНОВЛЕН ПАКЕТОМ В КЭШЕ COREPACK: `<дом>\v1\pnpm\&lt;версия&gt;` (на Windows умолчание
+    /// дома — `%LOCALAPPDATA%\node\corepack`). Шима рядом нет вовсе — и этого достаточно и для
+    /// «найден», и для ВЕРСИИ: она читается из `package.json` установленного пакета, а не из шима.
+    ///
+    /// **Мутации «убрать corepack-места» и «читать версию не из установленного пакета» обязаны
+    /// уронить эту проверку.**
+    /// </summary>
+    [Fact]
+    public void Pnpm_в_кэше_corepack_найден_и_версия_прочитана()
+    {
+        var root = TempDir();
+
+        try
+        {
+            // Настоящее умолчание corepack на Windows: %LOCALAPPDATA%\node\corepack.
+            PutCorepackPackage(
+                Path.Combine(root, "localappdata", "node", "corepack"),
+                "pnpm",
+                "9.12.0");
+
+            var places = Places(root);
+
+            Assert.True(EnvironmentReport.ToolFound(places, "pnpm"), "pnpm в кэше corepack не найден");
+            Assert.Equal("9.12.0", EnvironmentReport.ToolVersion(places, "pnpm"));
+
+            var line = Line(Report(places, Engine(root)), PanelStrings.EnvPnpm);
+
+            Assert.Equal(EnvLineState.Ok, line.State);
+            Assert.Equal(PanelStrings.EnvFound, line.Word);
+            Assert.Contains("9.12.0", line.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
+        }
+    }
+
+    /// <summary>
+    /// ЧУЖОЙ ПАКЕТ В КЭШЕ COREPACK УСТАНОВКОЙ НЕ СЧИТАЕТСЯ. Папка кэша названа версией, а не
+    /// пакетом, поэтому единственная примета — поле `name` в `package.json`. Каталог, который
+    /// называет себя `yarn`, не делает pnpm ни найденным, ни версионным.
+    /// **Мутация «верить имени папки, а не полю name» обязана уронить эту проверку.**
+    /// </summary>
+    [Fact]
+    public void Чужой_пакет_в_кэше_corepack_не_считается_установленным()
+    {
+        var root = TempDir();
+
+        try
+        {
+            PutPackage(
+                Path.Combine(root, "localappdata", "node", "corepack", "v1", "pnpm", "1.22.0"),
+                "yarn",
+                "1.22.0");
+
+            var places = Places(root);
+
+            Assert.False(EnvironmentReport.ToolFound(places, "pnpm"), "чужой пакет выдан за pnpm");
+            Assert.Equal(string.Empty, EnvironmentReport.ToolVersion(places, "pnpm"));
+
+            var line = Line(Report(places, Engine(root)), PanelStrings.EnvPnpm);
+
+            Assert.Equal(EnvLineState.Grey, line.State);
+            Assert.Equal(PanelStrings.EnvNotFound, line.Word);
+        }
+        finally
+        {
+            TempRoots.Remove(root);
         }
     }
 
@@ -1668,7 +1844,7 @@ public sealed class EnvironmentToolTests
 
         try
         {
-            PutPackage(Path.Combine(root, "nodejs", "node_modules", "npm"), "10.9.2");
+            PutPackage(Path.Combine(root, "nodejs", "node_modules", "npm"), "npm", "10.9.2");
 
             foreach (var path in new[] { string.Empty, ";;   ;", "\"" + Path.Combine(root, "нет-такой-папки") + "\"" })
             {

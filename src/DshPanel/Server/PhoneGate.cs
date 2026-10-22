@@ -320,8 +320,25 @@ public sealed class PhoneGate : IDisposable
     public static readonly TimeSpan SubscriptionCheck = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// Один висящий вопрос агента: его `eventId`, вопросы — тем же JSON, что пришёл, — и `agentId`
-    /// того, кто спрашивает.
+    /// СКОЛЬКО ВОПРОС МОЖЕТ ЖДАТЬ ОТВЕТА, ПРЕЖДЕ ЧЕМ КАЛИТКА СНИМЕТ ЕГО САМА — **10 минут** (B-05).
+    ///
+    /// ⚠️ **От какого случая.** Вопрос без ответчика не «падает», а ждёт вечно (замер: опыт В,
+    /// <c>docs\PHONE-LIVE.md</c> §4 — `running = true` на 1…20-й секунде, ни `turn/end`), и держит
+    /// ход агента. Телефон мог быть выключен, страницу закрыли, человек ушёл — а работа стоит.
+    /// Отмена хода (`session/cancel`) — единственный способ освободить ход (опыт Г: `running = false`
+    /// через 2,5 с), и делает её теперь калитка.
+    ///
+    /// ⚠️ **НОРМЫ НА ЧИСЛО НЕТ — это наше решение, и оно названо, а не спрятано.** Ни ASVS, ни банк
+    /// интерфейса срока «сколько человек отвечает на вопрос агента» не задают. Взято **10 минут**:
+    /// этого хватает, чтобы человек увидел вопрос на телефоне и ответил, а ход агента за это время
+    /// не успевает стать «зависшим на весь день». Меняется ОДНИМ числом здесь; слова телефону
+    /// («ход агента отменён») и строка в журнале называют предел в минутах из этого же значения.
+    /// </summary>
+    public static readonly TimeSpan QuestionWaitLimit = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Один висящий вопрос агента: его `eventId`, вопросы — тем же JSON, что пришёл, — `agentId`
+    /// того, кто спрашивает, и **когда он пришёл** (`At`).
     ///
     /// ⚠️ **`agentId` здесь не «на всякий случай», а ради ОТМЕНЫ** (этап F2): вопрос, который никто
     /// не взял, висит вечно и освобождается только отменой хода (<c>docs\PHONE-LIVE.md</c> §4).
@@ -331,8 +348,13 @@ public sealed class PhoneGate : IDisposable
     /// сессии это одно и то же значение. ⚠️ **Живьём это не проверено** (живой прогон с телефоном —
     /// F4 и слово владельца), поэтому отказ движка (`session/not-found`) говорится телефону СЛОВАМИ,
     /// а не выдаётся за сделанное.
+    ///
+    /// ⚠️ **`At` — ради ПРЕДЕЛА ОЖИДАНИЯ (B-05)**: вопрос, на который никто не ответил, снимается
+    /// САМ через <see cref="QuestionWaitLimit"/> минут, иначе ход агента стоит вечно (замер: опыт В,
+    /// <c>docs\PHONE-LIVE.md</c> §4: `running = true` на 1…20-й секунде и ни `turn/end`). Часы —
+    /// <see cref="PhoneGateDoors.Clock"/>, те же, что у сопряжения: проверка двигает их, а не спит.
     /// </summary>
-    private sealed record PendingQuestion(string EventId, string Questions, string AgentId);
+    private sealed record PendingQuestion(string EventId, string Questions, string AgentId, DateTimeOffset At);
 
     /// <summary>
     /// ЧЕМ КОНЧИЛСЯ ПОСЛЕДНИЙ ВОПРОС — и это ОТДЕЛЬНЫЙ ответ, а не «вопроса нет».
@@ -355,10 +377,28 @@ public sealed class PhoneGate : IDisposable
 
         /// <summary>Ход агента отменён НАМИ — с этой страницы.</summary>
         Cancelled,
+
+        /// <summary>
+        /// ВОПРОС СНЯТ ПО ПРЕДЕЛУ ОЖИДАНИЯ (B-05): ответа не было <see cref="QuestionWaitLimit"/>,
+        /// и калитка отменила ход агента сама. Отдельно от <see cref="Cancelled"/> — потому что
+        /// человек не нажимал «отменить», и слова об этом разные: «вы отменили» и «ответа не было
+        /// десять минут» — не одно и то же.
+        /// </summary>
+        NoAnswer,
     }
 
     /// <summary>Выпущенный код сопряжения и срок его жизни.</summary>
     private sealed record Pairing(string Code, DateTimeOffset ExpiresAt);
+
+    /// <summary>
+    /// ДВЕРЬ, НА КОТОРОЙ СТОИТ КАЛИТКА, — адрес и порт. Это ЕДИНСТВЕННОЕ, что она признаёт своим
+    /// в заголовках `Host` и `Origin` (B-03): телефон обязан звать ту дверь, которая открыта.
+    ///
+    /// ⚠️ Хранится не «адрес из настроек», а тот, на котором калитка **встала** (`Start`), и
+    /// ставится ДО связывания: после связывания запрос может прийти в ту же секунду, и «своей двери
+    /// ещё нет» означало бы отказ своему же телефону.
+    /// </summary>
+    private sealed record OwnDoor(IPAddress Address, int Port);
 
     private readonly PhoneGateDoors _doors;
     private readonly Func<bool> _enabled;
@@ -432,6 +472,13 @@ public sealed class PhoneGate : IDisposable
     private CancellationTokenSource? _stop;
     private Task? _accept;
     private Timer? _watch;
+
+    /// <summary>
+    /// ИМЯ СВОЕЙ ДВЕРИ, пока калитка открыта (B-03). `null` — калитка не встала: тогда всякий
+    /// запрос отвергается сверкой двери, потому что «своего имени нет» не значит «своё».
+    /// Меняется в <see cref="Start"/>/<see cref="Stop"/>, читается запросами — под <see cref="_gate"/>.
+    /// </summary>
+    private OwnDoor? _own;
 
     private Pairing? _pairing;
     private PendingQuestion? _question;
@@ -689,6 +736,11 @@ public sealed class PhoneGate : IDisposable
         // (4) СВЯЗЫВАНИЕ. Здесь и только здесь порт действительно занимается.
         var listener = new TcpListener(address, _doors.Port);
 
+        // СВОЁ ИМЯ ДВЕРИ — ДО СВЯЗЫВАНИЯ (B-03). По нему каждый запрос сверяет `Host` и `Origin`
+        // (`JudgeDoor`). Ставится до `listener.Start()`, потому что после связывания запрос может
+        // прийти в ту же секунду, а «своей двери ещё нет» отвергло бы своего же телефон.
+        lock (_gate) _own = new OwnDoor(address, _doors.Port);
+
         try
         {
             listener.Start();
@@ -696,6 +748,10 @@ public sealed class PhoneGate : IDisposable
         catch (SocketException)
         {
             listener.Stop();
+
+            // НЕ ВСТАЛИ — и своего имени у калитки нет: иначе сверка двери пускала бы запросы
+            // к незакрытой калитке по адресу, на котором её нет.
+            lock (_gate) _own = null;
 
             return PhoneGateStart.No(
                 PanelStrings.PhoneGatePortBusyFormat,
@@ -757,6 +813,10 @@ public sealed class PhoneGate : IDisposable
             _watch = null;
             _stop = null;
             _listener = null;
+
+            // ЗАКРЫТАЯ КАЛИТКА СВОЕГО ИМЕНИ НЕ ИМЕЕТ: после остановки запросов быть не может,
+            // а «имя осталось» означало бы, что сверка двери пускает к двери, которой нет (B-03).
+            _own = null;
         }
 
         if (watch is null && stop is null && listener is null) return;
@@ -931,9 +991,19 @@ public sealed class PhoneGate : IDisposable
     /// пять секунд» писала бы в журнал строку за строкой — это не «сказать словами», а шум,
     /// в котором настоящая беда не видна. Удачная подписка отступ сбрасывает: обрыв лечится
     /// быстро, а «движка нет» — редко и одной строкой.
+    ///
+    /// ⚠️ **`internal` ради проверки, и проверка двигает ЧАСЫ, а не спит.** Предел ожидания
+    /// (<see cref="QuestionWaitLimit"/>) наступает по <see cref="PhoneGateDoors.Clock"/>, поэтому
+    /// прогон стенда не ждёт десять минут: он двигает часы и зовёт те же часы, что и таймер
+    /// калитки, — то есть проверяет НАСТОЯЩИЙ путь, а не свою копию решения.
     /// </summary>
-    private void Tick()
+    internal void Tick()
     {
+        // (0) ВОПРОС БЕЗ ОТВЕТЧИКА (B-05) — ДО всего остального и НЕЗАВИСИМО от подписки: если
+        //     человек не ответил за предел, ход агента освобождается отменой. Стоять это должно
+        //     выше раннего выхода «подписка жива», иначе при живой подписке вопрос ждал бы вечно.
+        DropStaleQuestion();
+
         lock (_gate)
         {
             if (_link is { Alive: true })
@@ -967,16 +1037,102 @@ public sealed class PhoneGate : IDisposable
     }
 
     /// <summary>
+    /// ВОПРОС, КОТОРОГО НИКТО НЕ ДОЖДАЛСЯ, СНИМАЕТСЯ САМ (B-05).
+    ///
+    /// **Что делает, по порядку.** Слот очищается под замком (вопрос больше не ждёт ответа), и
+    /// телефону говорится исход <see cref="QuestionOutcome.NoAnswer"/> — «ответа не было N минут,
+    /// ход агента отменён». Затем ход ОСВОБОЖДАЕТСЯ отменой — той же дверью, что и с телефона,
+    /// с `sessionId` ЭТОГО вопроса: без неё «сняли вопрос» было бы неправдой, а ход агента стоял бы
+    /// дальше. Часовая проверка — <see cref="Tick"/>: она идёт каждые <see cref="SubscriptionCheck"/>
+    /// секунд, поэтому предел срабатывает с точностью до этих секунд.
+    ///
+    /// ⚠️ **Отмена — ПОСЛЕ очистки слота и ВНЕ замка:** вызов движка может идти секунды, и держать
+    /// на нём `_gate` значило бы останавливать калитку (все запросы телефона) на это время. Если
+    /// отмена не удалась, вопрос всё равно снят (ждать больше нечего), а причина названа в журнале
+    /// строкой — «принято к сведению» здесь не ответ.
+    /// </summary>
+    private void DropStaleQuestion()
+    {
+        PendingQuestion stale;
+
+        lock (_gate)
+        {
+            if (_question is null) return;
+
+            if (_doors.Clock() - _question.At < QuestionWaitLimit) return;
+
+            stale = _question;
+
+            _question = null;
+            _outcome = QuestionOutcome.NoAnswer;
+            _answering = false;
+        }
+
+        var refused = CancelTurn(stale.AgentId);
+
+        _doors.Log(string.Format(
+            CultureInfo.CurrentCulture,
+            PanelStrings.PhoneGateQuestionNoAnswerLogFormat,
+            (int)QuestionWaitLimit.TotalMinutes,
+            stale.EventId));
+
+        if (refused.Length > 0)
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.PhoneGateCancelFailedLogFormat,
+                refused,
+                stale.EventId));
+        }
+    }
+
+    /// <summary>
+    /// ОТМЕНИТЬ ХОД АГЕНТА — ОДНОЙ дверью для страницы телефона и для самой калитки (B-05).
+    ///
+    /// <c>session/cancel</c> с `sessionId` — тот же вызов, каким отменяет панель (замер §4:
+    /// `running = false` через 2,5 с). Возвращает ПУСТО, если ход отменён; иначе — причину словами
+    /// (<c>session/not-found</c>, «движок молчит», `HTTP …`). Причина — для журнала и для страницы:
+    /// «отменили» и «не удалось» — разные ответы, и выдавать одно за другое нельзя.
+    /// </summary>
+    private string CancelTurn(string agentId)
+    {
+        if (agentId.Length == 0) return Loc.T(PanelStrings.PhoneGateNoChannel);
+
+        var args = "{\"request\":{\"sessionId\":" + Quote(agentId) + "}}";
+        var answer = _doors.Engine(PhoneDecisions.SessionCancelEndpoint, args);
+
+        if (answer.Status == 0) return answer.Body;
+
+        var code = EngineRpcClient.ErrorCode(answer.Body);
+
+        if (answer.RefusedOurLogin || !answer.Ok || code.Length > 0)
+            return code.Length > 0 ? code : "HTTP " + answer.Status;
+
+        return string.Empty;
+    }
+
+    /// <summary>
     /// КАДР ИЗ ПОТОКА. Разбор — чистой функцией (<see cref="PhoneEventFrames"/>), здесь только
     /// состояние: наш `clientId`, текущий вопрос и признак «вопрос снят».
     ///
     /// ⚠️ `host` из кадра `ready` сюда не доходит вовсе (поля под него нет в разобранном кадре) —
     /// значит домашний каталог машины не может уехать телефону ни через `GET /question`,
     /// ни через журнал.
+    ///
+    /// ⚠️ **ВОПРОС ОБРАБАТЫВАЕТСЯ ОТДЕЛЬНО, ПОТОМУ ЧТО ОН ХОДИТ В ДВИЖОК.** Прежний кадр вопроса
+    /// затирался прямо под замком (`B-05`): второй вопрос МОЛЧА выбрасывал первый, а ход первого
+    /// агента оставался ждать вечно. Теперь прежний вопрос снимается **отменой** — а вызов движка
+    /// не имеет права идти под `_gate` (иначе калитка встала бы на время вызова).
     /// </summary>
     private void OnFrame(string? text)
     {
         var frame = PhoneEventFrames.Parse(text);
+
+        if (frame.Kind == PhoneEventKind.Question)
+        {
+            TakeQuestion(frame);
+            return;
+        }
 
         lock (_gate)
         {
@@ -984,29 +1140,6 @@ public sealed class PhoneGate : IDisposable
             {
                 case PhoneEventKind.Ready:
                     _clientId = frame.ClientId;
-                    return;
-
-                case PhoneEventKind.Question:
-                    _question = new PendingQuestion(frame.EventId, frame.QuestionsJson, frame.AgentId);
-                    _lastEventId = frame.EventId;
-                    _outcome = QuestionOutcome.None;
-                    _answering = false;
-
-                    // НОВЫЙ ВОПРОС — НАЧИНАЕМ С ПЕРВОГО ЭКРАНА И С ЧИСТОГО ЛИСТА: ответы прежнего
-                    // хода к этому вопросу не относятся, и унести их движку значило бы ответить
-                    // за человека на то, чего он не видел.
-                    _screen = 0;
-                    _screenEventId = frame.EventId;
-                    _screenAnswers.Clear();
-
-                    // СЛЕД В ЖУРНАЛЕ: вопрос показан телефону. Номер события и ЧИСЛО вопросов —
-                    // и ни одного слова из самого вопроса: в нём бывает чужой текст, а журнал
-                    // читает владелец (уточнение владельца 11.10.2026: «следы без секретов»).
-                    _doors.Log(string.Format(
-                        CultureInfo.CurrentCulture,
-                        PanelStrings.PhoneGateQuestionLogFormat,
-                        frame.EventId,
-                        PhonePage.Parse(frame.QuestionsJson).Count));
                     return;
 
                 case PhoneEventKind.Cancelled:
@@ -1030,6 +1163,88 @@ public sealed class PhoneGate : IDisposable
                 default:
                     return;
             }
+        }
+    }
+
+    /// <summary>
+    /// ПРИНЯТЬ ВОПРОС АГЕНТА — И НЕ ЗАТЕРЕТЬ ПРЕЖНИЙ МОЛЧА (B-05).
+    ///
+    /// Слот один (`_question`), и вторым вопросом он не «перезаписывается», а **заменяется с
+    /// отменой**: новый вопрос встаёт в слот сразу (телефон не ждёт вызова движка), а ход прежнего
+    /// агента освобождается `session/cancel` следом — и если отмена не удалась, это сказано
+    /// в журнале, а не проглочено. Почему так, а не «отклонить второй»: отклонить значит оставить
+    /// НОВЫЙ ход агента ждать вопроса, которого человек никогда не увидит, — то же зависание,
+    /// только с другой стороны. Почему не очередь: очередь меняет экран телефона («ещё N вопросов»)
+    /// и поверхность калитки — это отдельное решение, а не эта правка.
+    ///
+    /// Ответ на ПРЕЖНИЙ вопрос после замены в чужой ход не уходит: `Answer` сверяет `eventId`
+    /// с текущим и отвечает словами «вопрос уже не ждёт» — сверка была и раньше, теперь у неё
+    /// есть постоянная проверка.
+    /// </summary>
+    private void TakeQuestion(PhoneEventFrame frame)
+    {
+        PendingQuestion? replaced;
+
+        lock (_gate)
+        {
+            replaced = _question;
+
+            _question = new PendingQuestion(frame.EventId, frame.QuestionsJson, frame.AgentId, _doors.Clock());
+            _lastEventId = frame.EventId;
+            _outcome = QuestionOutcome.None;
+            _answering = false;
+
+            // НОВЫЙ ВОПРОС — НАЧИНАЕМ С ПЕРВОГО ЭКРАНА И С ЧИСТОГО ЛИСТА: ответы прежнего
+            // хода к этому вопросу не относятся, и унести их движку значило бы ответить
+            // за человека на то, чего он не видел.
+            _screen = 0;
+            _screenEventId = frame.EventId;
+            _screenAnswers.Clear();
+
+            // СЛЕД В ЖУРНАЛЕ: вопрос показан телефону. Номер события и ЧИСЛО вопросов —
+            // и ни одного слова из самого вопроса: в нём бывает чужой текст, а журнал
+            // читает владелец (уточнение владельца 11.10.2026: «следы без секретов»).
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.PhoneGateQuestionLogFormat,
+                frame.EventId,
+                PhonePage.Parse(frame.QuestionsJson).Count));
+        }
+
+        // ПРЕЖНИЙ ВОПРОС — ОТМЕНИТЬ, а не забыть. Тот же `eventId` (повтор кадра после переоткрытия
+        // подписки) — это ТОТ ЖЕ вопрос: отменять нечего и незачем.
+        if (replaced is null || string.Equals(replaced.EventId, frame.EventId, StringComparison.Ordinal)) return;
+
+        // ⚠️ ОТМЕНА ИДЁТ ПО `sessionId` И ОТМЕНЯЕТ ТЕКУЩИЙ ХОД СЕССИИ: если новый вопрос пришёл от
+        // ТОЙ ЖЕ сессии, отмена погасила бы НОВЫЙ ход — ровно то, что мы сохраняем. В движке такого
+        // быть не может (ход, ждущий ответа, второго вопроса не задаёт — опыт В §4), но код обязан
+        // быть безопасным и здесь: прежний вопрос просто уступает место, и это сказано в журнале.
+        if (string.Equals(replaced.AgentId, frame.AgentId, StringComparison.Ordinal))
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.PhoneGateQuestionReplacedLogFormat,
+                replaced.EventId,
+                frame.EventId));
+
+            return;
+        }
+
+        var refused = CancelTurn(replaced.AgentId);
+
+        _doors.Log(string.Format(
+            CultureInfo.CurrentCulture,
+            PanelStrings.PhoneGateQuestionReplacedLogFormat,
+            replaced.EventId,
+            frame.EventId));
+
+        if (refused.Length > 0)
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.PhoneGateCancelFailedLogFormat,
+                refused,
+                replaced.EventId));
         }
     }
 
@@ -1091,8 +1306,11 @@ public sealed class PhoneGate : IDisposable
     }
 
     /// <summary>
-    /// ОДИН РАЗОБРАННЫЙ ЗАПРОС. Из заголовков сохраняются ТРИ и только они: `Cookie` (кто пришёл),
-    /// `Content-Length` (сколько читать) и `Accept-Language` (на каком языке говорить).
+    /// ОДИН РАЗОБРАННЫЙ ЗАПРОС. Из заголовков читаются ШЕСТЬ, и у каждого названо, зачем он:
+    /// `Cookie` (кто пришёл), `Content-Length` (сколько читать — в записи остаётся только тело),
+    /// `Accept-Language` (на каком языке говорить), `User-Agent` (как назвать телефон человеку)
+    /// и пара `Host`/`Origin` — **только затем, чтобы сверить дверь** (`JudgeDoor`): дальше они
+    /// не идут ни в ответ, ни в журнал, ни в движок.
     /// Чужие заголовки не сохраняются вовсе — значит их нельзя случайно передать дальше,
     /// и «никаких чужих заголовков» держится устройством, а не внимательностью.
     /// </summary>
@@ -1105,7 +1323,9 @@ public sealed class PhoneGate : IDisposable
         string Address,
         string Body,
         bool TooBig,
-        string UserAgent);
+        string UserAgent,
+        string Host,
+        string Origin);
 
     private static async Task<PhoneHttpRequest?> ReadAsync(NetworkStream stream, TcpClient client, CancellationToken token)
     {
@@ -1143,6 +1363,8 @@ public sealed class PhoneGate : IDisposable
         var cookie = string.Empty;
         var language = string.Empty;
         var userAgent = string.Empty;
+        var host = string.Empty;
+        var origin = string.Empty;
         var headers = 0;
         var contentLength = 0L;
 
@@ -1169,6 +1391,13 @@ public sealed class PhoneGate : IDisposable
             // (`PhoneDecisions.DeviceName`), и ничего не решает: доступ решает файл пропуска.
             // Подделать строку ничего не даёт — она не примета устройства.
             if (string.Equals(name, "User-Agent", StringComparison.OrdinalIgnoreCase)) userAgent = value;
+
+            // ⚠️ `Host` и `Origin` — для СВЕРКИ ДВЕРИ (B-03), и больше ни для чего. Второй такой
+            // заголовок не уточняет первый, а склеивается с ним: «кто первый, тот и прав» —
+            // это ровно то, чем подменяют дверь промежуточные звенья и подделки.
+            if (string.Equals(name, "Host", StringComparison.OrdinalIgnoreCase)) host = Twice(host, value);
+
+            if (string.Equals(name, "Origin", StringComparison.OrdinalIgnoreCase)) origin = Twice(origin, value);
 
             if (string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase)
                 && long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed))
@@ -1199,12 +1428,18 @@ public sealed class PhoneGate : IDisposable
 
         return new PhoneHttpRequest(
             method, path, query, cookie, language, AddressOf(client),
-            Encoding.UTF8.GetString(body, 0, filled), false, userAgent);
+            Encoding.UTF8.GetString(body, 0, filled), false, userAgent, host, origin);
     }
+
+    /// <summary>Второй такой же заголовок не уточняет первый, а склеивается с ним: сверка двери
+    /// (`JudgeDoor`) такую склейку отвергает, и подмена `Host`/`Origin` не проходит ни при каком
+    /// порядке разбора (B-03).</summary>
+    private static string Twice(string first, string value) =>
+        first.Length == 0 ? value : first + ", " + value;
 
     private static PhoneHttpRequest TooBig(string address) =>
         new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, address, string.Empty, true,
-            string.Empty);
+            string.Empty, string.Empty, string.Empty);
 
     /// <summary>Адрес просящего — для ограничения попыток. Не разобрался — «адрес неизвестен»,
     /// и это отдельный ключ лимита, а не «пропустить мимо счёта».</summary>
@@ -1234,6 +1469,172 @@ public sealed class PhoneGate : IDisposable
         return -1;
     }
 
+    // ---- своя дверь: сверка `Host` и `Origin` (B-03) ------------------------------------------
+
+    /// <summary>ЧЬЯ ЭТО ДВЕРЬ — ответ на сверку двух заголовков запроса.</summary>
+    internal enum DoorVerdict
+    {
+        /// <summary>Своя дверь: имя наше, страница своя (или её не называли вовсе).</summary>
+        Own,
+
+        /// <summary>Имя двери чужое: так приходит подмена (`Host: чужой-адрес`, DNS rebinding).</summary>
+        ForeignHost,
+
+        /// <summary>Страница чужая (`Origin` не наш или `null`): так приходит ответ за человека.</summary>
+        ForeignOrigin,
+    }
+
+    /// <summary>
+    /// СВЕРКА ДВЕРИ ПО ДВУМ ЗАГОЛОВКАМ — чистое решение, без сети, запроса и калитки: его можно
+    /// проверить само по себе, как <see cref="WildcardAddress"/>. Зовётся из <see cref="Route"/>
+    /// ДО любого действия.
+    ///
+    /// ⚠️ **Зачем это, если телефон и так носит пропуск.** Пропуск отвечает «кто это»; сверка двери
+    /// отвечает «та ли это дверь и та ли страница». Без неё остаются две дыры, и обе настоящие:
+    ///   * **чужое имя двери** (`Host`) — подмена имени (DNS rebinding): страница чужого сайта
+    ///     заставляет браузер звонить по нашему адресу, но под своим именем, и читает наши ответы
+    ///     как свои. Норма — OWASP ASVS 5.0, **3.4.2** (L1): `Origin`/имя сверяются по списку
+    ///     доверенных, а `*` не годится; здесь список доверенных — ОДНА своя дверь;
+    ///   * **чужая страница** (`Origin`) — ответ за человека: `/pair` cookie не требует ни от кого,
+    ///     и форма с чужого сайта завела бы устройство. Чужой `Origin` приходит и как `null`
+    ///     (песочница, файл, `data:`) — это тоже НЕ наша страница.
+    ///
+    /// **Пустой `Origin` — не чужая страница:** к обычному переходу (GET) браузер его не прикладывает,
+    /// а к форме со своей же страницы прикладывает — и тогда он совпадает с именем двери. Требовать
+    /// заголовок всегда значило бы сломать вход по QR. **Пустой `Host` — отказ:** HTTP/1.1 без имени
+    /// двери от телефона не приходит вовсе, а «дверь не назвали» не значит «своя».
+    ///
+    /// Адрес и порт — **своей** двери, а не довод запроса. `address = null` значит «калитка не знает,
+    /// где она стоит», и это отказ, а не «пропустить»: своё имя — только у открытой двери.
+    /// </summary>
+    internal static DoorVerdict JudgeDoor(string? host, string? origin, IPAddress? address, int port)
+    {
+        if (!OwnHostName(host, address, port)) return DoorVerdict.ForeignHost;
+
+        return OwnOrigin(origin, address, port) ? DoorVerdict.Own : DoorVerdict.ForeignOrigin;
+    }
+
+    /// <summary>
+    /// СВОЁ ЛИ ИМЯ В `Host`. Годится ровно то, что человек видит в разделе «Телефон»: адрес калитки
+    /// и её порт (`192.168.1.5:43127`; у IPv6 — в скобках, как велит HTTP). Петля принимает ещё и
+    /// `localhost`: это второе имя той же двери, и прогоны проверки ходят именно так.
+    ///
+    /// Порт можно не называть ТОЛЬКО тогда, когда он и есть порт по умолчанию (80): браузер
+    /// выбрасывает `:80` из адреса, и требовать его значило бы закрыть калитку, поставленную на 80.
+    /// </summary>
+    internal static bool OwnHostName(string? hostHeader, IPAddress? address, int port)
+    {
+        var header = (hostHeader ?? string.Empty).Trim();
+
+        if (address is null || header.Length == 0) return false;
+
+        if (!SplitHost(header, out var name, out var given)) return false;
+
+        // ПОРТ: названный обязан совпасть, неназванный годится только для порта по умолчанию.
+        if (given >= 0 ? given != port : port != 80) return false;
+
+        if (SameName(name, address)) return true;
+
+        // ПЕТЛЯ: `localhost` — второе имя той же двери, и только для двери на петле. Машинного
+        // имени здесь нет намеренно: это было бы НОВОЕ имя двери, а поверхность калитки не растёт.
+        return IPAddress.IsLoopback(address)
+            && string.Equals(name, "localhost", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// СВОЯ ЛИ СТРАНИЦА В `Origin`. Пусто — своих не спрашивают (см. <see cref="JudgeDoor"/>).
+    /// Названный `Origin` обязан быть ровно `http://` + своё имя двери: калитка отдаёт страницу
+    /// только по HTTP (шифрования у неё нет — F3), поэтому `https://` здесь не бывает, а `null`,
+    /// `file://` и любой чужой адрес — не наша страница.
+    /// </summary>
+    internal static bool OwnOrigin(string? originHeader, IPAddress? address, int port)
+    {
+        var origin = (originHeader ?? string.Empty).Trim();
+
+        if (origin.Length == 0) return true;
+
+        const string scheme = "http://";
+
+        if (!origin.StartsWith(scheme, StringComparison.OrdinalIgnoreCase)) return false;
+
+        var name = origin[scheme.Length..];
+
+        // После имени двери в `Origin` ничего стоять не может: ни пути, ни `?`, ни `#`, ни пробела
+        // (пробел — это уже список источников, а списков мы не принимаем).
+        if (name.Length == 0 || name.IndexOfAny(new[] { '/', '?', '#', ' ' }) >= 0) return false;
+
+        return OwnHostName(name, address, port);
+    }
+
+    /// <summary>
+    /// РАЗОБРАТЬ ЗАГОЛОВОК `Host` НА ИМЯ И ПОРТ. `given` = <c>-1</c>, когда порт не назван.
+    /// Имя IPv6 обязано быть в скобках (RFC 7230 §5.4): без них `fe80::1` не отличить от порта,
+    /// и «двоеточий больше одного без скобок» — это мусор, а не имя.
+    /// </summary>
+    private static bool SplitHost(string header, out string name, out int given)
+    {
+        name = string.Empty;
+        given = -1;
+
+        if (header.StartsWith('['))
+        {
+            var close = header.IndexOf(']');
+
+            if (close <= 1) return false;
+
+            name = header[1..close];
+
+            var rest = header[(close + 1)..];
+
+            if (rest.Length == 0) return true;
+
+            return rest.Length > 1 && rest[0] == ':' && Port(rest[1..], out given);
+        }
+
+        var colon = header.LastIndexOf(':');
+
+        if (colon < 0)
+        {
+            name = header;
+            return true;
+        }
+
+        if (header.IndexOf(':') != colon) return false;
+
+        name = header[..colon];
+
+        return name.Length > 0 && Port(header[(colon + 1)..], out given);
+    }
+
+    /// <summary>Порт — только цифры: знак, пробел и пустая строка портом не считаются.</summary>
+    private static bool Port(string text, out int value) =>
+        int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value)
+        && value is > 0 and < 65536;
+
+    /// <summary>ИМЯ СВОЕЙ ДВЕРИ — под замком: <see cref="Start"/> и <see cref="Stop"/> его меняют,
+    /// а запросы читают из своих ниток.</summary>
+    private OwnDoor? OwnDoorNow()
+    {
+        lock (_gate) return _own;
+    }
+
+    /// <summary>
+    /// СОВПАЛО ЛИ ИМЯ С АДРЕСОМ ДВЕРИ. Сравнение без учёта регистра: имена без регистра.
+    /// ⚠️ У IPv6 в адресе бывает ЗОНА (`fe80::1%12`), а в имени двери её не бывает никогда —
+    /// поэтому сверяется ещё и адрес без зоны, иначе калитка на link-local адресе закрылась бы
+    /// для своего же телефона.
+    /// </summary>
+    private static bool SameName(string name, IPAddress address)
+    {
+        if (string.Equals(name, address.ToString(), StringComparison.OrdinalIgnoreCase)) return true;
+
+        return address.AddressFamily == AddressFamily.InterNetworkV6
+            && string.Equals(
+                name,
+                new IPAddress(address.GetAddressBytes()).ToString(),
+                StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---- маршруты ---------------------------------------------------------------------------
 
     private PhoneHttpResponse Route(PhoneHttpRequest request)
@@ -1245,6 +1646,19 @@ public sealed class PhoneGate : IDisposable
                 string.Format(
                     CultureInfo.CurrentCulture, PanelStrings.PhoneGateTooBigFormat, MaxBodyBytes / 1024));
         }
+
+        // ⚠️ ДВЕРЬ СВЕРЯЕТСЯ ЗДЕСЬ — ДО РАЗБОРА ПУТИ И ДО ЛЮБОГО ДЕЙСТВИЯ (B-03, ASVS 5.0 3.4.2).
+        // Чужой `Host` — подмена имени двери, чужой `Origin` (и `Origin: null`) — чужая страница;
+        // и то и другое получает отказ ОДНИМИ СЛОВАМИ, не видя ни входа, ни страницы, ни ответа
+        // движка. Проверка стоит выше `if (request.Path == "/")` намеренно: иначе подменённая дверь
+        // читала бы страницу входа, а «отказ до действия» держался бы порядком строк, а не кодом.
+        //
+        // ⚠️ 413 (слишком большой запрос) стоит ВЫШЕ намеренно: у такого запроса заголовки не
+        // разобраны вовсе, и «чужая дверь» вместо «слишком много» соврала бы своему же телефону.
+        var own = OwnDoorNow();
+
+        if (JudgeDoor(request.Host, request.Origin, own?.Address, own?.Port ?? 0) != DoorVerdict.Own)
+            return PhoneHttpResponse.Words(403, false, Loc.T(PanelStrings.PhoneGateForeignDoor));
 
         if (request.Path == "/")
         {
@@ -1394,6 +1808,13 @@ public sealed class PhoneGate : IDisposable
                 QuestionOutcome.Answered => PhonePageView.Outcome(PhonePageKind.Answered),
                 QuestionOutcome.Taken => PhonePageView.Outcome(PhonePageKind.Taken),
                 QuestionOutcome.Cancelled => PhonePageView.Outcome(PhonePageKind.Cancelled),
+
+                // СНЯТО ПО ПРЕДЕЛУ (B-05): человеку страница говорит те же слова, что и после
+                // отмены с телефона («ход агента отменён»), — и это ПРАВДА. Своё состояние на
+                // странице («ответа не было N минут») потребовало бы нового вида страницы и её
+                // разметки; причина названа машинной дверью (`GET /question`), отказом на ответ
+                // и строкой в журнале, а не выдуманным видом экрана.
+                QuestionOutcome.NoAnswer => PhonePageView.Outcome(PhonePageKind.Cancelled),
 
                 // СВЯЗИ С СЕРВЕРОМ DSH НЕТ — И ЭТО НАДО СКАЗАТЬ, А НЕ ЖДАТЬ МОЛЧА (решение
                 // владельца 13.10.2026, вариант «а»). Прежняя страница в этом положении говорила
@@ -1614,6 +2035,16 @@ public sealed class PhoneGate : IDisposable
             // всех исходов НАМЕРЕННО: менять их значило бы менять поведение двери, которую уже
             // стерегут проверки самотеста. Разные слова человеку говорит СТРАНИЦА (F2) — по
             // <see cref="_outcome"/>.
+            //
+            // ⚠️ ОДНО ИСКЛЮЧЕНИЕ — ПРЕДЕЛ ОЖИДАНИЯ (B-05): «на него уже ответили» было бы
+            // неправдой, когда вопрос сняла сама калитка, потому что человек не ответил вовсе.
+            if (_outcome == QuestionOutcome.NoAnswer)
+            {
+                return PhoneHttpResponse.Json(
+                    200,
+                    "{\"state\":\"cancelled\",\"message\":" + Quote(NoAnswerWords()) + "}");
+            }
+
             if (_outcome != QuestionOutcome.None)
             {
                 return PhoneHttpResponse.Json(
@@ -1903,21 +2334,14 @@ public sealed class PhoneGate : IDisposable
             agentId = _question.AgentId;
         }
 
-        var args = "{\"request\":{\"sessionId\":" + Quote(agentId) + "}}";
-        var answer = _doors.Engine(PhoneDecisions.SessionCancelEndpoint, args);
+        var refused = CancelTurn(agentId);
 
-        if (answer.Status == 0 || answer.RefusedOurLogin || !answer.Ok || EngineRpcClient.ErrorCode(answer.Body).Length > 0)
+        if (refused.Length > 0)
         {
-            var reason = answer.Status == 0
-                ? answer.Body
-                : EngineRpcClient.ErrorCode(answer.Body) is { Length: > 0 } code
-                    ? code
-                    : "HTTP " + answer.Status;
-
             return Problem(
                 language,
                 502,
-                string.Format(CultureInfo.CurrentCulture, PanelStrings.PhonePageCancelFailedFormat, reason));
+                string.Format(CultureInfo.CurrentCulture, PanelStrings.PhonePageCancelFailedFormat, refused));
         }
 
         lock (_gate)
@@ -1955,8 +2379,20 @@ public sealed class PhoneGate : IDisposable
         QuestionOutcome.Answered => Loc.T(PanelStrings.PhonePageAnsweredAgain),
         QuestionOutcome.Taken => Loc.T(PanelStrings.PhonePageTaken),
         QuestionOutcome.Cancelled => Loc.T(PanelStrings.PhonePageCancelled),
+
+        // СНЯТО ПО ПРЕДЕЛУ — причина СЛОВАМИ (B-05): «ответа не было 10 мин. — ход отменён».
+        // Без неё человек прочитал бы «вы отменили», хотя не отменял.
+        QuestionOutcome.NoAnswer => NoAnswerWords(),
+
         _ => Loc.T(PanelStrings.PhonePageNoQuestion),
     };
+
+    /// <summary>СЛОВА «ВОПРОС СНЯТ ПО ПРЕДЕЛУ» — одним местом: их читают и машинная дверь
+    /// (<c>GET /question</c>), и отказ на ответ, и журнал (там предел назван минутами).</summary>
+    private static string NoAnswerWords() => string.Format(
+        CultureInfo.CurrentCulture,
+        PanelStrings.PhoneGateQuestionNoAnswerFormat,
+        (int)QuestionWaitLimit.TotalMinutes);
 
     /// <summary>
     /// ПРИНЯТЬ ОТВЕТ ОДНОГО ЭКРАНА И СОБРАТЬ ПОЛНЫЙ НАБОР. <c>null</c> — ответ не принят,
@@ -2429,6 +2865,29 @@ public sealed class PhoneGate : IDisposable
         // ПЕРЕНАПРАВЛЕНИЕ — ЗАГОЛОВКОМ: браузер уходит на `Location` сам, поэтому F5 повторяет
         // уже GET, а не отправку формы.
         if (response.Location is not null) head.Append("Location: ").Append(response.Location).Append("\r\n");
+
+        // ⚠️ ЗАГОЛОВКИ БЕЗОПАСНОСТИ — НА КАЖДОМ ОТВЕТЕ (B-10). Место ОДНО: голова ответа собирается
+        // здесь, и через эту строку проходит КАЖДЫЙ ответ калитки — 200, 303, 400, 401, 403, 404,
+        // 405, 413, 429, 500, 502, 503. Поэтому «заголовки на всех ответах, включая ошибки»
+        // держится УСТРОЙСТВОМ (одна дверь ответа), а не списком мест, где их не забыли.
+        //
+        // * `Cache-Control: no-store` — ответы калитки несут ЛИЧНОЕ: вопрос агента (в нём бывает
+        //   текст чужой переписки), список сессий, имя устройства. Кэш телефона или прокси,
+        //   сохранивший такую страницу, показал бы её следующему человеку, взявшему тот же телефон,
+        //   а после «Отключить телефон» страница осталась бы в кэше. `no-store` — не «не кэшируй
+        //   надолго», а «не сохраняй вовсе»: у калитки нет ни одного ответа, который повторное
+        //   открытие должно взять из кэша.
+        // * `X-Content-Type-Options: nosniff` — запрет угадывать тип: без него браузер может
+        //   отрисовать ответ как HTML там, где мы сказали `application/json` (ASVS 5.0 3.4.4, L2).
+        // * `Content-Security-Policy: frame-ancestors 'none'` — запрет вставлять наши страницы
+        //   в рамку (кликджекинг). Выбран ИМЕННО CSP, а не `X-Frame-Options`: ASVS 5.0 3.4.6
+        //   требует `frame-ancestors` для каждого ответа и называет `X-Frame-Options` устаревшим.
+        //   Второго заголовка не ставим — «оба на всякий случай» читается как «мы не выбрали».
+        //   Директива говорит ТОЛЬКО о рамках и не запрещает наши же `<style>`/`<script>`, поэтому
+        //   страница телефона (у неё свой скрипт живого обновления) не ломается.
+        head.Append("Cache-Control: no-store\r\n")
+            .Append("X-Content-Type-Options: nosniff\r\n")
+            .Append("Content-Security-Policy: frame-ancestors 'none'\r\n");
 
         head.Append("\r\n");
 

@@ -9,6 +9,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using DshPanel.Update;
 using Xunit;
 
@@ -40,6 +41,17 @@ namespace DshPanel.Tests;
 /// 4. **Куски идут подряд, без пропусков и наложений, и попыток ровно столько, сколько
 ///    задумано политикой.** Сервер записывает, какие <c>Range</c> он видел.
 /// 5. **Отсутствие названной длины — отказ, а не «положим обрезанное».**
+/// 6. **ВОСПРОИЗВОДИМЫЙ СЦЕНАРИЙ ОБРЫВА НА 30 % ФАЙЛА (серия P5, 22.10.2026).** Сервер рвёт
+///    ровно один ответ — тот, который начинается с 30 % файла, — и повторный запрос
+///    <c>Range: bytes=300000-</c> получает остаток (206 + <c>Content-Range</c>). Доказывается:
+///    файл на рабочем пути совпадает с ожидаемым БАЙТ В БАЙТ, запрос на кусок с 30 % был
+///    ПОВТОРЁН, с нуля файл больше не просили, ход доходит до 100 % и укладывается в счёт
+///    (цикла в ходе нет). Это заменяет «ждём живого обрыва»: сценарий идёт одной командой,
+///    без сети наружу.
+/// 7. **Невосстановимый обрыв — отказ с ПРИЧИНОЙ и за конечное время.** Сервер рвёт каждую
+///    попытку: исход <see cref="UpdateDownloadOutcome.Interrupted"/>, причина названа значением
+///    («read N of M»), попыток ровно по политике, ход не объявляет файл готовым. Загрузка идёт
+///    под сторожем: зацикленный повтор роняет проверку таймаутом, а не вешает прогон.
 /// </summary>
 public class UpdateDownloadTests
 {
@@ -94,6 +106,7 @@ public class UpdateDownloadTests
     {
         private readonly byte[] _bytes;
         private readonly Func<int, long, long, bool> _break;
+        private readonly bool _truncate;
         private readonly TcpListener _listener;
         private readonly Thread _thread;
         private volatile bool _stop;
@@ -104,10 +117,17 @@ public class UpdateDownloadTests
         /// Пусто — сервер не обрывает ничего.
         /// </param>
         /// <param name="chunked">Назвать ли длину файла вовсе (ложь — ответ без длины).</param>
-        public Loop(byte[] bytes, Func<int, long, long, bool>? @break = null, bool chunked = false)
+        /// <param name="truncate">
+        /// НАСТОЯЩИЙ ОБРЫВ ПОСЕРЕДИНЕ ТЕЛА: обещать полный остаток (<c>Content-Length</c> = сколько
+        /// просили), отдать 8 192 байта и закрыть соединение. Ложь — ответ объявляет ровно столько,
+        /// сколько отдаёт, и обрывом тела не является (клиент видит короткий, но целый ответ).
+        /// Нужен сценарию P5: без него проверка мерила бы «сервер пожадничал», а не «сеть оборвалась».
+        /// </param>
+        public Loop(byte[] bytes, Func<int, long, long, bool>? @break = null, bool chunked = false, bool truncate = false)
         {
             _bytes = bytes;
             _break = @break ?? ((_, _, _) => false);
+            _truncate = truncate;
             Chunked = chunked;
 
             _listener = new TcpListener(IPAddress.Loopback, 0);
@@ -292,8 +312,17 @@ public class UpdateDownloadTests
 
             // ДЛИНА НЕ НАЗВАНА — ЗАКОННЫЙ ОТВЕТ СЕРВЕРА, и проверка обязана его увидеть:
             // заголовка Content-Length нет вовсе.
+            //
+            // ⚠️ ОБРЫВ ОБЯЗАН ОБЕЩАТЬ БОЛЬШЕ, ЧЕМ ОТДАЁТ (`truncate`), и это замер: если сервер
+            // объявит ровно 8 192 отданных байта, ответ будет КОРОТКИМ, НО ЦЕЛЫМ — клиент увидит
+            // «сервер вернул меньше запрошенного диапазона», а не оборванное соединение. Для
+            // сценария P5 нужен именно обрыв посреди тела: обещано 700 000, отдано 8 192.
             if (!Chunked)
-                headers.Append("Content-Length: ").Append(length.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+            {
+                var declared = cut && _truncate ? want : length;
+
+                headers.Append("Content-Length: ").Append(declared.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+            }
 
             headers.Append("Connection: close\r\n\r\n");
 
@@ -367,12 +396,32 @@ public class UpdateDownloadTests
         Loop loop,
         Sandbox box,
         string? sum,
-        UpdateDownloadPolicy? policy = null)
+        UpdateDownloadPolicy? policy = null,
+        Action<long, long>? progress = null)
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
         var client = new HttpUpdateDownload(http);
 
-        return client.Save(loop.Url, box.Path, sum, null, policy);
+        return client.Save(loop.Url, box.Path, sum, progress, policy);
+    }
+
+    /// <summary>
+    /// СТОРОЖ ЦИКЛА ПОВТОРА: загрузка обязана ЗАКОНЧИТЬСЯ за отведённое время. Отдельная дверь
+    /// потому, что без неё зацикленный повтор вешает ПРОГОН, а не роняет проверку: падение
+    /// обязано быть названным (мутация M3 серии P5), иначе «проверка не упала» не отличить
+    /// от «прогон не дошёл».
+    /// </summary>
+    private static UpdateDownloadResult Within(TimeSpan limit, Func<UpdateDownloadResult> run, string what)
+    {
+        var task = Task.Run(run);
+
+        Assert.True(
+            task.Wait(limit),
+            what + ": загрузка не завершилась за " +
+            limit.TotalSeconds.ToString("0", CultureInfo.InvariantCulture) +
+            " с — повтор идёт без ограничения (цикл), а не заканчивается отказом");
+
+        return task.GetAwaiter().GetResult();
     }
 
     /// <summary>Своя политика для проверок: мелкие куски — из-за скорости, попытки — как у панели.</summary>
@@ -637,6 +686,169 @@ public class UpdateDownloadTests
         Assert.Equal(UpdateDownloadOutcome.NoLength, result.Outcome);
 
         Assert.Equal(before, Sha(box.Path));
+        AssertNoLeftovers(box);
+    }
+
+    // ------------------------------------------------------------------ (е) воспроизводимый обрыв на 30 %
+
+    /// <summary>
+    /// ВОСПРОИЗВОДИМЫЙ СЦЕНАРИЙ ОБРЫВА НА 30 % ФАЙЛА (серия P5, 22.10.2026) — вместо «ждём живого
+    /// обрыва сети». Сервер на петле рвёт РОВНО ОДИН ответ: тот, который начинается с байта
+    /// <c>300 000</c>, то есть с 30 % файла в <c>1 000 000</c> байт. Оборванный ответ обещает
+    /// остаток <c>700 000</c>, отдаёт <c>8 192</c> и закрывает соединение; на повторный запрос
+    /// <c>Range: bytes=300000-</c> сервер отвечает <c>206</c> + <c>Content-Range</c> остатком.
+    ///
+    /// **Что этим доказано, и каждое утверждение может упасть:**
+    ///
+    /// 1. файл на рабочем пути совпадает с ожидаемым **байт в байт** (сверяются сами байты,
+    ///    а не только SHA-256);
+    /// 2. кусок с 30 % был запрошен **ДВАЖДЫ** (оборванный и его повтор) — это и есть «попыток
+    ///    было больше одной»;
+    /// 3. **с нуля файл больше не просили**: запрос с началом <c>0</c> ровно один. Мутация
+    ///    «всегда запрос с нуля» (M1) роняет и это, и исход;
+    /// 4. ход доходит до <c>100 %</c>, не перескакивает целое и укладывается в счёт обращений —
+    ///    цикла в ходе нет; загрузка целиком идёт под сторожем (<see cref="Within"/>).
+    ///
+    /// ⚠️ ТОЧНОСТЬ ПРОДОЛЖЕНИЯ — ДО НАЧАЛА КУСКА, а не до байта обрыва: повтор спрашивает
+    /// <c>bytes=300000-</c>, а не <c>bytes=308192-</c>, поэтому 8 192 уже принятых байта куска
+    /// качаются заново. Файл от этого не портится (он верный), но «докачать ровно с байта»
+    /// панель пока не умеет — это названо в отчёте P5 и относится к 2.4.0.
+    /// </summary>
+    [Fact]
+    public void Обрыв_на_тридцати_процентах_докачивает_с_места_обрыва_и_файл_совпадает_побайтово()
+    {
+        using var box = new Sandbox();
+
+        var bytes = Payload(1_000_000);
+        const long chunk = 300_000; // 30 % файла: план режет его ровно по 300 000
+        const int attempts = 3;
+
+        // Оборвать РОВНО ОДИН ответ — тот, что начинается с 30 % файла. Повтор снова приходит
+        // с этим же началом куска, и флаг не даёт оборвать и его: продолжение обязано быть живым.
+        var broken = 0;
+        using var loop = new Loop(
+            bytes, (_, from, _) => from == chunk && Interlocked.Exchange(ref broken, 1) == 0, truncate: true);
+
+        var ticks = new List<(long Done, long Total)>();
+
+        var result = Within(
+            TimeSpan.FromSeconds(20),
+            () => Fetch(
+                loop,
+                box,
+                Sha(bytes),
+                Small(chunk, attempts),
+                (done, total) =>
+                {
+                    lock (ticks) ticks.Add((done, total));
+                }),
+            "обрыв на 30 % файла");
+
+        Assert.True(result.Ok, "загрузка не докачалась: " + result.Report());
+        Assert.Equal(UpdateDownloadOutcome.Ok, result.Outcome);
+
+        // 1. ФАЙЛ — БАЙТ В БАЙТ. Сумма сверяется отдельно, но она вероятностна; здесь сами байты.
+        var saved = File.ReadAllBytes(box.Path);
+
+        Assert.Equal(bytes.Length, saved.Length);
+        Assert.True(saved.AsSpan().SequenceEqual(bytes), "файл на рабочем пути отличается от ожидаемого побайтово");
+
+        // 2. КУСОК С 30 % ЗАПРОШЕН ДВАЖДЫ: оборванный ответ и настоящий повтор.
+        Assert.Equal(2, loop.Ranges.Count(range => range.From == chunk));
+
+        // 3. С НУЛЯ ФАЙЛ БОЛЬШЕ НЕ ПРОСИЛИ: продолжение, а не «начать заново».
+        Assert.Equal(1, loop.Ranges.Count(range => range.From == 0));
+
+        // Всего запросов ПЯТЬ: 0-…, 300000-… (обрыв), 300000-… (повтор), 600000-…, 900000-…
+        Assert.Equal(5, loop.Requests);
+
+        // 4. ХОД: от 0 до 100 %, без перескока и без цикла.
+        List<(long Done, long Total)> seen;
+
+        lock (ticks) seen = new List<(long Done, long Total)>(ticks);
+
+        Assert.NotEmpty(seen);
+        Assert.Equal((0L, 1_000_000L), seen[0]);
+        Assert.Equal((1_000_000L, 1_000_000L), seen[^1]);
+        Assert.All(seen, tick => Assert.Equal(1_000_000L, tick.Total));
+        Assert.All(seen, tick => Assert.InRange(tick.Done, 0L, tick.Total));
+        Assert.Contains(seen, tick => tick.Done > chunk);
+        Assert.True(seen.Count <= 60, "ход загрузки сообщался " + seen.Count.ToString(CultureInfo.InvariantCulture) + " раз — похоже на цикл");
+
+        AssertNoLeftovers(box);
+    }
+
+    // ------------------------------------------------------------------ (ж) невосстановимый обрыв
+
+    /// <summary>
+    /// НЕВОССТАНОВИМЫЙ ОБРЫВ — ОТКАЗ С ПРИЧИНОЙ, А НЕ ВЕЧНОЕ ОЖИДАНИЕ. Сервер рвёт КАЖДУЮ
+    /// попытку: тело ответа КОРОЧЕ обещанного (<c>HttpIOException: The response ended
+    /// prematurely…</c>), три попытки куска исчерпаны, загрузка обязана кончиться исходом
+    /// <see cref="UpdateDownloadOutcome.Interrupted"/> и назвать причину ЗНАЧЕНИЕМ (для строки
+    /// отказа и журнала).
+    ///
+    /// Чем это отличается от проверки (б): здесь есть **сторож времени** (<see cref="Within"/>).
+    /// Мутация M3 серии P5 «повтор без ограничения» не вешает прогон, а падает названным
+    /// утверждением таймаута. И здесь же проверяется, что ход НЕ объявляет недокачанный файл
+    /// готовым (ни одного <c>Done == Total</c>) — иначе человек увидел бы «100 %» там, где
+    /// на самом деле отказ.
+    /// </summary>
+    [Fact]
+    public void Невосстановимый_обрыв_называет_причину_и_не_зависает()
+    {
+        using var box = new Sandbox();
+
+        var bytes = Payload(400_000);
+        var policy = Small(150_000, 3);
+
+        // Обрыв на КАЖДОЙ попытке: восстановиться нечем. `truncate` — настоящее тело короче
+        // обещанного, а не целый ответ в 8 192 байта: клиент обязан увидеть именно обрыв.
+        using var loop = new Loop(bytes, (_, _, _) => true, truncate: true);
+
+        File.WriteAllText(box.Path, "прежний файл");
+        var before = Sha(box.Path);
+
+        var ticks = new List<(long Done, long Total)>();
+
+        var result = Within(
+            TimeSpan.FromSeconds(20),
+            () => Fetch(
+                loop,
+                box,
+                Sha(bytes),
+                policy,
+                (done, total) =>
+                {
+                    lock (ticks) ticks.Add((done, total));
+                }),
+            "невосстановимый обрыв");
+
+        Assert.False(result.Ok);
+        Assert.Equal(UpdateDownloadOutcome.Interrupted, result.Outcome);
+
+        // ПРИЧИНА НАЗВАНА ЗНАЧЕНИЕМ, и это ПРИЧИНА ОБРЫВА СОЕДИНЕНИЯ, а не «сервер пожадничал»:
+        // сервер обещал 150 000 байт, а закрыл соединение после 8 192. Если сервер объявит ровно
+        // 8 192 и закроется «по-хорошему», причина станет «read 8 192 of 150 000» — то есть
+        // проверка перестала бы мерить обрыв, и это утверждение обязано упасть.
+        Assert.False(string.IsNullOrWhiteSpace(result.Detail), "причина обрыва не названа");
+        Assert.StartsWith("HttpIOException: ", result.Detail, StringComparison.Ordinal);
+
+        // ПОПЫТОК РОВНО ПО ПОЛИТИКЕ: три попытки куска — три запроса, потом отказ.
+        Assert.Equal(policy.Attempts, loop.Requests);
+
+        // ХОД НЕ ОБЪЯВИЛ ФАЙЛ ГОТОВЫМ...
+        List<(long Done, long Total)> seen;
+
+        lock (ticks) seen = new List<(long Done, long Total)>(ticks);
+
+        Assert.NotEmpty(seen);
+        Assert.All(seen, tick => Assert.Equal(400_000L, tick.Total));
+        Assert.All(seen, tick => Assert.InRange(tick.Done, 0L, tick.Total));
+        Assert.All(seen, tick => Assert.True(tick.Done < tick.Total, "ход объявил недокачанный файл готовым: " + tick.Done.ToString(CultureInfo.InvariantCulture)));
+
+        // ...И ПРЕЖНИЙ ФАЙЛ НА РАБОЧЕМ ПУТИ НЕ ТРОНУТ, хвостов не осталось.
+        Assert.Equal(before, Sha(box.Path));
+        Assert.Equal("прежний файл", File.ReadAllText(box.Path));
         AssertNoLeftovers(box);
     }
 

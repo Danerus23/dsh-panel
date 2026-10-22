@@ -4128,6 +4128,10 @@ public static class PanelStrings
     /// <summary>Отказ: этот путь не принимает такой метод — метод «{0}», путь «{1}».</summary>
     public static string PhoneGateBadMethodFormat => Loc.T(nameof(PhoneGateBadMethodFormat));
 
+    /// <summary>Отказ: запрос пришёл не на имя своей двери (`Host`) или не со своей страницы
+    /// (`Origin`, в том числе `null`) — сверка двери, B-03.</summary>
+    public static string PhoneGateForeignDoor => Loc.T(nameof(PhoneGateForeignDoor));
+
     /// <summary>Отказ сопряжения: код — ровно шесть цифр.</summary>
     public static string PhoneGateCodeWrongShape => Loc.T(nameof(PhoneGateCodeWrongShape));
 
@@ -4151,6 +4155,10 @@ public static class PanelStrings
 
     /// <summary>Вопрос снят: на него уже ответили (с компьютера или с другого устройства).</summary>
     public static string PhoneGateQuestionCancelled => Loc.T(nameof(PhoneGateQuestionCancelled));
+
+    /// <summary>Вопрос снят по пределу ожидания: ответа не было «{0}» мин. — ход агента отменён
+    /// (B-05, предел — <c>PhoneGate.QuestionWaitLimit</c>).</summary>
+    public static string PhoneGateQuestionNoAnswerFormat => Loc.T(nameof(PhoneGateQuestionNoAnswerFormat));
 
     /// <summary>Вопросов к человеку сейчас нет.</summary>
     public static string PhoneGateNoQuestionNow => Loc.T(nameof(PhoneGateNoQuestionNow));
@@ -4202,6 +4210,18 @@ public static class PanelStrings
 
     /// <summary>Журнал: ход агента отменён с телефона (событие «{0}», устройство «{1}»).</summary>
     public static string PhoneGateCancelledLogFormat => Loc.T(nameof(PhoneGateCancelledLogFormat));
+
+    /// <summary>Журнал: новый вопрос агента заменил прежний, ход прежнего отменён
+    /// (прежнее событие «{0}», новое «{1}») — B-05: слот один, но затирать молча нельзя.</summary>
+    public static string PhoneGateQuestionReplacedLogFormat => Loc.T(nameof(PhoneGateQuestionReplacedLogFormat));
+
+    /// <summary>Журнал: ответа не было «{0}» мин. — вопрос снят, ход агента отменён
+    /// (событие «{1}») — B-05: предел ожидания <c>PhoneGate.QuestionWaitLimit</c>.</summary>
+    public static string PhoneGateQuestionNoAnswerLogFormat => Loc.T(nameof(PhoneGateQuestionNoAnswerLogFormat));
+
+    /// <summary>Журнал: отменить ход агента не удалось («{0}» — причина) — вопрос снят без отмены
+    /// (событие «{1}»); «сняли» и «отменили» — разные ответы.</summary>
+    public static string PhoneGateCancelFailedLogFormat => Loc.T(nameof(PhoneGateCancelFailedLogFormat));
 
     /// <summary>Отказ: поток одиночным запросом не зовётся — названо имя («{0}»).</summary>
     public static string PhoneGateStreamRefusedFormat => Loc.T(nameof(PhoneGateStreamRefusedFormat));

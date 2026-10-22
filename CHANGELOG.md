@@ -2,6 +2,60 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.3.2 - 2026-10-22
+
+**A security patch for the phone gate: a foreign door and a foreign page are refused, a question
+with no one to answer it no longer hangs, and the gate's responses are not cached or embedded.**
+There are no new capabilities — only what concerns access to the phone and what a person sees on its
+page. The version is in "About": it says **2.3.2**.
+
+### The gate checks that the request came to it
+
+Before, the gate looked neither at the door's name nor at the page the request came from: a request
+to a different address was served as its own. Now `Host` and `Origin` are checked. If the door's name
+is foreign or the request came from another site's page — **403 with words, before any action**: the
+question is not shown, the answer is not sent, the device is not remembered. `Origin: null` (how a
+sandbox, `file://` and `data:` name themselves) is refused separately — before, it was
+indistinguishable from "no header". The gate's own name is the one a person sees in the "Phone"
+section; when the panel is opened on the same machine, `localhost` is accepted too. Older phone
+browsers that send no `Origin` at all work as before: the pairing code and the device pass remain
+the protection.
+
+### A question with no answerer no longer hangs forever
+
+Two things change in the phone's behaviour:
+
+* **A second question no longer silently overwrites the first.** If the agent has a new question,
+  the previous turn is **cancelled**, and only then does the phone show the new one; an answer to the
+  old question does not go into a foreign turn. Before, the previous turn kept waiting for an answer
+  that would never come.
+* **No answer for 10 minutes — the question is dropped.** The phone was turned off, the page was
+  closed, the person walked away: after **10 minutes** the question is dropped, the agent's turn is
+  **cancelled**, and the page says so in words ("the question was dropped: there was no answer for
+  10 minutes — the agent's turn was cancelled") instead of staying silent.
+
+### The gate's responses are not cached and not embedded
+
+Every gate response — an ordinary page, JSON, and any error — now carries three prohibitions:
+**do not cache** (`Cache-Control: no-store`), **do not guess the content type**
+(`X-Content-Type-Options: nosniff`) and **do not embed the page in a frame**
+(`Content-Security-Policy: frame-ancestors 'none'`). Before, the phone or a proxy could cache the
+page with the agent's question and the session list, the browser could render JSON as HTML, and the
+page could be embedded in a frame on a foreign site. The headers live in one place through which all
+responses pass, so an error response gets them too.
+
+**Under the hood (no visible effect):** checks are now **2190** (was 2164); dictionaries —
+**1333 keys × 3 languages** (was 1328). The engine and its set are untouched: the verified default
+version is still `0.2.1-rc.2`. Build — 0 warnings / 0 errors; the personal-data, encoding and
+dictionary guards — 0. Internal checks were strengthened: the personal-data guard now looks at both
+the index and the git history and knows more secret patterns (tokens, private keys, home paths).
+
+### What this patch does not include
+
+* **No channel encryption (HTTPS):** the gate still works only in its own network and over HTTP.
+* **No new addresses, names or calls in the gate** — the surface did not grow; the patch only closes
+  holes and makes behaviour stricter.
+
 ## 2.3.1 - 2026-10-20
 
 **A small patch that follows a live update from 2.2.1 to 2.3.0: an update no longer looks broken,

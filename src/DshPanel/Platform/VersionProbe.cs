@@ -74,8 +74,48 @@ public static class VersionProbe
     /// Версия из <c>package.json</c> пакета по его каталогу. Читается без запуска процессов
     /// (у глобальной установки npm рядом с движком лежит готовый номер) — поэтому это первый
     /// способ, а запуск программы — второй.
+    ///
+    /// <para>⚠️ <paramref name="expectedName"/> — для мест, где КАТАЛОГ не доказывает, что это тот
+    /// пакет: кэш corepack зовёт папки версиями (<c>v1\pnpm\9.12.0</c>), и единственная примета
+    /// пакета в такой папке — поле <c>name</c>. Имя не совпало — версии нет: чужой номер в отчёте
+    /// выглядел бы проверенным фактом.</para>
     /// </summary>
-    public static string FromPackage(string? packageDirectory)
+    public static string FromPackage(string? packageDirectory, string? expectedName = null)
+    {
+        if (string.IsNullOrWhiteSpace(packageDirectory)) return string.Empty;
+
+        try
+        {
+            var path = Path.Combine(packageDirectory, "package.json");
+            if (!File.Exists(path)) return string.Empty;
+
+            using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+
+            if (!string.IsNullOrWhiteSpace(expectedName)
+                && !string.Equals(NameOf(root), expectedName.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            return root.TryGetProperty("version", out var version)
+                ? (version.GetString() ?? string.Empty).Trim()
+                : string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// ИМЯ ПАКЕТА из <c>package.json</c> по его каталогу. Пусто — прочитать не удалось.
+    ///
+    /// **Зачем отдельно от версии.** Кэш corepack раскладывает пакеты папками, названными версией,
+    /// и другого признака «это тот самый пакет» у панели нет. Пока имя не сверено, каталог не
+    /// считается установкой пакета (<c>EnvironmentReport.ToolFound</c>).
+    /// </summary>
+    public static string NameFromPackage(string? packageDirectory)
     {
         if (string.IsNullOrWhiteSpace(packageDirectory)) return string.Empty;
 
@@ -86,13 +126,15 @@ public static class VersionProbe
 
             using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
 
-            return document.RootElement.TryGetProperty("version", out var version)
-                ? (version.GetString() ?? string.Empty).Trim()
-                : string.Empty;
+            return NameOf(document.RootElement);
         }
         catch
         {
             return string.Empty;
         }
     }
+
+    /// <summary>Поле <c>name</c> разобранного <c>package.json</c>; пусто — поля нет.</summary>
+    private static string NameOf(System.Text.Json.JsonElement root) =>
+        root.TryGetProperty("name", out var name) ? (name.GetString() ?? string.Empty).Trim() : string.Empty;
 }

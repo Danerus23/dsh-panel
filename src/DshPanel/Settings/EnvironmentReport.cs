@@ -156,9 +156,10 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
 
         var culture = CultureInfo.CurrentCulture;
 
-        // ГДЕ ИСКАТЬ npm И pnpm (задача F-3, слово владельца 20.10.2026). Один список мест на весь
-        // отчёт: и «найден», и версия отвечают по нему, и второго списка быть не должно — иначе
-        // строка однажды скажет «найден», а версия не прочитается из другого места.
+        // ГДЕ ИСКАТЬ npm И pnpm (задача F-3, слово владельца 20.10.2026; шимы и кэш corepack —
+        // аудит 22.10.2026). Один список мест на весь отчёт: и «найден», и версия отвечают по нему,
+        // и второго списка быть не должно — иначе строка однажды скажет «найден», а версия не
+        // прочитается из другого места.
         var tools = places ?? ToolPlaces.For(engine);
 
         // --- УМЕНИЯ ПАНЕЛИ С ЭТИМ СЕРВЕРОМ DSH -----------------------------------------------
@@ -318,13 +319,6 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
     }
 
     /// <summary>
-    /// Версия пакета по его каталогу — из его же <c>package.json</c>. Не прочиталась — пустая
-    /// строка, и вызывающий скажет об этом словами: выдумывать номер нельзя.
-    /// </summary>
-    public static string VersionOf(string? packageDirectory) =>
-        Platform.VersionProbe.FromPackage(packageDirectory);
-
-    /// <summary>
     /// ТОН МЕТКИ УМЕНИЯ. Красный — только беда; «версия не прочиталась» — жёлтая («неизвестно»);
     /// «не спрашивали» — серое состояние без плашки.
     /// </summary>
@@ -356,27 +350,50 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
     }
 
     /// <summary>
-    /// ГДЕ ИСКАТЬ npm И pnpm (задача F-3, слово владельца 20.10.2026).
+    /// ГДЕ ИСКАТЬ npm И pnpm (задача F-3, слово владельца 20.10.2026; дополнено по независимому
+    /// аудиту 22.10.2026 — шимы и кэш corepack).
     ///
     /// **От какого случая.** Отчёт показывал npm и pnpm «не найден», хотя `npm.cmd` лежал рядом
     /// с Node (`C:\Program Files\nodejs\npm.cmd`) — панель этим npm ставит движок, — а `pnpm.cmd`
     /// в `%APPDATA%\npm`. Прежний поиск смотрел ОДНО место: `node_modules\npm` в каталоге пакетов,
     /// выведенном из пути движка панели, а у движка, поставленного панелью, npm там не лежит вовсе.
     ///
-    /// **Места, и все три обязательны:** рядом с Node (там `node_modules\npm` и `npm.cmd`),
-    /// `%APPDATA%\npm` (там живут команды-обёртки, в том числе pnpm) и PATH. «Не найден» — только
-    /// когда нет НИ В ОДНОМ месте: ложное «не найден» и ложное «версия не прочитана» одинаково врут.
+    /// **Места, и все обязательны:** рядом с Node (там `node_modules\npm` и `npm.cmd`),
+    /// `%APPDATA%\npm` (там живут команды-обёртки, в том числе pnpm), PATH и **corepack** — его шимы
+    /// (`shims\pnpm.cmd`) и кэш пакетов (`v1\pnpm\&lt;версия&gt;`). «Не найден» — только когда нет
+    /// НИ В ОДНОМ месте: ложное «не найден» и ложное «версия не прочитана» одинаково врут.
+    ///
+    /// ⚠️ **ПОЧЕМУ COREPACK.** Node 25+ не включает corepack в поставку; но если pnpm поставлен
+    /// через corepack, то на машине нет ни `node_modules\pnpm` рядом с Node, ни пакета
+    /// в `%APPDATA%\npm` — есть только шим в PATH (или в самом доме corepack) и пакет в кэше.
+    /// Прежние три места такой установки не видели вовсе.
     ///
     /// ⚠️ Строки для проверок ПОДСТАВЛЯЮТСЯ (подставные корни): проверка не имеет права зависеть
-    /// от PATH и `%APPDATA%` машины, на которой идёт, — иначе она проверяла бы машину, а не правило.
+    /// от PATH, `%APPDATA%`, `%LOCALAPPDATA%` и `COREPACK_HOME` машины, на которой идёт, — иначе она
+    /// проверяла бы машину, а не правило.
     /// </summary>
-    public sealed record ToolPlaces(string NextToNode, string AppDataNpm, IReadOnlyList<string> PathDirectories)
+    public sealed record ToolPlaces(
+        string NextToNode,
+        string AppDataNpm,
+        IReadOnlyList<string> PathDirectories,
+        IReadOnlyList<string> CorepackHomes)
     {
         /// <summary>
         /// Места для ЭТОЙ машины: каталог Node — у найденного движка, `%APPDATA%` и PATH — у машины
         /// (или подставленные доводами). Пустая строка — «места нет»: она не место поиска.
+        ///
+        /// <para><paramref name="localAppDataDirectory"/> и <paramref name="corepackHome"/> —
+        /// подстановка для проверок. Дом corepack берётся из трёх источников, и все три —
+        /// настоящие: `COREPACK_HOME` (его corepack признаёт сам), умолчание Windows
+        /// `%LOCALAPPDATA%\node\corepack` и `%APPDATA%\node\corepack` (его назвал аудит; цена
+        /// проверки — одно обращение к диску). Совпавшие пути не дублируются.</para>
         /// </summary>
-        public static ToolPlaces For(DshEngine? engine, string? appDataDirectory = null, string? pathVariable = null)
+        public static ToolPlaces For(
+            DshEngine? engine,
+            string? appDataDirectory = null,
+            string? pathVariable = null,
+            string? localAppDataDirectory = null,
+            string? corepackHome = null)
         {
             var node = string.Empty;
 
@@ -391,7 +408,9 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
                 node = string.Empty;
             }
 
-            var appData = (appDataDirectory ?? Environment.GetEnvironmentVariable("APPDATA") ?? string.Empty).Trim();
+            var appData = Clean(appDataDirectory ?? Environment.GetEnvironmentVariable("APPDATA"));
+            var localAppData = Clean(localAppDataDirectory ?? Environment.GetEnvironmentVariable("LOCALAPPDATA"));
+            var corepack = Clean(corepackHome ?? Environment.GetEnvironmentVariable("COREPACK_HOME"));
             var path = pathVariable ?? Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
 
             var directories = new List<string>();
@@ -403,20 +422,42 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
                 if (!directories.Contains(trimmed, StringComparer.OrdinalIgnoreCase)) directories.Add(trimmed);
             }
 
+            var corepackHomes = new List<string>();
+
+            AddCorepackHome(corepackHomes, corepack);
+
+            if (localAppData.Length > 0)
+                AddCorepackHome(corepackHomes, Path.Combine(localAppData, "node", "corepack"));
+
+            if (appData.Length > 0)
+                AddCorepackHome(corepackHomes, Path.Combine(appData, "node", "corepack"));
+
             return new ToolPlaces(
                 node,
                 appData.Length == 0 ? string.Empty : Path.Combine(appData, "npm"),
-                directories);
+                directories,
+                corepackHomes);
+        }
+
+        /// <summary>Обрезать путь из переменной окружения: пустая строка — «места нет».</summary>
+        private static string Clean(string? value) => (value ?? string.Empty).Trim().Trim('"');
+
+        /// <summary>Добавить дом corepack, не повторяя уже названный (путь сравнивается без регистра).</summary>
+        private static void AddCorepackHome(List<string> homes, string home)
+        {
+            if (home.Length == 0) return;
+            if (!homes.Contains(home, StringComparer.OrdinalIgnoreCase)) homes.Add(home);
         }
     }
 
     /// <summary>
-    /// ГДЕ МОЖЕТ ЛЕЖАТЬ ПАКЕТ: `node_modules\<package>` рядом с Node и в `%APPDATA%\npm`.
-    /// Пустые места не выдумываются: пустая строка — не место поиска.
+    /// ГДЕ МОЖЕТ ЛЕЖАТЬ ПАКЕТ: `node_modules\<package>` рядом с Node, в `%APPDATA%\npm` и в каждом
+    /// каталоге PATH (портативный Node кладёт пакет рядом с командой). Пустые места не выдумываются:
+    /// пустая строка — не место поиска.
     /// </summary>
     private static IEnumerable<string> PackageDirectories(ToolPlaces places, string package)
     {
-        foreach (var root in new[] { places.NextToNode, places.AppDataNpm })
+        foreach (var root in new[] { places.NextToNode, places.AppDataNpm }.Concat(places.PathDirectories))
         {
             if (root.Length == 0) continue;
 
@@ -425,15 +466,73 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
     }
 
     /// <summary>
+    /// ГДЕ ЛЕЖИТ ПАКЕТ, ПОСТАВЛЕННЫЙ COREPACK: `<дом corepack>\v1\<package>\<версия>`.
+    ///
+    /// **Почему каталог надо ПЕРЕЧИСЛЯТЬ, а не сложить путь.** Имя папки внутри `v1\<package>` —
+    /// это версия, а не имя пакета; другого места, где corepack пишет свой кэш, нет. Поэтому
+    /// каталог считается установкой пакета только тогда, когда **сам `package.json` называет** его
+    /// (`name` = пакет): чужой каталог в `v1\pnpm` не делает pnpm установленным и версии не даёт.
+    ///
+    /// ⚠️ **Ошибка чтения каталога — не находка:** нет кэша, нет прав, каталог занят — просто
+    /// «здесь пакета не видно», и остальные места продолжают проверяться.
+    /// </summary>
+    private static IEnumerable<string> CorepackPackageDirectories(ToolPlaces places, string package)
+    {
+        foreach (var home in places.CorepackHomes)
+        {
+            if (home.Length == 0) continue;
+
+            var manager = Path.Combine(home, "v1", package);
+
+            // Кэша этого пакета в доме нет — обычное дело (дом corepack есть, а pnpm не ставили):
+            // без этой проверки каждое открытие раздела стоило бы исключения на пустом месте.
+            if (!Directory.Exists(manager)) continue;
+
+            string[] versions;
+
+            try
+            {
+                versions = Directory.GetDirectories(manager);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var directory in versions)
+            {
+                if (string.Equals(
+                        Platform.VersionProbe.NameFromPackage(directory),
+                        package,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    yield return directory;
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// ГДЕ МОЖЕТ ЛЕЖАТЬ КОМАНДА: `<package>.cmd` / `<package>.exe` / `<package>` — рядом с Node,
-    /// в `%APPDATA%\npm` и в каждом каталоге PATH. pnpm панель ставит не пакетом, а командой-обёрткой
-    /// в `%APPDATA%\npm`, и без этого списка он «не находился».
+    /// в `%APPDATA%\npm`, в каждом каталоге PATH и в **шимах corepack** (`<дом corepack>\shims`).
+    /// pnpm панель ставит не пакетом, а командой-обёрткой в `%APPDATA%\npm`, а corepack — шимом;
+    /// без этих списков он «не находился».
     /// </summary>
     private static IEnumerable<string> CommandFiles(ToolPlaces places, string package)
     {
         var names = new[] { package + ".cmd", package + ".exe", package };
 
-        foreach (var directory in new[] { places.NextToNode, places.AppDataNpm }.Concat(places.PathDirectories))
+        var directories = new List<string> { places.NextToNode, places.AppDataNpm };
+        directories.AddRange(places.PathDirectories);
+
+        foreach (var home in places.CorepackHomes)
+        {
+            if (home.Length == 0) continue;
+
+            directories.Add(Path.Combine(home, "shims"));
+        }
+
+        foreach (var directory in directories)
         {
             if (directory.Length == 0) continue;
 
@@ -443,20 +542,25 @@ public sealed record EnvironmentReport(IReadOnlyList<EnvironmentGroup> Groups)
 
     /// <summary>
     /// НАЙДЕН ЛИ npm/pnpm — ПО ПРАВДЕ И ВО ВСЕХ МЕСТАХ СРАЗУ (задача F-3). Установка бывает и пакетом
-    /// (`node_modules\npm`), и одной командой-обёрткой (`npm.cmd`/`pnpm.cmd`, как у pnpm в
-    /// `%APPDATA%\npm`); «не найден» — только когда нет ни того, ни другого ни в одном месте.
+    /// (`node_modules\npm`, кэш corepack), и одной командой-обёрткой (`npm.cmd`/`pnpm.cmd`, как у pnpm
+    /// в `%APPDATA%\npm`, и шим corepack); «не найден» — только когда нет ни того, ни другого
+    /// ни в одном месте.
     /// </summary>
     public static bool ToolFound(ToolPlaces places, string package) =>
         PackageDirectories(places, package).Any(Directory.Exists)
+        || CorepackPackageDirectories(places, package).Any()
         || CommandFiles(places, package).Any(File.Exists);
 
     /// <summary>
-    /// ВЕРСИЯ npm/pnpm — из их `package.json`, и только если он ЧИТАЕТСЯ. Найдено одной командой
-    /// (пакета рядом нет) — версия пустая: вызывающий скажет «версия не прочитана» словами, а не
-    /// выдумает номер. Чужой версии (например, версии Node) здесь не бывает.
+    /// ВЕРСИЯ npm/pnpm — из `package.json` УСТАНОВЛЕННОГО ПАКЕТА (те же места, что у поиска, включая
+    /// кэш corepack), и только если он читается. Найдено одной командой или шимом (пакета нигде нет) —
+    /// версия пустая: вызывающий скажет «версия не прочитана» словами, а не выдумает номер.
+    /// Чужой версии (например, версии Node) здесь не бывает — <see cref="Platform.VersionProbe.FromPackage"/>
+    /// сверяет имя пакета.
     /// </summary>
     public static string ToolVersion(ToolPlaces places, string package) =>
         PackageDirectories(places, package)
-            .Select(VersionOf)
+            .Concat(CorepackPackageDirectories(places, package))
+            .Select(directory => Platform.VersionProbe.FromPackage(directory, package))
             .FirstOrDefault(version => version.Length > 0) ?? string.Empty;
 }
