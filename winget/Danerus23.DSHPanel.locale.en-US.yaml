@@ -6,7 +6,7 @@
 # DisplayName = "DSH Panel", Publisher = "Danerus23", DisplayVersion = "2.1.0".
 
 PackageIdentifier: Danerus23.DSHPanel
-PackageVersion: 2.3.1
+PackageVersion: 2.3.2
 PackageLocale: en-US
 Publisher: Danerus23
 PublisherUrl: https://github.com/Danerus23
@@ -55,7 +55,7 @@ Tags:
 - windows
 - avalonia
 - dotnet
-ReleaseNotesUrl: https://github.com/Danerus23/dsh-panel/releases/tag/v2.3.1
+ReleaseNotesUrl: https://github.com/Danerus23/dsh-panel/releases/tag/v2.3.2
 Documentations:
 - DocumentLabel: README
   DocumentUrl: https://github.com/Danerus23/dsh-panel#readme
