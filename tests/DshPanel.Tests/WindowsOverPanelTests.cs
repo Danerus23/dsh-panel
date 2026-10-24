@@ -131,21 +131,30 @@ public class WindowsOverPanelTests
         var placement = Read(root, "src", "DshPanel", "Shell", "WindowPlacement.cs");
         var shell = Read(root, "src", "DshPanel", "Shell", "PanelShell.cs");
         var window = Read(root, "src", "DshPanel", "Shell", "PanelWindow.cs");
-        var stack = Read(root, "docs", "STACK.md");
+        // ВНУТРЕННИЕ ДОКУМЕНТЫ ЕСТЬ НЕ ВСЕГДА: публичное дерево выпуска их не содержит (`docs/**` снимается
+        // фильтром выпуска). Поэтому §35 проверяется там, где документ есть, — а слова о поведении в коде
+        // и в комментариях проверок проверяются ВСЕГДА. Иначе рабочая проверка зеленела бы на приватном
+        // дереве и краснела на публичном (так и случилось на первом прогоне конвейера 2.4.1).
+        var stackPath = Path.Combine(root, "docs", "STACK.md");
+        var stack = File.Exists(stackPath) ? File.ReadAllText(stackPath) : string.Empty;
 
         // ЛОЖНЫЕ ФОРМУЛИРОВКИ ПРЕЖНЕГО РЕШЕНИЯ. Каждая жила в дереве 2.4.0 и врала о поведении.
         Assert.DoesNotContain("панель при этом закрывается", placement, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("рядом с ней и НЕ поверх", stack, StringComparison.Ordinal);
         Assert.DoesNotContain("ПОСТАВИТЬ ВСПОМОГАТЕЛЬНОЕ ОКНО РЯДОМ С ПАНЕЛЬЮ", shell, StringComparison.Ordinal);
+
+        if (stack.Length > 0) Assert.DoesNotContain("рядом с ней и НЕ поверх", stack, StringComparison.Ordinal);
 
         // ДЕЙСТВУЮЩАЯ ФОРМУЛИРОВКА — в комментарии и в §35, и она одна на все три файла.
         Assert.Contains("ПОВЕРХ панели", placement, StringComparison.Ordinal);
         Assert.Contains("ПОВЕРХ ПАНЕЛИ", shell, StringComparison.Ordinal);
 
-        var section = Section(stack, "35. **МЕСТО ВСПОМОГАТЕЛЬНОГО ОКНА");
-        Assert.False(string.IsNullOrEmpty(section), "§35 о месте вспомогательного окна не найден — сторож ослеп");
-        Assert.Contains("ПОВЕРХ неё, по её центру", section!, StringComparison.Ordinal);
-        Assert.Contains("не закрывается", section!, StringComparison.Ordinal);
+        if (stack.Length > 0)
+        {
+            var section = Section(stack, "35. **МЕСТО ВСПОМОГАТЕЛЬНОГО ОКНА");
+            Assert.False(string.IsNullOrEmpty(section), "§35 о месте вспомогательного окна не найден — сторож ослеп");
+            Assert.Contains("ПОВЕРХ неё, по её центру", section!, StringComparison.Ordinal);
+            Assert.Contains("не закрывается", section!, StringComparison.Ordinal);
+        }
 
         // И ПАНЕЛЬ ДЕЙСТВИТЕЛЬНО НЕ ПРЯЧЕТСЯ: в двери размещения нет ни одного `Hide`.
         //

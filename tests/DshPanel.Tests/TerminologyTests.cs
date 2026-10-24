@@ -190,7 +190,13 @@ public class TerminologyTests
         var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
         Assert.False(string.IsNullOrEmpty(root), "не нашёл корень репозитория");
 
-        var document = File.ReadAllText(Path.Combine(root, "docs", "LOCALIZATION.md"));
+        // В ПУБЛИЧНОМ ДЕРЕВЕ ВЫПУСКА ВНУТРЕННИХ ДОКУМЕНТОВ НЕТ (`docs/**` снимается фильтром выпуска).
+        // Тогда проверяются словари (одно понятие — одно имя), а синхронизация с §5 — там, где §5 есть;
+        // это названо, а не выдано за проверенное в публичном дереве.
+        var documentPath = Path.Combine(root, "docs", "LOCALIZATION.md");
+        if (!File.Exists(documentPath)) return;
+
+        var document = File.ReadAllText(documentPath);
         var section = Section(document, "## 5. Словарь терминов");
 
         // Раздел не найден — сторож ослеп бы молча, поэтому это отказ, а не «нечего проверять».
