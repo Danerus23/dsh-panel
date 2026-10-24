@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using DshPanel.Localization;
 using DshPanel.Settings;
 using DshPanel.Shell;
+using DshPanel.Update;
 using Xunit;
 
 namespace DshPanel.Tests;
@@ -195,7 +196,88 @@ public class ShotSampleTests
         Assert.DoesNotContain("AutostartStores", program, StringComparison.Ordinal);
         Assert.Contains("ShotDrawers.Engine()", program, StringComparison.Ordinal);
         Assert.Contains("ShotDrawers.Install()", program, StringComparison.Ordinal);
+
+        // ⚠️ И ДВЕРЬ КАДРА «ПОДГОТОВЛЕНО» (DEF-009, 2.4.1): без неё состояние, ради которого имя
+        // заведено, не производится вовсе — кадр остался бы пустым местом под тем же именем.
+        Assert.Contains("ShotDrawers.PreparedInstall()", program, StringComparison.Ordinal);
         Assert.Contains("ShotPricingWithHistory()", program, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ОБРАЗЦОВЫЕ ВЕРСИИ КАДРОВ ОБНОВЛЕНИЯ ЗАКРЕПЛЕНЫ ЧИСЛАМИ, И ВЫПУСК ДЕЙСТВИТЕЛЬНО НОВЕЕ
+    /// (DEF-009, 2.4.1, решение капитана 24.10.2026).
+    ///
+    /// **От какого случая.** Установленная версия на кадре была версией самой панели и после выпуска
+    /// 2.4.0 совпала с образцовым выпуском — кадры обновления стали говорить «обновляться не нужно»
+    /// над готовой сборкой. Теперь установлена **2.3.2** (выпущена 22.10.2026), выпуск **2.4.0**
+    /// (выпущен 24.10.2026), и обе версии — настоящие.
+    ///
+    /// ⚠️ **Числа закреплены ЛИТЕРАЛАМИ, а не «ожидание = источник»:** проверка о том, что видит
+    /// человек, и сравнение константы с самой собой не поймало бы возврат к 2.4.0.
+    /// Второе утверждение — не украшение: если выпуск перестанет быть новее, кадры снова скажут
+    /// «обновляться не нужно», даже когда числа по отдельности верны.
+    ///
+    /// Мутации, которые обязаны упасть: вернуть установленную 2.4.0 (равна выпуску).
+    /// </summary>
+    [Fact]
+    public void Образцовые_версии_кадров_обновления_закреплены_и_выпуск_новее()
+    {
+        Assert.Equal("2.3.2", ShotSamples.UpdateInstalled);
+        Assert.Equal("2.4.0", ShotSamples.UpdateVersion);
+
+        Assert.True(
+            UpdateDecisions.IsNewer("v" + ShotSamples.UpdateVersion, ShotSamples.UpdateInstalled),
+            "выпуск на кадре не новее установленной версии — кадры обновления снова скажут «обновляться не нужно»");
+
+        // ВЕРСИИ, КОТОРОЙ НЕТ, НА КАДРАХ НЕТ: 2.4.1 на момент этого цикла ещё не выпущена.
+        Assert.NotEqual("2.4.1", ShotSamples.UpdateVersion);
+        Assert.NotEqual("2.4.1", ShotSamples.UpdateInstalled);
+    }
+
+    /// <summary>
+    /// ДВЕРЬ КАДРА «ПОДГОТОВЛЕНО»: ПОДГОТОВКА ОТВЕЧАЕТ УСПЕХОМ С ПУТЯМИ-МАСКАМИ, А ЗАМЕНА — ОТКАЗОМ
+    /// СЛОВАМИ (DEF-009, 2.4.1).
+    ///
+    /// **От какого случая.** Кадр «подготовлено» обязан показывать состояние, которое продукт
+    /// действительно производит, но при этом съёмка не имеет права ничего скачать, записать или
+    /// заменить. Значит дверь отвечает ДВУМЯ разными ответами, и оба проверяются здесь: успех
+    /// подготовки (путь сборки — литерал под маской `~`) и отказ замены словами.
+    ///
+    /// ⚠️ **И <see cref="ShotDrawers.Install"/> обязан ОСТАТЬСЯ отказывающим:** «съёмка не готовит
+    /// и не заменяет файлы» — записанное правило всех прочих кадров, а не забывчивость. Подменить
+    /// его успехом значило бы ослабить правило изоляции ради одного кадра.
+    ///
+    /// Мутации, которые обязаны упасть здесь: «дверь подготовленного кадра снова отказывает» (нет
+    /// успеха и пути) · «`Launch` начинает „запускать“» (пустой ответ вместо отказа словами) ·
+    /// «`Install` перестал отказывать» (правило кадров подменено).
+    /// </summary>
+    [Fact]
+    public void Дверь_подготовленного_кадра_готовит_но_не_запускает()
+    {
+        var door = ShotDrawers.PreparedInstall();
+
+        var prepared = door.Prepare("v2.4.0", ReleaseAssets.None);
+
+        Assert.True(prepared.Ok, "дверь кадра «подготовлено» отказывает — карточки замены в кадре не будет");
+
+        // ПУТЬ СБОРКИ — ЛИТЕРАЛ ПОД МАСКОЙ: так его увидит человек, и личного в нём нет.
+        Assert.Equal(@"~\AppData\Local\DshPanel2\state\update\2.4.0", prepared.StagedFolder);
+        Assert.DoesNotContain("Users", prepared.StagedFolder, StringComparison.OrdinalIgnoreCase);
+
+        // ЗАМЕНА — ОТКАЗ СЛОВАМИ: на кадре нажимать некому, а «успех» соврал бы о работе, которой
+        // не было. Пустая строка здесь и была бы молчаливым «получилось».
+        var launch = door.Launch(prepared);
+
+        Assert.False(
+            string.IsNullOrWhiteSpace(launch),
+            "замена на кадре отвечает молчанием вместо отказа словами");
+
+        Assert.Equal(PanelStrings.UpdateInstallUnavailable, launch);
+
+        // И СОСЕДНЯЯ ДВЕРЬ НЕ ТРОНУТА: прочие кадры по-прежнему снимаются с отказом.
+        Assert.False(
+            ShotDrawers.Install().Prepare("v2.4.0", ReleaseAssets.None).Ok,
+            "дверь остальных кадров начала «готовить» — записанное правило съёмки подменено");
     }
 
     /// <summary>

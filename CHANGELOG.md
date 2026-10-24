@@ -2,6 +2,30 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.4.1 - 2026-10-24
+
+**Eight accumulated defects — no new capabilities.** What changes is what the panel reports and how
+the screen reads: a server crash no longer goes silent, focus after an update step is no longer lost,
+the standard screenshot door can show the "prepared" state, window documents now say what the code
+does, date and currency follow the panel language, terminology is one name per concept, empty states
+call onward, and every field has an accessible name. The version is in "About": it says **2.4.1**.
+
+* **A crash of your own server is reported even when the panel adopted it by record** (after a panel
+  restart): a balloon, a journal line with the exit code, and the record cleared. If the code is not
+  available, it says "unknown" honestly instead of inventing a zero.
+* **Focus after an update step is not lost:** after preparing it sits on the replace card, after a
+  refusal on the repeatable action; the reason is said in words and announced to screen readers.
+* **The "prepared" frame** is taken by the standard door (`--shot … settings-update-prepared`), and
+  update frames no longer say "no update needed" above a ready build.
+* **Window documents match the code:** windows open above the panel, and the panel is not closed;
+  the live `--windows-selftest` probe checks this on a real desktop.
+* **Date and currency follow the panel language**, not the Windows culture: `22.10.2026` ·
+  `Oct 22, 2026` · `2026年10月22日`; the currency code (USD/CNY) is named next to the price, with no
+  conversion.
+* **Terminology: one name per concept** in all three dictionaries ("Backup", "folder", two distinct
+  unlinking actions — server and phone).
+* **Empty states call onward, dead-end errors name a way out** — by naming the button.
+* **All 19 fields have an accessible name** equal to their label.
 ## 2.4.0 - 2026-10-24
 
 **A batch of accumulated corrections: the update runs in the background and does not touch

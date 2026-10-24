@@ -271,7 +271,7 @@ public class OwnServerTests
         Assert.Equal(3097, state.Port);
         Assert.Equal(5000, state.Pid);
 
-        Assert.Contains(log, line => line.Contains("ПО ПУТИ ДВИЖКА", StringComparison.Ordinal));
+        Assert.Contains(log, line => line.Contains("ПО ПУТИ СЕРВЕРА DSH", StringComparison.Ordinal));
 
         // Запись приведена в порядок: следующий перезапуск панели снова узнает сервер, и в записи
         // теперь НАЗВАН движок — тот, из которого сервер поднят сейчас.
@@ -306,7 +306,7 @@ public class OwnServerTests
         Assert.Equal(ServerOwner.None, controller.Owner);
         Assert.Equal(string.Empty, files.Own);
         Assert.Equal(1, files.OwnClears);
-        Assert.DoesNotContain(log, line => line.Contains("ПО ПУТИ ДВИЖКА", StringComparison.Ordinal));
+        Assert.DoesNotContain(log, line => line.Contains("ПО ПУТИ СЕРВЕРА DSH", StringComparison.Ordinal));
 
         // Сервер на порту жив и НЕ ТРОНУТ: панель его просто не присвоила.
         Assert.Equal(5000, world.Listener);

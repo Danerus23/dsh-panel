@@ -1,4 +1,5 @@
 using System.Globalization;
+using DshPanel.Localization;
 using DshPanel.Shell;
 
 namespace DshPanel.Backup;
@@ -83,13 +84,19 @@ public static class BackupSchedule
     /// Когда была ПОСЛЕДНЯЯ попытка снять копию в этом прогоне (удачная или нет) — только ради
     /// <see cref="RetryGuard"/>. <c>null</c> — попыток не было.
     /// </param>
+    /// <param name="language">
+    /// Язык панели для даты в строке причины (<see cref="DateText"/>); <c>null</c> — выбранный
+    /// сейчас. До 2.4.1 дата здесь была жёсткой «22.10.2026 14:32» и стояла в английском окне
+    /// по-русски (DEF-041).
+    /// </param>
     public static BackupDue Due(
         bool enabled,
         int everyHours,
         DateTimeOffset? lastCopy,
         DateTimeOffset now,
         bool justStarted = false,
-        DateTimeOffset? lastAttempt = null)
+        DateTimeOffset? lastAttempt = null,
+        string? language = null)
     {
         if (!enabled) return new BackupDue(false, PanelStrings.BackupScheduleOff);
 
@@ -107,7 +114,7 @@ public static class BackupSchedule
                 string.Format(
                     CultureInfo.CurrentCulture,
                     PanelStrings.BackupScheduleFutureFormat,
-                    lastCopy.Value.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture)));
+                    DateText.DateAndTime(lastCopy.Value, language)));
         }
         else
         {

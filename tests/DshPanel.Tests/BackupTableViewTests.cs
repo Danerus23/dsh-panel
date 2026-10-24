@@ -161,7 +161,9 @@ public class BackupTableViewTests
             Assert.Equal(
                 new[]
                 {
-                    "26.09.2026 01:35",
+                    // DEF-041: дата и время идут ОДНИМ шаблоном панели (`DateText`), и у русского
+                    // он с запятой — как в остальных окнах («26.09.2026, 01:35»).
+                    "26.09.2026, 01:35",
                     PanelStrings.BackupKindFull,
                     BackupFormat.Size(4_194_304),
                     "12 файл(ов)",

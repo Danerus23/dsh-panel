@@ -1,5 +1,6 @@
 using System.Globalization;
 using DshPanel.Agents;
+using DshPanel.Localization;
 using DshPanel.Shell;
 
 namespace DshPanel.Peak;
@@ -206,8 +207,13 @@ public static class PeakDecisions
     ///
     /// Разобрать дату не удалось (профиль правят руками) — возвращаем строку КАК ЕСТЬ: пустая
     /// строка, мусор и всё прочее остаются собой. Ничего не выдумываем и не падаем.
+    ///
+    /// ⚠️ Шаблон — не свой: дату в окне рисует <see cref="DateText"/> по ЯЗЫКУ панели (DEF-041).
+    /// До 2.4.1 здесь стоял жёсткий <c>dd.MM.yyyy</c>, и английское окно показывало русскую дату.
     /// </summary>
-    public static string CheckedText(AgentProfile agent)
+    /// <param name="agent">Профиль агента: дата в нём по-машинному (<c>2026-09-24</c>).</param>
+    /// <param name="language">Язык панели; <c>null</c> — выбранный сейчас.</param>
+    public static string CheckedText(AgentProfile agent, string? language = null)
     {
         ArgumentNullException.ThrowIfNull(agent);
 
@@ -216,7 +222,7 @@ public static class PeakDecisions
             CultureInfo.InvariantCulture,
             DateTimeStyles.None,
             out var parsed)
-            ? parsed.ToString("dd.MM.yyyy", CultureInfo.CurrentCulture)
+            ? DateText.Date(parsed, language)
             : agent.PricingChecked;
     }
 

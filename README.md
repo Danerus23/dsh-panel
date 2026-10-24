@@ -36,7 +36,7 @@
 
 **Your DSH server, under control** — and out of the way in the tray. One file, `DshPanel.exe`:
 installed into your user profile, no administrator rights, no separate .NET install — the runtime is
-inside. This panel version is **2.4.0**.
+inside. This panel version is **2.4.1**.
 
 Start and stop the server, install, update and roll back DSH from a verified set, a tray icon that
 shows its state, your balance, peak windows and price history, copies of your data with restore, the
@@ -71,7 +71,7 @@ some wording may not sound native.
 
 ## How to update
 
-Open the **“Update”** section and press **“Check now”**. The panel finds 2.4.0, downloads
+Open the **“Update”** section and press **“Check now”**. The panel finds the new version, downloads
 `DshPanel.zip` from this release, checks its SHA-256 and replaces its files **after the panel
 exits**; a safety copy of the previous version is taken first. Nothing to unpack or uninstall by
 hand.

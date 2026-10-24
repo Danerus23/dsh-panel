@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
@@ -288,6 +289,135 @@ public class ShotWiringTests
     }
 
     /// <summary>
+    /// КАДРЫ ОБНОВЛЕНИЯ ПОКАЗЫВАЮТ «ЕСТЬ НОВЕЕ», А НЕ «ОБНОВЛЯТЬСЯ НЕ НУЖНО» (DEF-009, 2.4.1).
+    ///
+    /// **От какого случая.** На кадре стояла установленная версия самой панели, и после выпуска
+    /// 2.4.0 она совпала с образцовым выпуском: над готовой сборкой вставали «У вас последняя
+    /// версия 2.4.0 — обновляться не нужно» и «Обновляться некуда: выпуск не новее установленной
+    /// панели». Кадр противоречил сам себе и учил неправде. Теперь на кадре установлена **2.3.2**
+    /// (выпущена 22.10.2026), а выпуск — **2.4.0** (выпущен 24.10.2026): обе версии настоящие,
+    /// и доступным назван только существующий выпуск: 2.4.1 на кадре как «доступный» не называется.
+    ///
+    /// ⚠️ Проверяются ОБА кадра — и «до подготовки», и «подготовлено»: противоречие жило не в одном.
+    /// Смотрится ТЕКСТ СОБРАННОГО ОКНА, а не образцовая дверь: «обновляться не нужно» — это фраза,
+    /// которую произносит окно, и ищется она теми же словами, какими её увидит человек.
+    ///
+    /// Мутации, которые обязаны упасть: вернуть установленную версию 2.4.0 (равна выпуску) ·
+    /// заставить дверь отвечать «новее нет» при разных версиях.
+    /// </summary>
+    [AvaloniaFact]
+    public void Кадры_обновления_показывают_новее_а_не_обновляться_не_нужно()
+    {
+        foreach (var kind in new[] { StartModes.ShotSettingsUpdate, StartModes.ShotSettingsUpdatePrepared })
+        {
+            // «2.3.2» — обязательная строка кадра: без неё мерить «есть новее» не на чем.
+            var text = ShowAndRead(kind, "2.3.2");
+
+            // ЕСТЬ НОВЕЕ: установлено 2.3.2, и решение называет выпуск v2.4.0.
+            Assert.Contains(
+                string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateCurrentFormat, "2.3.2"),
+                text,
+                StringComparison.Ordinal);
+
+            Assert.Contains(
+                string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateAvailableFormat, "v2.4.0"),
+                text,
+                StringComparison.Ordinal);
+
+            // И НИ ОДНОЙ ФРАЗЫ «ОБНОВЛЯТЬСЯ НЕ НУЖНО» — ни решения, ни подсказки под кнопками.
+            Assert.DoesNotContain(
+                string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateWindowLatestFormat, "2.4.0"),
+                text,
+                StringComparison.Ordinal);
+
+            Assert.DoesNotContain(PanelStrings.UpdateAlreadyLatest, text, StringComparison.Ordinal);
+
+        // ДОСТУПНЫМ КАДР НАЗЫВАЕТ ТОЛЬКО СУЩЕСТВУЮЩИЙ ВЫПУСК: образцовый 2.4.0 (проверено выше).
+        // ⚠️ Запрет литерала «2.4.1» целиком был НЕВЕРЕН и уронил выпускной прогон 24.10.2026: с выпуском
+        // 2.4.1 это СОБСТВЕННАЯ версия панели, и она законно видна в окне («Версия: 2.4.1»). Запрещать
+        // надо не слово, а утверждение — «доступен выпуск, которого нет».
+        Assert.DoesNotContain(
+            string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateAvailableFormat, "v2.4.1"),
+            text,
+            StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// КАДР «ПОДГОТОВЛЕНО» (DEF-009, 2.4.1): КАРТОЧКА ЗАМЕНЫ ЦЕЛИКОМ, ПУТЬ МАСКОЙ, ПОДГОТОВКА
+    /// БОЛЬШЕ НЕ ДОСТУПНА, ХОД ПУСТ.
+    ///
+    /// **От какого случая.** У состояния «подготовлено» своего кадра не было: `settings-update`
+    /// снимает раздел ДО подготовки, и карточку замены — единственную дверь, подменяющую файлы
+    /// панели, — нельзя было увидеть глазами. Кадр собирается ТЕМ ЖЕ членом, что у съёмки
+    /// (<see cref="Program.ShotWindowWithDoors"/>), и показывает состояние, которое произвёл ТОТ ЖЕ
+    /// шов, каким идёт человек (`SettingsWindow.PrepareNow`), а не подставленное поле.
+    ///
+    /// ⚠️ **Меряется словом и числом, а не «кадр непустой»:**
+    /// * карточка замены ВИДИМА и ЦЕЛИКОМ в видимой области прокрутки (верх/низ против `Viewport`) —
+    ///   без прокрутки, потому что человек её не трогал;
+    /// * кнопка замены на месте и доступна (иначе кадр показывает карточку без двери);
+    /// * строка сборки называет путь ПОД МАСКОЙ `~` и версию образцового выпуска ЛИТЕРАЛАМИ,
+    ///   а имени пользователя в ней нет (красная линия 7);
+    /// * кнопка подготовки ВЫКЛЮЧЕНА: готовить больше нечего;
+    /// * строка хода пуста, полоса прогресса скрыта — та же пара, что у окна после успеха.
+    ///
+    /// Мутации, которые обязаны упасть здесь: «дверь подготовленного кадра снова отказывает»
+    /// (карточки нет) · «кадр снимает состояние ДО подготовки» · «путь показан без маски».
+    /// </summary>
+    [AvaloniaFact]
+    public void Кадр_подготовленного_обновления_показывает_карточку_замены()
+    {
+        var window = Build(StartModes.ShotSettingsUpdatePrepared).Window;
+
+        window.Show();
+        PanelTestStand.Settle();
+
+        try
+        {
+            var settings = (DshPanel.Views.SettingsWindow)window;
+
+            var card = settings.FindControl<Border>("UpdateReplaceCard")!;
+            var replace = settings.FindControl<Button>("UpdateReplaceButton")!;
+            var prepare = settings.FindControl<Button>("UpdatePrepareButton")!;
+            var staged = settings.FindControl<TextBlock>("UpdatePreparedText")!;
+
+            Assert.True(card.IsVisible, "карточки замены на кадре нет — кадр снял состояние ДО подготовки");
+            Assert.True(replace.IsVisible, "кнопки замены на кадре нет — карточка показана без двери");
+            Assert.True(replace.IsEnabled, "кнопка замены на кадре недоступна");
+
+            // ПУТЬ — МАСКОЙ И С ВЕРСИЕЙ ОБРАЗЦОВОГО ВЫПУСКА, литералами: проверка о том, что видит
+            // человек. «Users» в пути значило бы, что маска не легла и в витрину уехало имя.
+            var text = staged.Text ?? string.Empty;
+
+            Assert.Contains(@"~\AppData\Local\DshPanel2\state\update\2.4.0", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Users", text, StringComparison.OrdinalIgnoreCase);
+
+            // ПОДГОТОВКА БОЛЬШЕ НЕ ДОСТУПНА, ХОД ПУСТ — как у окна после успешной подготовки.
+            Assert.False(prepare.IsEnabled, "кнопка подготовки на кадре доступна, хотя сборка уже готова");
+            Assert.Equal(string.Empty, settings.FindControl<TextBlock>("UpdateProgressText")!.Text ?? string.Empty);
+            Assert.False(settings.FindControl<ProgressBar>("UpdateProgressBar")!.IsVisible);
+
+            // КАРТОЧКА ЦЕЛИКОМ БЕЗ ПРОКРУТКИ: человек колесо не трогал.
+            var scroll = settings.FindControl<ScrollViewer>("ContentScroll")!;
+
+            scroll.Offset = new Vector(0, 0);
+            PanelTestStand.Settle();
+
+            var at = card.TranslatePoint(new Point(0, 0), scroll) ?? default;
+
+            Assert.True(
+                at.Y >= 0 && at.Y + card.Bounds.Height <= scroll.Viewport.Height,
+                $"карточка замены не видна целиком: верх {at.Y:0.#}, низ {at.Y + card.Bounds.Height:0.#} "
+                + $"при видимой области {scroll.Viewport.Height:0.#}");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    /// <summary>
     /// КАДР «ПИКИ И ТАРИФЫ» ПОКАЗЫВАЕТ ЦЕНЫ, А НЕ ОТКАЗ ПРОГОНА (t13, 18.10.2026).
     ///
     /// **От какого случая.** Блок «Стоимость» на витрине был ПУСТ и объяснял: «{PriceLocked}».
@@ -432,6 +562,11 @@ public class ShotWiringTests
         (StartModes.ShotSettingsBackup, AllSettingsDoors()),
         (StartModes.ShotSettingsBalance, AllSettingsDoors()),
         (StartModes.ShotSettingsUpdate, AllSettingsDoors()),
+
+        // ⚠️ «ПОДГОТОВЛЕНО» (DEF-009, 2.4.1) — те же двери, что у прочих кадров окна настроек:
+        // двери — про ДАННЫЕ, а не про состояние раздела. Само состояние проверяет отдельная
+        // проверка ниже (карточка замены, путь маской, подготовка недоступна).
+        (StartModes.ShotSettingsUpdatePrepared, AllSettingsDoors()),
         (StartModes.ShotSettingsServer, AllSettingsDoors()),
         (StartModes.ShotSettingsPhone, AllSettingsDoors()),        (StartModes.ShotSettingsAbout, AllSettingsDoors()),
     };

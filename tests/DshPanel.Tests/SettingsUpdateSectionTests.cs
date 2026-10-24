@@ -5,6 +5,7 @@ using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.VisualTree;
 using DshPanel.Shell;
 using DshPanel.Update;
@@ -87,7 +88,13 @@ public class SettingsUpdateSectionTests
         /// <summary>Строка о последней попытке: пусто — попытки не было или она удалась.</summary>
         public string AttemptText { get; }
 
-        public string SourceText => Result.Ok ? "проверено 28.09.2026, 15:00" : "Обновление ещё не проверялось.";
+        /// <summary>
+        /// «Когда проверяли». В непроверенном состоянии — ТА ЖЕ строка, что у решения
+        /// (`PanelStrings.UpdateNeverChecked`): окно гасит её сравнением с решением
+        /// (`UpdateLines.SourceLine`), и своя копия текста в подстановке ломала бы это сравнение.
+        /// Так же поступает и настоящий контроллер (`UpdateController.SourceText`).
+        /// </summary>
+        public string SourceText => Result.Ok ? "проверено 28.09.2026, 15:00" : PanelStrings.UpdateNeverChecked;
 
         public string StatusText => Result.Ok ? "Доступна версия " + Result.Latest : SourceText;
 
@@ -238,6 +245,15 @@ public class SettingsUpdateSectionTests
         @"C:\Users\person\AppData\Local\DshPanel2\state\update\update.cmd",
         @"C:\Users\person\AppData\Local\DshPanel2\state\update\update.log",
         "\"\"update.cmd\" \"42\" \"C:\\Panel\" \"C:\\Staged\" \"C:\\Backup\" \"C:\\Log\" \"Mutex\" \"\"\"");
+
+    /// <summary>
+    /// ОТКАЗ, ПОСЛЕ КОТОРОГО ПОВТОРЯТЬ ЕСТЬ ЧЕМ: право готовить замену на месте, выпуск новее,
+    /// адреса вложений известны — а работа не вышла (архив не скачался). Ровно так выглядит
+    /// настоящий отказ после нажатия: кнопка подготовки к этому мгновению снова доступна,
+    /// и именно на неё возвращается фокус (DEF-008).
+    /// </summary>
+    private static UpdatePreparation Refused() =>
+        UpdatePreparation.Refuse(UpdateRefusal.ArchiveDownloadFailed, "timeout");
 
     /// <summary>
     /// РАЗДЕЛ «ОБНОВЛЕНИЕ» ЕСТЬ В СПИСКЕ — последним, как и остальные разделы настроек.
@@ -1151,6 +1167,238 @@ public class SettingsUpdateSectionTests
         finally
         {
             PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ПОСЛЕ ОТКАЗА ПОДГОТОВКИ ФОКУС НЕ ТЕРЯЕТСЯ: он возвращается на ПОВТОРЯЕМОЕ действие —
+    /// кнопку «Скачать и подготовить», — и виден (`:focus-visible`), а причина сказана словами рядом.
+    ///
+    /// **От какого случая.** Пока идёт подготовка, кнопка выключена, и фокус с неё снимается;
+    /// на успехе его забирает карточка замены, а на отказе карточки нет — фокус уходил В НИКУДА
+    /// (тот же класс, что замер 20.10.2026 «фокус = ничего»). Нормы «куда после отказа» в банке
+    /// НЕТ: принят вариант А дизайн-лидера (`_team\241\d1-normy.md` §1) — фокус на повторяемое
+    /// действие, причина уже показана словами.
+    ///
+    /// ⚠️ Проверка проходит через состояние, в котором дефект возможен: фокус СНАЧАЛА ставится
+    /// на кнопку — как у человека, который её нажал, — а ЗАТЕМ уводится на соседнюю кнопку, пока
+    /// работа идёт (кнопка подготовки в это время выключена, и держать на ней фокус нечем). Иначе
+    /// «фокус вернулся» нечем опровергнуть: он бы и не уходил.
+    ///
+    /// ⚠️ Мутации, которые обязаны упасть здесь: «не возвращать фокус на отказе» · «поставить
+    /// фокус на кнопку необратимой замены» · «не помечать фокус как видимый» (Focus без способа).
+    /// </summary>
+    [AvaloniaFact]
+    public void После_отказа_подготовки_фокус_возвращается_на_кнопку_подготовки()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            SettingsWindow? window = null;
+            Button? prepare = null;
+            object? midFocus = null;
+
+            // Человек увёл фокус, пока шла работа: кнопка подготовки выключена, и фокус с неё
+            // снимается — ровно то состояние, в котором дефект и случается.
+            var install = new FakeInstall(answer: Refused(), afterProgress: () =>
+            {
+                var check = window?.FindControl<Button>("UpdateCheckButton");
+
+                check?.Focus(NavigationMethod.Pointer);
+
+                midFocus = window?.FocusManager?.GetFocusedElement();
+            });
+
+            window = Stand(dir, new FakeUpdate(), install);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            prepare = window.FindControl<Button>("UpdatePrepareButton")!;
+
+            var check = window.FindControl<Button>("UpdateCheckButton")!;
+
+            Assert.True(prepare.IsEnabled, "повторять нечем: кнопка подготовки выключена ещё до нажатия");
+
+            // Человек нажал кнопку — фокус на ней (щёлкнуть мышью можно и не по центру, поэтому
+            // способ получения здесь тот же, каким его даёт указатель).
+            prepare.Focus(NavigationMethod.Pointer);
+            PanelTestStand.Settle();
+
+            Assert.True(prepare.IsFocused, "фокус не встал на кнопку — «потерять» его было бы нечем");
+
+            window.PrepareNow();
+            PanelTestStand.Settle();
+
+            // Состояние «фокус уведён» действительно было — иначе проверка ниже ничего не стоит.
+            Assert.Same(check, midFocus);
+
+            // Отказ состоялся и назван словами, а не молчанием.
+            Assert.Null(window.UpdatePrepared);
+            Assert.Equal(1, install.Prepared);
+
+            var reason = window.FindControl<TextBlock>("UpdateStatusText")!;
+
+            Assert.True(reason.IsVisible, "строка причины отказа не показана");
+            Assert.False(
+                string.IsNullOrWhiteSpace(reason.Text),
+                "причина отказа пуста — человек не узнает, что случилось и что делать");
+
+            // ФОКУС — на повторяемом действии, и он ВИДЕН: способ получения клавиатурный, значит
+            // каркас зажигает `:focus-visible` (без него кольца нет — замер 20.10.2026).
+            Assert.Same(prepare, window.FocusManager!.GetFocusedElement());
+            Assert.Contains(":focus-visible", prepare.Classes);
+
+            // И кнопка замены в фокусе не оказалась: карточки на отказе нет вовсе.
+            Assert.NotSame(window.FindControl<Button>("UpdateReplaceButton"), window.FocusManager!.GetFocusedElement());
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ИСКЛЮЧЕНИЕ ФОНОВОЙ ЗАДАЧИ — ТО ЖЕ САМОЕ: причина сказана словами, фокус возвращается
+    /// на кнопку подготовки, а не пропадает. Идёт ЖИВЫМ путём: нажатие настоящей кнопки, работа
+    /// в фоне, беда в ветке `catch`.
+    ///
+    /// ⚠️ Мутации, которые обязаны упасть здесь: «не возвращать фокус на отказе» (дверь фокуса
+    /// одна на отказ и на исключение) · «поставить фокус на кнопку замены».
+    ///
+    /// ⚠️ Фокус уводится на соседнюю кнопку, пока идёт фоновая работа: кнопка подготовки в это
+    /// время выключена. Кадр фокуса снимается уже на нитке интерфейса (работа идёт в фоне).
+    /// </summary>
+    [AvaloniaFact]
+    public void После_исключения_фоновой_задачи_фокус_возвращается_на_кнопку_подготовки()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            SettingsWindow? window = null;
+            object? midFocus = null;
+
+            var install = new FakeInstall(
+                answer: Prepared(),
+                failure: new InvalidOperationException("диск отвалился"),
+                afterProgress: () => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    window?.FindControl<Button>("UpdateCheckButton")?.Focus(NavigationMethod.Pointer);
+
+                    midFocus = window?.FocusManager?.GetFocusedElement();
+                }));
+            window = Stand(dir, new FakeUpdate(), install);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            var prepare = window.FindControl<Button>("UpdatePrepareButton")!;
+            var check = window.FindControl<Button>("UpdateCheckButton")!;
+
+            Assert.True(prepare.IsEnabled, "готовить есть что, а кнопка недоступна");
+
+            prepare.Focus(NavigationMethod.Pointer);
+            PanelTestStand.Settle();
+
+            Assert.True(prepare.IsFocused, "фокус не встал на кнопку — «потерять» его было бы нечем");
+
+            window.FindControl<Button>("UpdatePrepareButton")!
+                .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            WaitFor(
+                () => window.UpdateStatusLine.Contains("диск отвалился", StringComparison.Ordinal),
+                "исключение фоновой подготовки не дошло до раздела словами");
+
+            PanelTestStand.Settle();
+
+            // Состояние «фокус уведён» действительно было — иначе проверка ниже ничего не стоит.
+            Assert.Same(check, midFocus);
+
+            Assert.Null(window.UpdatePrepared);
+
+            var reason = window.FindControl<TextBlock>("UpdateStatusText")!;
+
+            Assert.True(reason.IsVisible, "строка причины исключения не показана");
+            Assert.Contains("диск отвалился", reason.Text ?? string.Empty, StringComparison.Ordinal);
+
+            Assert.Same(prepare, window.FocusManager!.GetFocusedElement());
+            Assert.Contains(":focus-visible", prepare.Classes);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// КНОПКА НЕОБРАТИМОЙ ЗАМЕНЫ НЕ ОКАЗЫВАЕТСЯ В ФОКУСЕ НИКОГДА — ни после успеха, ни после
+    /// отказа. Это отдельное утверждение, потому что соблазн ровно в ней: после шага «видимое
+    /// действие» — это в том числе «Обновить и перезапустить панель», а фокус на ней означал бы,
+    /// что одно нажатие Enter подменяет панель (`60-states.md` §12(5), вариант А).
+    ///
+    /// ⚠️ Пустоту проверка не стережёт: на успехе кнопка замены ВИДИМА и ДОСТУПНА — то есть
+    /// настоящий кандидат в фокус, — и всё равно фокус стоит на карточке.
+    ///
+    /// ⚠️ Мутация «поставить фокус на кнопку замены» падает здесь и в проверке отказа.
+    /// </summary>
+    [AvaloniaFact]
+    public void Кнопка_необратимой_замены_не_оказывается_в_фокусе_никогда()
+    {
+        var successDir = PanelTestStand.TempDir();
+        var refusedDir = PanelTestStand.TempDir();
+
+        try
+        {
+            // УСПЕХ: карточка замены появилась, её кнопка видима и доступна — и всё равно не в фокусе.
+            var done = Stand(successDir, new FakeUpdate(), new FakeInstall(answer: Prepared()));
+
+            done.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            done.PrepareNow();
+            PanelTestStand.Settle();
+
+            Assert.NotNull(done.UpdatePrepared);
+
+            var replace = done.FindControl<Button>("UpdateReplaceButton")!;
+
+            Assert.True(replace.IsVisible, "кнопка замены не показана — утверждение проверяло бы пустоту");
+            Assert.True(replace.IsEnabled, "кнопка замены недоступна — в фокус её и не тянуло бы");
+
+            Assert.Same(ReplaceCard(done), done.FocusManager!.GetFocusedElement());
+            Assert.NotSame(replace, done.FocusManager!.GetFocusedElement());
+
+            done.CloseQuietly();
+
+            // ОТКАЗ: карточки нет, фокус на повторяемом действии — и снова не на кнопке замены.
+            var failed = Stand(refusedDir, new FakeUpdate(), new FakeInstall(answer: Refused()));
+
+            failed.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            failed.PrepareNow();
+            PanelTestStand.Settle();
+
+            Assert.Null(failed.UpdatePrepared);
+            Assert.Same(
+                failed.FindControl<Button>("UpdatePrepareButton"),
+                failed.FocusManager!.GetFocusedElement());
+            Assert.NotSame(
+                failed.FindControl<Button>("UpdateReplaceButton"),
+                failed.FocusManager!.GetFocusedElement());
+
+            failed.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(successDir);
+            PanelTestStand.RemoveTemp(refusedDir);
         }
     }
 

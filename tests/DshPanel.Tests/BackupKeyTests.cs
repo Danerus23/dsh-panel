@@ -505,7 +505,7 @@ public class BackupKeyTests
 
         Assert.False(refused.Ok);
         Assert.NotEqual(string.Empty, refused.Reason);
-        Assert.Contains("нет ни файла, ни каталога", refused.Reason);
+        Assert.Contains("нет ни файла, ни папки", refused.Reason);
 
         var empty = BackupEngine.RestrictToOwner("   ");
         Assert.False(empty.Ok);

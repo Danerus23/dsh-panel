@@ -23,11 +23,18 @@ namespace DshPanel.Server;
 /// <param name="ExitCode">Код выхода; <c>null</c> — кода нет (процесса у панели уже не было).</param>
 /// <param name="At">Момент, когда панель увидела уход.</param>
 /// <param name="Tail">Последние строки вывода, УЖЕ обезвреженные.</param>
+/// <param name="CodeUnknown">
+/// Код выхода СПРОСИТЬ НЕ УДАЛОСЬ (DEF-057, 2.4.1): сервер был принят по записи, а дескриптора
+/// у панели нет — прав на процесс не дали или он ушёл до подписки. <c>null</c> в <paramref name="ExitCode"/>
+/// сам по себе этого не говорит: он значил «кода нет», и человек прочитал бы это как ответ.
+/// Флаг отдельный ровно затем, чтобы шарик сказал «неизвестен», а не выдуманный ноль.
+/// </param>
 public sealed record ServerCrash(
     int Pid,
     int? ExitCode,
     DateTimeOffset At,
-    IReadOnlyList<string> Tail);
+    IReadOnlyList<string> Tail,
+    bool CodeUnknown = false);
 
 /// <summary>
 /// ЧИСТЫЕ РЕШЕНИЯ О ПАДЕНИИ СЕРВЕРА (DEF-052/053, 2.4.0): что считать падением и что сказать
@@ -53,6 +60,11 @@ public static class ServerCrashDecisions
     /// <summary>
     /// Тело шарика: код выхода и время. Слово «сам» живёт в заголовке
     /// (<see cref="PanelStrings.NotifyServerCrashedTitle"/>), а не дублируется в теле.
+    ///
+    /// ⚠️ **ТРИ РАЗНЫХ ОТВЕТА, И ПУТАТЬ ИХ НЕЛЬЗЯ (DEF-057):** код ЕСТЬ · кода НЕТ (у панели не было
+    /// дескриптора вовсе) · код СПРОСИТЬ НЕ УДАЛОСЬ (<see cref="ServerCrash.CodeUnknown"/>). Третий
+    /// говорит «неизвестен», а не подставляет ноль: ноль — это тоже код, и человек прочитал бы его
+    /// как «вышел чисто».
     /// </summary>
     public static string NoticeText(ServerCrash crash) =>
         string.Format(
@@ -60,7 +72,9 @@ public static class ServerCrashDecisions
             PanelStrings.NotifyServerCrashedFormat,
             crash.ExitCode is { } code
                 ? code.ToString(CultureInfo.InvariantCulture)
-                : PanelStrings.SrvEngineExitNoCodeLog,
+                : crash.CodeUnknown
+                    ? PanelStrings.SrvEngineExitCodeUnknownLog
+                    : PanelStrings.SrvEngineExitNoCodeLog,
             EngineExitReport.Moment(crash.At));
 
     /// <summary>

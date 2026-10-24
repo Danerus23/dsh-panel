@@ -280,6 +280,47 @@ public sealed class ServerController : IServerControl, IDisposable
     private bool _exitReported;
 
     /// <summary>
+    /// ДЕСКРИПТОР СЕРВЕРА, ПРИНЯТОГО ПО ЗАПИСИ (DEF-057).
+    ///
+    /// **От какого случая.** После перезапуска панели свой сервер узнаётся по записи
+    /// <c>state\own-server.txt</c>, и процесса, который панель запускала САМА, у неё уже нет.
+    /// Сторож падения был подписан только на <see cref="_process"/>, поэтому внешнее убийство
+    /// давало один ответ опроса «сервер не запущен»: ни шарика, ни строки журнала, ни кода выхода
+    /// (журнал владельца 24.10.2026, 12:20:16 и 12:30:50).
+    ///
+    /// **Что это за объект.** Обычный <see cref="Process"/>, открытый по номеру принятого сервера
+    /// (<see cref="Process.GetProcessById"/>) с включёнными сообщениями о выходе
+    /// (<see cref="Process.EnableRaisingEvents"/>). Он живёт отдельно от <see cref="_process"/>
+    /// намеренно: <see cref="_process"/> — процесс, который панель ПОДНЯЛА, и его гасят иначе
+    /// (своим <c>Kill</c>), а принятый гасится по записи через <see cref="IProcessKiller"/> со сверкой
+    /// времени создания. Один флаг на два разных способа гашения — это два разных поведения
+    /// в одном поле.
+    ///
+    /// **Права могут не дать.** Тогда дескриптора нет, и выход замечается опросом порта
+    /// (<see cref="ForgetRecordedOwnWithoutHandle"/>): честно «код неизвестен», а не выдуманный ноль.
+    /// Это не падение панели.
+    /// </summary>
+    private Process? _watched;
+
+    /// <summary>Номер и время создания процесса под наблюдением: нужны отчёту о выходе (DEF-057).</summary>
+    private int _watchedPid;
+    private long _watchedStartTicks;
+
+    /// <summary>
+    /// О ВЫХОДЕ ПРИНЯТОГО СЕРВЕРА УЖЕ СКАЗАНО — РОВНО ОДИН РАЗ (DEF-057).
+    ///
+    /// **Зачем отдельный флаг.** Детекторов ДВА: сообщение <see cref="Process.Exited"/> (приходит
+    /// своей ниткой, когда система его доставит) и опрос в <see cref="Refresh"/> (смотрит факт
+    /// `HasExited`). Оба ведут в одно место (<see cref="ReportRecordedOwnExit"/>), и оба идут под
+    /// <see cref="_gate"/>: флаг здесь и есть та единственная правда, по которой второй детектор
+    /// молчит. Без него одно падение дало бы две строки «завершился САМ» и два шарика.
+    ///
+    /// Ставится и тогда, когда панель гасит сервер САМА (<see cref="StopWatching"/>): её слово уже
+    /// сказано ею («остановлен панелью»), и сторожу здесь говорить нечего.
+    /// </summary>
+    private bool _watchReported;
+
+    /// <summary>
     /// ИДЁТ ПОПЫТКА СТАРТА — <c>Start</c> выполняется прямо сейчас (DEF-054, 2.4.0).
     ///
     /// **Зачем отдельный флаг, а не «спросить состояние».** <c>Start</c> держит замок контроллера
@@ -616,10 +657,14 @@ public sealed class ServerController : IServerControl, IDisposable
 
             ForgetExitedProcess();
 
+            // ПРИНЯТЫЙ ПО ЗАПИСИ СЕРВЕР ТОЖЕ СТЕРЕЖЁТСЯ (DEF-057): его дескриптор открыт при
+            // принятии, и уход замечается здесь даже если сообщение о выходе не пришло.
+            ForgetExitedWatchedProcess();
+
             // СВОЙ СЕРВЕР, УЗНАННЫЙ ПО ЗАПИСИ, — ДО ветки запомненного согласия. Панель при выходе
             // сервер не гасит, и после перезапуска её собственный сервер выглядел бы «найденным
             // чужим»: панель предложила бы в него «встроиться», а «Остановить» отказывалась бы.
-            RestoreOwnServer();
+            var restoredOwn = RestoreOwnServer();
 
             // Согласие, запомненное человеком, панель восстанавливает САМА: он уже ответил один раз
             // (решение владельца 26.09.2026), и переспрашивать — значит не исполнять его ответ.
@@ -669,6 +714,17 @@ public sealed class ServerController : IServerControl, IDisposable
                     string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvListenerUnknownFormat, port));
             }
 
+            // ПРИНЯТЫЙ ПО ЗАПИСИ СЕРВЕР, У КОТОРОГО НЕ ОТКРЫЛСЯ ДЕСКРИПТОР (DEF-057): выход
+            // замечается ПОРТОМ. Это честный ответ «ушёл и не ответил», а код выхода при этом
+            // неизвестен — панель так и говорит. Принятый же ЭТИМ осмотром не проверяется: порт
+            // мог опустеть на мгновение между принятием и этим чтением, и объявлять смерть сервера,
+            // который только что ответил отпечатком, было бы ложью.
+            if (!restoredOwn && ForgetRecordedOwnWithoutHandle(listener))
+            {
+                // Отчёт о выходе уже собран — и состояние «остановлен» вместе с ним.
+                return State;
+            }
+
             var answers = listener > 0 && _probe.AnswersFingerprint(port);
             var presence = ServerDecisions.Classify(listener, answers);
 
@@ -715,20 +771,21 @@ public sealed class ServerController : IServerControl, IDisposable
     /// <c>_port</c>, <c>_ownPid</c> и <c>Owner</c>, а состояние собирает обычный ход
     /// <see cref="Refresh"/> — второго сборщика состояния не заводится.
     ///
-    /// Возвращает <c>void</c> намеренно: наружу он состояния не отдаёт (его собирает вызывающий
-    /// тем же ходом), и подпись с <c>ServerState?</c> обещала бы то, чего метод не делает.
+    /// Возвращает <c>true</c>, когда сервер принят ЭТИМ осмотром: вызывающий обязан знать это,
+    /// чтобы не принять мгновенную пустоту порта сразу после принятия за смерть сервера
+    /// (<see cref="ForgetRecordedOwnWithoutHandle"/>).
     /// </summary>
-    private void RestoreOwnServer()
+    private bool RestoreOwnServer()
     {
-        if (Owner != ServerOwner.None || _port > 0) return;
+        if (Owner != ServerOwner.None || _port > 0) return false;
 
         var record = OwnServerRecord.Parse(ReadOwnServerFile());
-        if (record is not { } saved) return;
+        if (record is not { } saved) return false;
 
         var listener = _probe.ListenerPid(saved.Port);
 
         // «Не смог узнать» — НЕ то же самое, что «сервера нет»: запись не трогаем, врать нельзя.
-        if (listener < 0) return;
+        if (listener < 0) return false;
 
         // Чем поднят тот, кто СЕЙЧАС слушает порт: путь к bin.js из его командной строки.
         // Это третья примета владения (этап E3) — она не зависит ни от номера процесса,
@@ -737,10 +794,10 @@ public sealed class ServerController : IServerControl, IDisposable
 
         if (listener == 0 || listener != saved.Pid)
         {
-            if (AdoptOwnEngineProcess(saved, listener, runningBin)) return;
+            if (AdoptOwnEngineProcess(saved, listener, runningBin)) return true;
 
             ForgetStaleOwnRecord(saved);
-            return;
+            return false;
         }
 
         if (!saved.Matches(listener, _probe.StartTicks(listener)))
@@ -748,20 +805,25 @@ public sealed class ServerController : IServerControl, IDisposable
             // Номер тот же, а процесс ДРУГОЙ: номера переиспользуются, и по одному номеру панель
             // однажды погасила бы чужой процесс. Но если этот другой поднят ИЗ НАШЕЙ ПАПКИ ДВИЖКА —
             // это наш сервер, просто после обновления движка у него новый номер.
-            if (AdoptOwnEngineProcess(saved, listener, runningBin)) return;
+            if (AdoptOwnEngineProcess(saved, listener, runningBin)) return true;
 
             ForgetStaleOwnRecord(saved);
-            return;
+            return false;
         }
 
-        if (!_probe.AnswersFingerprint(saved.Port)) return;
+        if (!_probe.AnswersFingerprint(saved.Port)) return false;
 
         _port = saved.Port;
         _ownPid = saved.Pid;
         Owner = ServerOwner.Panel;
 
+        // СЕРВЕР ПРИНЯТ — И ПОД НАБЛЮДЕНИЕМ (DEF-057): без дескриптора его смерть была бы тишиной.
+        WatchRecordedOwn(saved.Pid, saved.StartTicks);
+
         _log(string.Format(
             CultureInfo.CurrentCulture, PanelStrings.SrvOwnServerRestoredLogFormat, _port, _ownPid));
+
+        return true;
     }
 
     /// <summary>
@@ -797,6 +859,11 @@ public sealed class ServerController : IServerControl, IDisposable
         {
             PersistOwnRecord(OwnEngine.Record(saved.Port, listener, ticks, runningBin));
         }
+
+        // ВТОРАЯ ВЕТВЬ ПРИНЯТИЯ — ТОЖЕ ПОД НАБЛЮДЕНИЕМ (DEF-057): у принятого по пути движка
+        // дескриптора нет так же, как у принятого по совпавшей записи, и падение иначе было бы
+        // тишиной.
+        WatchRecordedOwn(listener, ticks);
 
         _log(string.Format(
             CultureInfo.CurrentCulture,
@@ -1498,6 +1565,11 @@ public sealed class ServerController : IServerControl, IDisposable
             // флаг пережил бы прошлый запуск и приписал панели чужое падение.
             _stoppedByPanel = false;
 
+            // НАБЛЮДЕНИЕ ЗА ПРИНЯТЫМ ПО ЗАПИСИ СЕРВЕРОМ СНИМАЕТСЯ (DEF-057): панель поднимает
+            // СВОЙ процесс, и прежний принятый её больше не касается. Иначе его выход пришёл бы
+            // строкой «завершился САМ» уже про чужую жизнь — и человек прочитал бы её про новый.
+            StopWatching();
+
             // Рабочий каталог спрашивается ЗДЕСЬ — в момент запуска сервера, а не при построении
             // контроллера: это настройка, и она обязана применяться без перезапуска панели.
             var workDir = ResolveWorkingDirectory();
@@ -1951,6 +2023,12 @@ public sealed class ServerController : IServerControl, IDisposable
         _log(string.Format(
             CultureInfo.CurrentCulture, PanelStrings.SrvStoppingOwnByRecordLogFormat, State.ProcessName, pid, port));
 
+        // СТОРОЖ ЗАГЛУШЁН ДО ГАШЕНИЯ (DEF-057). Сейчас панель скажет своё слово — «остановлен
+        // панелью», — и второй, ложный отчёт «завершился САМ» про этот же выход был бы обвинением
+        // программы в том, что сделал человек. Заглушён — значит и сообщения `Exited`, и опрос
+        // молчат: их место заняла строка ниже.
+        StopWatching();
+
         if (!_killer.Kill(pid, record.StartTicks, out var error))
         {
             _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvOwnStopFailedLogFormat, error));
@@ -2268,6 +2346,310 @@ public sealed class ServerController : IServerControl, IDisposable
                 PanelStrings.ParallelStartRefusedFormat,
                 blocker.Port);
 
+    // --- сторож сервера, принятого по записи (DEF-057) ----------------------
+
+    /// <summary>
+    /// Наблюдает ли панель за процессом, принятым по записи. ШОВ ДЛЯ ПРОВЕРОК: дескриптор
+    /// процесса снаружи не виден, а утверждение «<see cref="Dispose"/> его отпускает» надо чем-то
+    /// померить — иначе оно остаётся обещанием в комментарии. Кроме проверок этим никто не
+    /// пользуется, и снаружи сборки шва не существует.
+    /// </summary>
+    internal bool WatchingRecordedOwn => _watched is not null;
+
+    /// <summary>
+    /// ВЗЯТЬ ПОД НАБЛЮДЕНИЕ СЕРВЕР, ПРИНЯТЫЙ ПО ЗАПИСИ (DEF-057). Обе ветви принятия —
+    /// и совпавшая запись (<see cref="RestoreOwnServer"/>), и признание по пути движка
+    /// (<see cref="AdoptOwnEngineProcess"/>) — проходят ЗДЕСЬ: у обеих панель не поднимала процесс
+    /// сама, и живого дескриптора у неё нет.
+    ///
+    /// **Что открывается.** Настоящий дескриптор по номеру процесса
+    /// (<see cref="Process.GetProcessById"/>) с сообщениями о выходе
+    /// (<see cref="Process.EnableRaisingEvents"/>). Он живёт отдельно от <c>_process</c>: тот —
+    /// процесс, который панель ПОДНЯЛА, и гасят его иначе.
+    ///
+    /// **Сверка времени создания — как у гашения.** Номера процессов переиспользуются
+    /// (урок v1): если записанное время не совпало с настоящим, это уже ДРУГОЙ процесс с тем же
+    /// номером, и стеречь его панель не имеет права — чужое падение она назвала бы своим.
+    /// Нет времени создания (0) — сверять нечего, значит и наблюдать нечего.
+    ///
+    /// **Права могут не дать.** Тогда дескриптора нет, и выход замечается опросом порта
+    /// (<see cref="ForgetRecordedOwnWithoutHandle"/>) — с честным «код неизвестен». Это не падение
+    /// панели и не повод врать.
+    /// </summary>
+    private void WatchRecordedOwn(int pid, long startTicks)
+    {
+        if (pid <= 0 || startTicks <= 0) return;
+
+        // Тот же процесс уже под наблюдением — второй подписки не заводим: две подписки на один
+        // выход дали бы два сообщения, то есть ровно то, от чего стоит `_watchReported`.
+        if (_watched is not null && _watchedPid == pid && _watchedStartTicks == startTicks) return;
+
+        ScheduleDrop(DetachWatch());
+        _watchReported = false;
+
+        Process? opened = null;
+        try
+        {
+            opened = Process.GetProcessById(pid);
+
+            if (opened.StartTime.Ticks != startTicks)
+            {
+                // Номер тот же, процесс другой. Наблюдение здесь было бы слежкой за чужим
+                // процессом, а его падение панель назвала бы падением своего сервера.
+                opened.Dispose();
+                return;
+            }
+
+            opened.EnableRaisingEvents = true;
+            opened.Exited += OnWatchedExited;
+        }
+        catch
+        {
+            // Прав не дали или процесс уже ушёл: дескриптора нет. Не беда — выход заметит опрос
+            // порта, и код выхода тогда будет честно «неизвестен».
+            opened?.Dispose();
+            return;
+        }
+
+        _watched = opened;
+        _watchedPid = pid;
+        _watchedStartTicks = startTicks;
+
+        bool gone;
+        try
+        {
+            gone = opened.HasExited;
+        }
+        catch
+        {
+            gone = true;
+        }
+
+        if (!gone) return;
+
+        // Умер между принятием и подпиской: сообщения о выходе уже не будет, а дескриптор живого
+        // процесса больше не описывает. Отпускаем и ждём опроса — он скажет «код неизвестен».
+        ScheduleDrop(DetachWatch());
+    }
+
+    /// <summary>
+    /// СООБЩЕНИЕ О ВЫХОДЕ — ПЕРВЫЙ ДЕТЕКТОР (DEF-057). Приходит с чужой нитки (пул .NET), поэтому
+    /// берёт ТОТ ЖЕ замок, что и опрос: иначе два детектора наперегонки дали бы два отчёта.
+    ///
+    /// ⚠️ Исключение здесь не имеет права уйти наружу: необработанное исключение в обработчике
+    /// на чужой нитке роняет ВСЮ панель — а сообщение о выходе не стоит её жизни. Молча: второй
+    /// детектор (опрос в <see cref="Refresh"/>) остаётся и скажет то же самое.
+    /// </summary>
+    private void OnWatchedExited(object? sender, EventArgs e)
+    {
+        try
+        {
+            lock (_gate) ReportRecordedOwnExit();
+        }
+        catch
+        {
+            // см. выше: опрос — второй детектор, и он не отменён.
+        }
+    }
+
+    /// <summary>
+    /// ОПРОС СТОРОЖА — ВТОРОЙ ДЕТЕКТОР (DEF-057). Зовётся из <see cref="Refresh"/> под замком.
+    ///
+    /// **Зачем второй, если есть сообщение.** «Сообщение придёт» — не то же самое, что «сообщение
+    /// пришло»: панель не имеет права зависеть от доставки события. Опрос раз в секунду смотрит
+    /// ФАКТ (<see cref="Process.HasExited"/>) и говорит то же самое; отчёт всё равно ровно один —
+    /// через <see cref="ReportRecordedOwnExit"/> и его флаг.
+    /// </summary>
+    private void ForgetExitedWatchedProcess()
+    {
+        var watched = _watched;
+        if (watched is null || _watchReported) return;
+
+        bool exited;
+        try
+        {
+            exited = watched.HasExited;
+        }
+        catch
+        {
+            // Дескриптор больше не отвечает — считаем, что процесс ушёл: живого сервера,
+            // о котором нечего спросить, у панели нет.
+            exited = true;
+        }
+
+        if (exited) ReportRecordedOwnExit();
+    }
+
+    /// <summary>
+    /// ОТЧЁТ О ВНЕШНЕМ ВЫХОДЕ СЕРВЕРА, ПРИНЯТОГО ПО ЗАПИСИ (DEF-057) — ОДНО МЕСТО НА ОБА ДЕТЕКТОРА.
+    /// Зовётся под <see cref="_gate"/>. Ровно один раз: флаг ставится здесь же.
+    ///
+    /// **Что делается, и в каком порядке.** Код выхода спрашивается У ДЕСКРИПТОРА до его
+    /// освобождения (после — уже не у кого). Строка журнала пишется ДО сброса владельца: она же
+    /// решает, поднимать ли событие «упал сам» (`ours` внутри <see cref="JournalEngineExit"/>).
+    /// Потом снимаются запись о сервере и ссылка входа, состояние становится «остановлен».
+    /// **Авто-подъёма нет** — ни здесь, ни в подписчике: запуск остаётся за человеком.
+    ///
+    /// ⚠️ **Код может быть недоступен.** Тогда в журнал и в шарик уходит «неизвестен» — не ноль,
+    /// который человек прочитал бы как «вышел чисто».
+    /// </summary>
+    private void ReportRecordedOwnExit()
+    {
+        var watched = _watched;
+        if (watched is null || _watchReported) return;
+
+        var pid = _watchedPid;
+
+        // Код выхода — ДО освобождения дескриптора.
+        int? exitCode = null;
+        var codeUnknown = false;
+        try
+        {
+            if (!watched.HasExited) return; // ещё жив: это не выход, а ошибка детектора
+
+            exitCode = watched.ExitCode;
+        }
+        catch
+        {
+            // Права на код не хватило: это не ноль и не «кода нет» — панель скажет «неизвестен».
+            codeUnknown = true;
+        }
+
+        _watchReported = true;
+
+        // Наблюдение снимается СРАЗУ (память), а дескриптор закрывается своей ниткой: этот отчёт
+        // может идти из обратного вызова самого дескриптора — см. `ScheduleDrop`.
+        ScheduleDrop(DetachWatch());
+
+        JournalEngineExit(pid, exitCode, stoppedByPanel: false, codeUnknown: codeUnknown);
+
+        ClearRecordedOwnAfterExit();
+    }
+
+    /// <summary>
+    /// ВЫХОД ЗАМЕЧЕН ПОРТОМ — когда дескриптора у принятого сервера НЕТ (DEF-057): прав на процесс
+    /// не дали, или он ушёл между принятием и подпиской.
+    ///
+    /// **Что здесь честно.** Кода выхода спросить не у кого — панель говорит «неизвестен»,
+    /// а не подставляет ноль. Это и есть третий, отдельный ответ рядом с «код есть» и «кода нет».
+    ///
+    /// **Чего здесь нельзя.** Объявлять смерть сервера, который только что был принят ЭТИМ ЖЕ
+    /// осмотром: порт мог опустеть на мгновение, и вызывающий говорит об этом сам (<c>restoredOwn</c>
+    /// в <see cref="Refresh"/>). Возвращает <c>true</c>, если отчёт собран: состояние уже отдано,
+    /// и собирать второе вызывающему незачем.
+    /// </summary>
+    private bool ForgetRecordedOwnWithoutHandle(int listener)
+    {
+        if (_watched is not null || _watchReported) return false;
+
+        // Процесс, который подняла ПАНЕЛЬ, стережёт `_process` — это его дело, а не порта.
+        if (_process is not null) return false;
+
+        if (Owner != ServerOwner.Panel || _port <= 0) return false;
+
+        // На порту кто-то есть — сервер жив, что бы ни говорила память панели.
+        if (listener != 0) return false;
+
+        var saved = OwnServerRecord.Parse(ReadOwnServerFile());
+        var pid = saved is { } record ? record.Pid : _ownPid;
+
+        _watchReported = true;
+
+        JournalEngineExit(pid, exitCode: null, stoppedByPanel: false, codeUnknown: true);
+
+        ClearRecordedOwnAfterExit();
+        return true;
+    }
+
+    /// <summary>
+    /// УБОРКА ПОСЛЕ ВНЕШНЕГО ВЫХОДА ПРИНЯТОГО СЕРВЕРА (DEF-057) — общая для обоих детекторов.
+    ///
+    /// Запись о сервере и ссылка входа снимаются: сервера, который их написал, больше нет, а
+    /// мёртвый адрес человеку показывать незачем. Состояние — «остановлен», и слова у него свои:
+    /// «Сервер DSH завершился сам» (тот же заголовок, что у шарика) — потому что «панель ещё
+    /// не запускала сервер» здесь было бы неправдой.
+    /// </summary>
+    private void ClearRecordedOwnAfterExit()
+    {
+        _port = 0;
+        _ownPid = 0;
+        Owner = ServerOwner.None;
+
+        // СЕРВЕР УШЁЛ — «ещё стартует» больше неправда (DEF-054), как и у своего процесса.
+        _engineStillStarting = false;
+
+        ClearOwnServerFiles();
+        State = ServerState.Stopped(0, PanelStrings.NotifyServerCrashedTitle);
+    }
+
+    /// <summary>
+    /// ЗАГЛУШИТЬ СТОРОЖА (DEF-057): панель гасит сервер САМА, и её слово уже будет сказано ею
+    /// (<see cref="StopRecordedOwn"/> пишет «остановлен панелью»). Без этого дескриптор сообщил бы
+    /// о выходе как о падении — и человек прочитал бы «завершился САМ» про процесс, который
+    /// погасила панель.
+    ///
+    /// Зовётся и в <see cref="Dispose"/>: закрытие панели сервер не гасит, но дескриптор отпускает,
+    /// и сообщать о выходе после закрытия уже некому.
+    /// </summary>
+    private void StopWatching()
+    {
+        _watchReported = true;
+        ScheduleDrop(DetachWatch());
+    }
+
+    /// <summary>
+    /// СНЯТЬ ДЕСКРИПТОР С НАБЛЮДЕНИЯ — только память панели, БЕЗ обращений к системе.
+    /// Зовётся под <see cref="_gate"/>. Возвращает снятый дескриптор: закрывает его вызывающий
+    /// и НЕ здесь — почему, сказано в <see cref="ScheduleDrop"/>.
+    /// </summary>
+    private Process? DetachWatch()
+    {
+        var watched = _watched;
+
+        _watched = null;
+        _watchedPid = 0;
+        _watchedStartTicks = 0;
+
+        return watched;
+    }
+
+    /// <summary>
+    /// ОТПУСТИТЬ ДЕСКРИПТОР — ОТДЕЛЬНОЙ НИТКОЙ ПОСЛЕ ЗАМКА (DEF-057), и это не перестраховка.
+    ///
+    /// Снятие подписки (`EnableRaisingEvents = false`) ждёт, пока обработчик `Exited` доработает.
+    /// Отчёт о выходе может идти ИЗ ЭТОГО САМОГО обработчика — тогда он ждал бы сам себя, и панель
+    /// зависла бы ровно на падении сервера, то есть там, где она обязана сообщить о беде. Пул
+    /// принимает работу в любом случае; не принял (панель уже гаснет) — отпускаем здесь же: замок
+    /// к этому мгновению уже не наш, и ждать нечего.
+    ///
+    /// ⚠️ Второе, что этим закрывается: пока дескриптор ждёт закрытия, он не держит `_gate`,
+    /// поэтому обработчик, ждущий замок, не встаёт навсегда.
+    /// </summary>
+    private void ScheduleDrop(Process? watched)
+    {
+        if (watched is null) return;
+
+        try
+        {
+            ThreadPool.QueueUserWorkItem(_ => DropWatch(watched));
+        }
+        catch
+        {
+            DropWatch(watched);
+        }
+    }
+
+    /// <summary>
+    /// Закрыть дескриптор наблюдения. Порядок: снять сообщения, отписаться, закрыть. Каждый шаг
+    /// в своём <c>try</c>: отказ на одном не должен оставить висеть остальные.
+    /// </summary>
+    private void DropWatch(Process watched)
+    {
+        try { watched.EnableRaisingEvents = false; } catch { }
+        try { watched.Exited -= OnWatchedExited; } catch { }
+        try { watched.Dispose(); } catch { }
+    }
+
     private void ForgetExitedProcess()
     {
         if (_process is null || !_process.HasExited) return;
@@ -2337,11 +2719,16 @@ public sealed class ServerController : IServerControl, IDisposable
     }
 
     /// <summary>
-    /// ЗАПИСЬ О ЗАВЕРШЕНИИ ПРОЦЕССА ДВИЖКА — ОДНО место (t15, 18.10.2026). Сюда приходят все три
-    /// ветви: процесс ушёл сам (<see cref="ForgetExitedProcess"/>), погасила панель со живым
-    /// дескриптором (<see cref="Stop"/>) и погасила панель по записи без дескриптора
-    /// (<see cref="StopRecordedOwn"/>). Формат строки и маска хвоста — в
+    /// ЗАПИСЬ О ЗАВЕРШЕНИИ ПРОЦЕССА ДВИЖКА — ОДНО место (t15, 18.10.2026). Сюда приходят все
+    /// ветви: процесс ушёл сам (<see cref="ForgetExitedProcess"/>), погасила панель с живым
+    /// дескриптором (<see cref="Stop"/>), погасила панель по записи без дескриптора
+    /// (<see cref="StopRecordedOwn"/>) и ушёл САМ сервер, принятый по записи
+    /// (<see cref="ReportRecordedOwnExit"/>). Формат строки и маска хвоста — в
     /// <see cref="EngineExitReport"/>, здесь только факты.
+    ///
+    /// <paramref name="codeUnknown"/> — ТРЕТИЙ ответ рядом с «код есть» и «кода нет» (DEF-057):
+    /// код спросить не удалось. Проверка подаёт его из подставного процесса, чей дескриптор
+    /// не открывается, и смотрит, что панель сказала «неизвестен», а не выдумала ноль.
     ///
     /// <c>internal</c>, а не <c>private</c>, — по той же причине, что и <see cref="Remember"/>:
     /// это ШОВ. Через живой движок проверку не написать (панель сама собирает его командную
@@ -2349,8 +2736,14 @@ public sealed class ServerController : IServerControl, IDisposable
     /// ПОДСТАВНОГО процесса (<c>cmd /c … exit 7</c>) и смотрит, что легло в журнал панели.
     /// Снаружи сборки этого шва не существует.
     /// </summary>
-    internal void JournalEngineExit(int pid, int? exitCode, bool stoppedByPanel, IReadOnlyList<string>? tail = null) =>
-        ReportEngineExit(pid, exitCode, _clock(), tail ?? EngineTail(), ours: Owner == ServerOwner.Panel, stoppedByPanel);
+    internal void JournalEngineExit(
+        int pid,
+        int? exitCode,
+        bool stoppedByPanel,
+        IReadOnlyList<string>? tail = null,
+        bool codeUnknown = false) =>
+        ReportEngineExit(
+            pid, exitCode, _clock(), tail ?? EngineTail(), ours: Owner == ServerOwner.Panel, stoppedByPanel, codeUnknown);
 
     /// <summary>
     /// ЗАВЕРШЕНИЕ ДВИЖКА: журнал ВСЕГДА, событие — только при падении (DEF-052/053, 2.4.0).
@@ -2360,11 +2753,12 @@ public sealed class ServerController : IServerControl, IDisposable
     /// и «не свой») без поднятия сервера. Один шов — одна проверка на все три ветви завершения.
     /// </summary>
     internal void ReportEngineExit(
-        int pid, int? exitCode, DateTimeOffset at, IReadOnlyList<string>? tail, bool ours, bool stoppedByPanel)
+        int pid, int? exitCode, DateTimeOffset at, IReadOnlyList<string>? tail, bool ours, bool stoppedByPanel,
+        bool codeUnknown = false)
     {
         var facts = tail ?? Array.Empty<string>();
 
-        var lines = EngineExitReport.Lines(pid, exitCode, stoppedByPanel, at, facts);
+        var lines = EngineExitReport.Lines(pid, exitCode, stoppedByPanel, at, facts, codeUnknown);
 
         foreach (var line in lines) _log(line);
 
@@ -2373,7 +2767,7 @@ public sealed class ServerController : IServerControl, IDisposable
         // (шарик) не поднимает ничего, и это проверяется счётчиком поиска движка.
         if (!ServerCrashDecisions.IsCrash(ours, stoppedByPanel)) return;
 
-        Crashed?.Invoke(new ServerCrash(pid, exitCode, at, ServerCrashDecisions.MaskedTail(facts)));
+        Crashed?.Invoke(new ServerCrash(pid, exitCode, at, ServerCrashDecisions.MaskedTail(facts), codeUnknown));
     }
 
     private string ProcessName(int pid)
@@ -2384,7 +2778,13 @@ public sealed class ServerController : IServerControl, IDisposable
 
     /// <summary>
     /// Закрытие панели сервер НЕ гасит: он живёт своей жизнью, как и в v1 — иначе закрытие окна
-    /// обрывало бы человеку работу. Освобождаем только дескриптор процесса.
+    /// обрывало бы человеку работу. Освобождаем только дескрипторы процесса.
+    ///
+    /// ⚠️ **Дескриптор принятого по записи сервера отпускается ЗДЕСЬ (DEF-057).** Наблюдение
+    /// снимается молча: закрытой панели сообщать о выходе некому, а следующий запуск узнает сервер
+    /// по записи заново и заведёт сторожа снова. Снятие с наблюдения — сразу (поле), закрытие
+    /// дескриптора — своей ниткой (`ScheduleDrop`): закрывать его под замком, пока обработчик
+    /// `Exited` ждёт этот же замок, значило бы ждать сам себя.
     ///
     /// ⚠️ **Запись «этот сервер наш» при выходе НЕ снимается** — ровно ради этого случая: следующая
     /// панель по ней узнает свой работающий сервер. Снимается она при остановке сервера и при его
@@ -2394,6 +2794,8 @@ public sealed class ServerController : IServerControl, IDisposable
     {
         lock (_gate)
         {
+            StopWatching();
+
             _process?.Dispose();
             _process = null;
             Owner = ServerOwner.None;

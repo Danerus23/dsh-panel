@@ -56,7 +56,8 @@ public static class EngineExitReport
         int? exitCode,
         bool stoppedByPanel,
         DateTimeOffset at,
-        IEnumerable<string>? tail)
+        IEnumerable<string>? tail,
+        bool codeUnknown = false)
     {
         var masked = new List<string>();
 
@@ -72,9 +73,15 @@ public static class EngineExitReport
         // Берём ХВОСТ, а не начало: падение движок печатает последним.
         if (masked.Count > TailLines) masked.RemoveRange(0, masked.Count - TailLines);
 
+        // ТРИ РАЗНЫХ ОТВЕТА, И ПУТАТЬ ИХ НЕЛЬЗЯ (DEF-057): код ЕСТЬ · кода НЕТ (панель гасила сама
+        // и не спрашивала) · код СПРОСИТЬ НЕ УДАЛОСЬ (принятый по записи процесс, прав на него нет).
+        // Третий ответ говорит «неизвестен», а не подставляет ноль: ноль — это тоже код, и человек
+        // прочитал бы его как «вышел чисто».
         var code = exitCode is { } value
             ? value.ToString(CultureInfo.InvariantCulture)
-            : PanelStrings.SrvEngineExitNoCodeLog;
+            : codeUnknown
+                ? PanelStrings.SrvEngineExitCodeUnknownLog
+                : PanelStrings.SrvEngineExitNoCodeLog;
 
         var tailWords = masked.Count == 0
             ? PanelStrings.SrvEngineExitNoTailLog

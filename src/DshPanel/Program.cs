@@ -826,7 +826,15 @@ internal static class Program
             // то есть ровно то, на что владелец смотрел в публичной витрине и называл кривым фото.
             // Значения выдуманы и личными быть не могут: это вымышленный выпуск вымышленной версии.
             update: samples is null ? null : ShotUpdateControl.For(Loc.Language),
-            install: samples is null ? null : ShotDrawers.Install(),
+
+            // ⚠️ ДВЕРЬ ЗАМЕНЫ НА КАДРЕ ДВА РАЗНЫХ ОТВЕТА, и выбор — ОДНИМ решением
+            // (`ShotPreparesInstall`): кадр «подготовлено» получает УСПЕХ подготовки с путями-
+            // литералами, все прочие — записанный ОТКАЗ (съёмка ничего не готовит). Подменить одну
+            // дверь другой значило бы либо соврать о работе, которой не было, либо оставить кадр
+            // без состояния, ради которого имя и заведено.
+            install: samples is null
+                ? null
+                : ShotPreparesInstall(kind) ? ShotDrawers.PreparedInstall() : ShotDrawers.Install(),
 
             phone: phone,
             phoneAddressMask: kind == StartModes.ShotSettingsPhone ? MaskAddress : null);
@@ -855,7 +863,7 @@ internal static class Program
         {
             StartModes.ShotSettingsGeneral => SettingsWindow.GeneralSection,
             StartModes.ShotSettingsBalance => SettingsWindow.BalanceSection,
-            StartModes.ShotSettingsUpdate => SettingsWindow.UpdateSection,
+            StartModes.ShotSettingsUpdate or StartModes.ShotSettingsUpdatePrepared => SettingsWindow.UpdateSection,
             StartModes.ShotSettingsServer => SettingsWindow.ServerSection,
             StartModes.ShotSettingsPhone => SettingsWindow.PhoneSection,
             StartModes.ShotSettingsAbout => SettingsWindow.AboutSection,
@@ -877,6 +885,22 @@ internal static class Program
     /// </summary>
     internal static StartModes.ShotDoors ShotDoorSource(string kind) =>
         kind == StartModes.ShotMainTwoServers ? StartModes.ShotDoors.Real : StartModes.ShotDoors.Sample;
+
+    /// <summary>
+    /// СНИМАЕТ ЛИ ЭТО ИМЯ СОСТОЯНИЕ «ПОДГОТОВЛЕНО» (DEF-009, 2.4.1) — ОДНО РЕШЕНИЕ НА ДВА ДЕЙСТВИЯ.
+    ///
+    /// **Почему отдельным членом, а не условием на месте.** Это имя отличается от `settings-update`
+    /// ровно двумя вещами: дверь замены отвечает успехом (<see cref="ShotDrawers.PreparedInstall"/>)
+    /// и состояние производит ТОТ ЖЕ шов, каким идёт человек (`SettingsWindow.PrepareNow`). Двумя
+    /// условиями подряд они однажды разошлись бы — кадр получил бы успешную дверь, но остался
+    /// неподготовленным (или наоборот), и заметить это было бы нечем: кадр непустой, имя на месте.
+    ///
+    /// ⚠️ Спрашивается по имени окна: решение о ДАННЫХ снимает `ShotDoorSource`, а это — о состоянии
+    /// кадра, и второе не заменяет первое.
+    /// </summary>
+    internal static bool ShotPreparesInstall(string kind) =>
+        string.Equals(kind, StartModes.ShotSettingsUpdatePrepared, StringComparison.Ordinal);
+
 
     /// <summary>
     /// КАДР ИНТЕРФЕЙСА — БЕЗ ПОКАЗА ОКНА ЧЕЛОВЕКУ.
@@ -1144,6 +1168,7 @@ internal static class Program
 
         if (kind is StartModes.ShotSettings or StartModes.ShotSettingsGeneral or StartModes.ShotSettingsBackup
             or StartModes.ShotSettingsBalance or StartModes.ShotSettingsUpdate
+            or StartModes.ShotSettingsUpdatePrepared
             or StartModes.ShotSettingsServer or StartModes.ShotSettingsPhone
             or StartModes.ShotSettingsAbout)
         {
@@ -1174,6 +1199,20 @@ internal static class Program
             {
                 doors.Add("balance");
                 doors.Add("update");
+            }
+
+            // КАДР «ПОДГОТОВЛЕНО» (DEF-009): состояние производит ТОТ ЖЕ ШОВ, КАКИМ ИДЁТ ЧЕЛОВЕК, —
+            // `SettingsWindow.PrepareNow`, а не подстановка готового ответа в поле окна. Подстановка
+            // показала бы состояние, которого продукт не производит, и кадр перестал бы быть кадром
+            // (то же правило, что у образцовых дверей фазы 3). Дверь замены этому имени выдана
+            // успешная (`ShotPreparesInstall`), поэтому шов ничего не качает, не пишет и не заменяет.
+            //
+            // ⚠️ Зовётся ДО `Show()`: окно ещё не показано, и прокрутка к карточке (её ставит
+            // `RevealReplaceCard`) не делается — кадр обязан показать карточку ЦЕЛИКОМ без прокрутки,
+            // а не «подведённую». Фокус на кадре ставит ключ `--state focus:UpdateReplaceCard`.
+            if (window is SettingsWindow preparedSection && ShotPreparesInstall(kind))
+            {
+                preparedSection.PrepareNow();
             }
         }
         else if (kind == StartModes.ShotBackup)
@@ -1685,17 +1724,23 @@ internal static class Program
 
         private ShotUpdateControl(string language, DateTimeOffset at)
         {
-            // ⚠️ УСТАНОВЛЕННАЯ ВЕРСИЯ НА КАДРЕ — ПО РЕШЕНИЮ ВЛАДЕЛЬЦА 13.10.2026: **2.0.3**,
-            // то есть та, что ВЫПУЩЕНА. Выдуманная 2.0.0 стояла здесь для того, чтобы кадр
-            // показывал состояние «есть новое»; но витрина выпуска не должна называть числом
-            // версию, которой у людей нет: читатель витрины сверил бы её со своей панелью
-            // и решил, что отстал. «Есть новое» при этом видно и так: предложенный выпуск — v2.1.0.
-            Current = AboutInfo.PanelVersion;
+            // ⚠️ УСТАНОВЛЕННАЯ ВЕРСИЯ НА КАДРЕ — ОБРАЗЦОВАЯ И СТАРШЕ ВЫПУСКА (DEF-009, 2.4.1,
+            // решение капитана 24.10.2026): **2.3.2** — реально выпущенная 22.10.2026.
+            // Прежде здесь стояла версия самой панели (`AboutInfo.PanelVersion`), и после выпуска
+            // 2.4.0 она СОВПАЛА с образцовым выпуском: над готовой сборкой вставали «У вас последняя
+            // версия — обновляться не нужно» и «Обновляться некуда», то есть кадр противоречил
+            // сам себе. Обе версии на кадре — настоящие; 2.4.1 не называется, её ещё нет
+            // (`_team\241\d1-normy.md` §2).
+            Current = ShotSamples.UpdateInstalled;
 
             Result = new UpdateRelease(
                 true,
                 string.Empty,
-                "v2.4.0",
+
+                // ⚠️ НОМЕР ВЫПУСКА — ИЗ ОДНОГО ИСТОЧНИКА (`ShotSamples.UpdateVersion`, DEF-009):
+                // его же называет путь подготовленной сборки на кадре «подготовлено». Две копии
+                // номера однажды разошлись бы, и кадр показал бы сборку версии, которой у выпуска нет.
+                "v" + ShotSamples.UpdateVersion,
                 ProductLinks.ReleasesPageUrl,
 
                 // ⚠️ ДАТА ВЫПУСКА — ИЗ ОДНОГО ИСТОЧНИКА (`ShotSamples.ReleasePublished`), t13, 18.10.2026.
@@ -1705,7 +1750,20 @@ internal static class Program
                 ShotSamples.ReleasePublished,
                 UpdateDecisions.PickNotes(Body, language),
                 Body,
-                at);
+                at)
+            {
+                // ⚠️ АДРЕСА ВЛОЖЕНИЙ — ОБРАЗЦОВЫЕ, и без них кадр врал бы ДВАЖДЫ (DEF-009б, 2.4.1).
+                // Раздел решает «можно ли готовить» по наличию архива и файла сумм
+                // (`UpdateLines.PrepareState`); с пустыми адресами кадр «есть новее» показывал бы
+                // «Адреса вложений панель узнает при проверке» и ВЫКЛЮЧЕННУЮ кнопку подготовки —
+                // то есть состояние, в котором человек не может обновиться, хотя выпуск есть.
+                // Адреса — недействительный домен (`example.invalid` из RFC 2606): в кадре они
+                // не показываются вовсе, скачать по ним съёмка не пытается, и личных данных в них нет.
+                Assets = new ReleaseAssets(
+                    "https://example.invalid/DshPanel.zip",
+                    string.Empty,
+                    "https://example.invalid/SHA256SUMS.txt"),
+            };
         }
 
         /// <summary>

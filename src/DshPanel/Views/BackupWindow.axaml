@@ -75,11 +75,13 @@
                «своего фильтра» называются здесь же: решение о режиме и его список — одно решение,
                а живёт оно в настройках. Тексты ставятся кодом из PanelStrings. -->
           <TextBlock x:Name="ScopeLabel" Margin="0,8,0,0" />
-          <ComboBox x:Name="ScopeBox" Width="260" HorizontalAlignment="Left" />
+          <ComboBox x:Name="ScopeBox" Width="260" HorizontalAlignment="Left"
+            AutomationProperties.LabeledBy="{Binding #ScopeLabel}" />
           <TextBlock x:Name="ScopeHintText" Classes="hint" TextWrapping="Wrap" Opacity="0.75" />
 
           <TextBlock x:Name="ScopeExtraLabel" Margin="0,8,0,0" />
-          <TextBox x:Name="ScopeExtraBox" AcceptsReturn="True" Height="60" TextWrapping="Wrap" />
+          <TextBox x:Name="ScopeExtraBox" AcceptsReturn="True" Height="60" TextWrapping="Wrap"
+            AutomationProperties.LabeledBy="{Binding #ScopeExtraLabel}" />
           <TextBlock x:Name="ScopeExtraHint" Classes="hint" TextWrapping="Wrap" />
           <Button x:Name="SaveExtrasButton" HorizontalAlignment="Left" />
 

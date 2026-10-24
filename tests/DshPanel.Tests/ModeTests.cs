@@ -232,6 +232,12 @@ public class ModeTests
             [StartModes.ShotSettingsGeneral] = "SettingsWindow.GeneralSection",
             [StartModes.ShotSettingsBalance] = "SettingsWindow.BalanceSection",
             [StartModes.ShotSettingsUpdate] = "SettingsWindow.UpdateSection",
+
+            // ⚠️ «ПОДГОТОВЛЕНО» (DEF-009) — ТО ЖЕ ОКНО И ТОТ ЖЕ РАЗДЕЛ, а ветвь СВОЯ: состояние
+            // производит шов человека (`PrepareNow`), и признак ветви — образцовая дверь, которая
+            // отвечает успехом. Поставь здесь раздел — проверка справедливо упала бы: два имени
+            // с одним признаком дают одну проверку, а состояния у них разные.
+            [StartModes.ShotSettingsUpdatePrepared] = "ShotDrawers.PreparedInstall()",
             [StartModes.ShotSettingsServer] = "SettingsWindow.ServerSection",
             [StartModes.ShotSettingsPhone] = "SettingsWindow.PhoneSection",
             [StartModes.ShotBackup] = "new BackupWindow()",
@@ -315,6 +321,7 @@ public class ModeTests
         "settings-backup" => nameof(StartModes.ShotSettingsBackup),
         "settings-balance" => nameof(StartModes.ShotSettingsBalance),
         "settings-update" => nameof(StartModes.ShotSettingsUpdate),
+        "settings-update-prepared" => nameof(StartModes.ShotSettingsUpdatePrepared),
         "settings-server" => nameof(StartModes.ShotSettingsServer),
         "settings-phone" => nameof(StartModes.ShotSettingsPhone),
         "backup" => nameof(StartModes.ShotBackup),

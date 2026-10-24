@@ -51,6 +51,19 @@ public static class StartModes
     /// </summary>
     public const string ShotSettingsUpdate = "settings-update";
 
+    /// <summary>
+    /// Имя окна съёмки: раздел «Обновление» в состоянии «ПОДГОТОВЛЕНО» (DEF-009, 2.4.1) — на кадре
+    /// видны карточка замены, её кнопка и путь подготовленной сборки, а подготовка уже недоступна.
+    ///
+    /// **От какого случая.** У состояния «подготовлено» своего имени не было, и снять его было
+    /// **нечем**: `settings-update` снимает раздел ДО подготовки, а подставить готовый ответ в обход
+    /// шва значило бы показать состояние, которого продукт не производит (урок кадров фазы 3:
+    /// витрина показывает вид продукта, а не нашу механику). Имя живёт в ЭТОМ списке, как и все
+    /// остальные: описание ключа строится из него, а незнакомое имя отвергается кодом 2 — то есть
+    /// кадр по опечатке в README не уедет.
+    /// </summary>
+    public const string ShotSettingsUpdatePrepared = "settings-update-prepared";
+
     /// <summary>Имя окна съёмки: раздел «Сервер» настроек — отчёт окружения группами.</summary>
     public const string ShotSettingsServer = "settings-server";
 
@@ -185,6 +198,7 @@ public static class StartModes
     public static readonly string[] ShotWindows =
     {
         ShotSettings, ShotSettingsGeneral, ShotSettingsBackup, ShotSettingsBalance, ShotSettingsUpdate,
+        ShotSettingsUpdatePrepared,
         ShotSettingsServer, ShotSettingsPhone, ShotSettingsAbout,
         ShotBackup, ShotPeaks,
         ShotPricingHistory, ShotIssue, ShotMainTwoServers,

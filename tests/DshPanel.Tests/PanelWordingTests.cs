@@ -118,9 +118,12 @@ public class PanelWordingTests
     /// <summary>
     /// ТРЕТЬЕ: по-русски «джункций» не говорят (п. 9). en/zh и до правки говорили
     /// «directory links» / «目录链接» — проверка сторожит, чтобы это не вернулось ни на одном языке.
+    ///
+    /// ⚠️ DEF-042 (2.4.1): по-русски сама вещь называется «папкой» (одно имя на понятие), поэтому
+    /// проверяется «папк», а не прежнее слово-двойник.
     /// </summary>
     [Fact]
-    public void Ссылки_на_каталоги_названы_словами_а_не_джункциями()
+    public void Ссылки_на_папки_названы_словами_а_не_джункциями()
     {
         foreach (var (language, _) in Languages)
         {
@@ -131,7 +134,7 @@ public class PanelWordingTests
             Assert.Contains("{0}", text, System.StringComparison.Ordinal);
         }
 
-        Assert.Contains("каталог", Text("ru", nameof(PanelStrings.RestoreLinksInManifestFormat)), System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("папк", Text("ru", nameof(PanelStrings.RestoreLinksInManifestFormat)), System.StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -198,40 +201,43 @@ public class PanelWordingTests
     ///
     /// Слова владельца: *«в настройках это скорее пункт меню отвечающий за автоматическое
     /// резервное копирование, а в главном панели этот пункт меню отвечающий за восстановление»*.
-    /// Отсюда три имени, и каждое называет РАЗНОЕ:
+    /// Отсюда два имени на две РАЗНЫЕ вещи:
     ///
-    /// * раздел настроек — «Резервное копирование»: это ПРОЦЕСС (что панель делает сама);
-    /// * дверь в главном окне и заголовок её окна — «Копии и восстановление»: это ДЕЙСТВИЕ
-    ///   (снять копию, вернуть данные);
+    /// * раздел, дверь в главном окне, заголовок её окна и список функций — «Резервное
+    ///   копирование»: это ПРОЦЕСС (что панель делает сама). ⚠️ DEF-042 (2.4.1): связка
+    ///   «Копии и восстановление» ушла — решение владельца 13.10.2026 назвало одно главное имя,
+    ///   и на двери с заголовком окна теперь ОНО ЖЕ (до правки там стояло второе имя);
     /// * сама вещь везде называется **копией** — второго имени («резервная копия») в интерфейсе
     ///   больше нет: оно и путало человека.
     /// </summary>
     [Fact]
-    public void Раздел_настроек_резервное_копирование_а_дверь_копии_и_восстановление()
+    public void У_раздела_копий_одно_имя_у_двери_окна_и_списка_функций()
     {
         Assert.Equal("Резервное копирование", Text("ru", nameof(PanelStrings.BackupSectionTitle)));
         Assert.Equal("Backup", Text("en", nameof(PanelStrings.BackupSectionTitle)));
         Assert.Equal("备份", Text("zh", nameof(PanelStrings.BackupSectionTitle)));
 
-        Assert.Equal("Копии и восстановление…", Text("ru", nameof(PanelStrings.BackupsButton)));
+        Assert.Equal("Резервное копирование…", Text("ru", nameof(PanelStrings.BackupsButton)));
+        Assert.Equal("Резервное копирование", Text("ru", nameof(PanelStrings.PanelFunctionCopies)));
         Assert.Contains(
-            "Копии и восстановление",
+            "Резервное копирование",
             Text("ru", nameof(PanelStrings.BackupWindowTitle)),
             System.StringComparison.Ordinal);
 
         // Заголовок ВНУТРИ окна копий — то же слово «копии», без второго имени.
         Assert.Equal("Копии", Text("ru", nameof(PanelStrings.BackupHeading)));
 
-        // Дверь и заголовок окна называют одно и то же ДЕЙСТВИЕ, и на трёх языках оно не
-        // расходится: en говорит «backups and restore», zh — «备份与恢复».
-        Assert.Contains("restore", Text("en", nameof(PanelStrings.BackupsButton)), System.StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("恢复", Text("zh", nameof(PanelStrings.BackupsButton)), System.StringComparison.Ordinal);
+        // Дверь и заголовок окна называют одно и то же, и на трёх языках оно не расходится:
+        // en — «backup», zh — 「备份»: прежние «backups and restore» и 「备份与恢复」 ушли (DEF-042).
+        Assert.Equal("Backup…", Text("en", nameof(PanelStrings.BackupsButton)));
+        Assert.Equal("备份…", Text("zh", nameof(PanelStrings.BackupsButton)));
     }
 
     /// <summary>
     /// ВТОРОГО ИМЕНИ КОПИИ В ИНТЕРФЕЙСЕ НЕТ. «Резервная копия» и «копия» — одна вещь, и два имени
-    /// для неё человек и читал как разные вещи (п. 20). Исключение ровно одно: НАЗВАНИЕ РАЗДЕЛА
-    /// настроек — «Резервное копирование»: это процесс, а не вещь, и оно названо владельцем.
+    /// для неё человек и читал как разные вещи (п. 20). Исключения — НАЗВАНИЕ ПРОЦЕССА, а не вещи:
+    /// раздел настроек, дверь в главном окне, заголовок её окна и список функций
+    /// («Резервное копирование», решение владельца 13.10.2026; с DEF-042 их четыре, а не один).
     ///
     /// Проверяются ВСЕ строки всех трёх словарей, а не только те, что помнили: следующая строка
     /// со словом «резервн» заведётся не сейчас, а через месяц — и её поймает именно этот прогон.
@@ -245,8 +251,15 @@ public class PanelWordingTests
         {
             foreach (var (key, value) in Loc.Dictionary(language))
             {
-                // Исключение названо владельцем и стоит здесь явным именем ключа.
-                if (key == nameof(PanelStrings.BackupSectionTitle)) continue;
+                // Исключения названы владельцем и стоят здесь явными именами ключей: это имя
+                // ПРОЦЕССА (раздел, дверь, окно, список функций), а не второе имя вещи.
+                if (key is nameof(PanelStrings.BackupSectionTitle)
+                        or nameof(PanelStrings.BackupsButton)
+                        or nameof(PanelStrings.BackupWindowTitle)
+                        or nameof(PanelStrings.PanelFunctionCopies))
+                {
+                    continue;
+                }
                 if (value is null) continue;
 
                 if (System.Text.RegularExpressions.Regex.IsMatch(

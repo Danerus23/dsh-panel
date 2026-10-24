@@ -201,7 +201,8 @@ public sealed class PricingController : IPricingControl, IDisposable
                     CultureInfo.CurrentCulture,
                     PanelStrings.PriceSourceFormat,
                     Result.SourceUrl,
-                    PricingDecisions.CheckedText(PricingDecisions.Stamp(Result.CheckedAt)));
+                    PricingDecisions.CheckedText(PricingDecisions.Stamp(Result.CheckedAt)),
+                    PricingDecisions.CurrencyCode(Language()));
             }
 
             if (Result.Error.Length > 0)

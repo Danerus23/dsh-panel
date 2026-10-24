@@ -34,7 +34,7 @@
 
     <AssemblyName>DshPanel</AssemblyName>
     <RootNamespace>DshPanel</RootNamespace>
-    <Version>2.4.0</Version>
+    <Version>2.4.1</Version>
     <Product>DSH Panel</Product>
   </PropertyGroup>
 
@@ -120,6 +120,12 @@
          как в v1: им снимались кадры для README и проверялась вёрстка. Без этого
          пакета проверить, что нарисовано, можно только показав окно человеку. -->
     <PackageReference Include="Avalonia.Headless" />
+
+    <!-- ОФИЦИАЛЬНАЯ ВИРТУАЛИЗОВАННАЯ ТАБЛИЦА (TT1, слово владельца 24.10.2026): плоские
+         таблицы панели — копии, история цен. Версия, замер версий, лицензия и причина
+         выбора между DataGrid и TreeDataGrid — в `Directory.Packages.props`, здесь только
+         ссылка: версия в проекте не пишется (центральное управление). -->
+    <PackageReference Include="Avalonia.Controls.DataGrid" />
   </ItemGroup>
 
   <ItemGroup>

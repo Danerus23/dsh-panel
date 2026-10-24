@@ -2212,6 +2212,13 @@ public static class PanelStrings
     /// <summary>Слова вместо кода выхода: у процесса, которого у панели уже нет дескриптора, кода не спросить.</summary>
     public static string SrvEngineExitNoCodeLog => Loc.T(nameof(SrvEngineExitNoCodeLog));
 
+    /// <summary>
+    /// Слова вместо кода выхода, когда код СПРОСИТЬ НЕ УДАЛОСЬ (DEF-057): принятый по записи сервер
+    /// ушёл, а дескриптор не открылся или прав на процесс не дали. Это не «нет кода» и уж точно
+    /// не ноль — панель честно говорит «неизвестен».
+    /// </summary>
+    public static string SrvEngineExitCodeUnknownLog => Loc.T(nameof(SrvEngineExitCodeUnknownLog));
+
     /// <summary>Слова вместо хвоста: движок ничего не напечатал.</summary>
     public static string SrvEngineExitNoTailLog => Loc.T(nameof(SrvEngineExitNoTailLog));
 
@@ -3339,7 +3346,11 @@ public static class PanelStrings
     /// </summary>
     public static string PriceModelMissingFormat => Loc.T(nameof(PriceModelMissingFormat));
 
-    /// <summary>Откуда взяты цены: адрес страницы и когда проверено.</summary>
+    /// <summary>
+    /// Откуда взяты цены: адрес страницы, когда проверено и КОД валюты (<c>USD</c>/<c>CNY</c>,
+    /// DEF-041). Код стоит рядом с числами потому, что знак сам по себе не говорит, ЧЬЯ это
+    /// валюта: у двух страниц цен она разная, пересчёта нет, и юань не должен сходить за доллар.
+    /// </summary>
     public static string PriceSourceFormat => Loc.T(nameof(PriceSourceFormat));
 
     /// <summary>Цен ещё не читали и причин не читать нет.</summary>

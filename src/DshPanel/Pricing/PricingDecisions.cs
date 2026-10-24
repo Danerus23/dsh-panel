@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using DshPanel.Agents;
 using DshPanel.Isolation;
+using DshPanel.Localization;
 using DshPanel.Settings;
 
 namespace DshPanel.Pricing;
@@ -75,6 +76,18 @@ public static class PricingDecisions
     /// </summary>
     public static string Currency(string? language) => IsChinese(language) ? "¥" : "$";
 
+    /// <summary>
+    /// КОД валюты рядом со знаком: <c>USD</c> для ru/en, <c>CNY</c> для zh (DEF-041).
+    ///
+    /// **Зачем код, если есть знак.** Знак сам по себе не говорит, ЧЬЯ это валюта: <c>¥</c> —
+    /// и юань, и иена, а страницы цен две, и числа в них РАЗНЫЕ (китайская отдаёт юани). Знак
+    /// при этом не переставляется и не пересчитывается — это запрещено без решения владельца
+    /// (курса панель не знает, а выдуманный курс соврал бы про деньги). Поэтому рядом с числами
+    /// называется код: человек видит и знак, и валюту, и не принимает юань за доллар.
+    /// Вопрос «пересчитывать ли юани в доллары» — на владельце, не на панели.
+    /// </summary>
+    public static string CurrencyCode(string? language) => IsChinese(language) ? "CNY" : "USD";
+
     /// <summary>Китайский ли язык панели (единственный, у которого своя страница цен).</summary>
     public static bool IsChinese(string? language) =>
         string.Equals((language ?? string.Empty).Trim(), ChineseLanguage, StringComparison.OrdinalIgnoreCase);
@@ -103,29 +116,40 @@ public static class PricingDecisions
     public static string Stamp(DateTimeOffset at) =>
         at.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
 
-    /// <summary>Читаемая отметка для окна: «28.09.2026, 14:32». Пусто — пусто.</summary>
-    public static string CheckedText(string? stamp)
+    /// <summary>
+    /// Читаемая отметка для окна: «28.09.2026, 14:32» по-русски, «Sep 28, 2026, 14:32»
+    /// по-английски, «2026年9月28日 14:32» по-китайски (DEF-041). Пусто — пусто.
+    ///
+    /// Шаблон живёт ОДИН — в <see cref="DateText"/>: до 2.4.1 здесь стоял жёсткий
+    /// <c>dd.MM.yyyy, HH:mm</c>, и английское окно читало русскую запись даты.
+    /// </summary>
+    /// <param name="stamp">Отметка в файле (<c>"O"</c>); хранение этой правкой не меняется.</param>
+    /// <param name="language">Язык панели; <c>null</c> — выбранный сейчас.</param>
+    public static string CheckedText(string? stamp, string? language = null)
     {
         if (!TryParse(stamp, out var at)) return string.Empty;
 
-        return at.ToLocalTime().ToString("dd.MM.yyyy, HH:mm", CultureInfo.CurrentCulture);
+        return DateText.DateAndTime(at.ToLocalTime(), language);
     }
 
     /// <summary>
-    /// ТОЛЬКО ДАТА проверки цен — «19.10.2026» — для короткой строки главного окна
-    /// (<see cref="DshPanel.Balance.BalanceController.PeakCheckedText"/>). Пусто — отметки нет: панель ещё
-    /// не разбирала страницу цен.
+    /// ТОЛЬКО ДАТА проверки цен — «19.10.2026» («Oct 19, 2026» / «2026年10月19日») — для короткой
+    /// строки главного окна (<see cref="DshPanel.Balance.BalanceController.PeakCheckedText"/>).
+    /// Пусто — отметки нет: панель ещё не разбирала страницу цен.
     ///
     /// ⚠️ Отдельно от <see cref="CheckedText"/>, а не «взять первые десять знаков»: формат — это
     /// решение, и в окне истории цен время проверки нужно («28.09.2026, 14:32»), а в карточке
-    /// главного окна владелец просил дату (пункт 4 пакета 2.3.1 — формат <c>dd.MM.yyyy</c>).
+    /// главного окна владелец просил дату (пункт 4 пакета 2.3.1). Сам шаблон даты — один
+    /// (<see cref="DateText"/>), DEF-041.
     /// Дата — МЕСТНАЯ: панель проверяла цены в то мгновение, которое было на часах человека.
     /// </summary>
-    public static string CheckedDateText(string? stamp)
+    /// <param name="stamp">Отметка в файле (<c>"O"</c>); хранение этой правкой не меняется.</param>
+    /// <param name="language">Язык панели; <c>null</c> — выбранный сейчас.</param>
+    public static string CheckedDateText(string? stamp, string? language = null)
     {
         if (!TryParse(stamp, out var at)) return string.Empty;
 
-        return at.ToLocalTime().ToString("dd.MM.yyyy", CultureInfo.CurrentCulture);
+        return DateText.Date(at.ToLocalTime(), language);
     }
 
     /// <summary>Разбор отметки; неразобранное (в том числе пустое) — «отметки нет».</summary>

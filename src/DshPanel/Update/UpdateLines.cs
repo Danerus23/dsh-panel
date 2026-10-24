@@ -1,4 +1,5 @@
 using System.Globalization;
+using DshPanel.Localization;
 using DshPanel.Pricing;
 using DshPanel.Shell;
 using DshPanel.Tray;
@@ -64,8 +65,12 @@ public static class UpdateLines
     /// Дата выпуска. Разобрать её не удалось — панель говорит «неизвестна» и НЕ выдумывает дату:
     /// выдуманная дата хуже отсутствующей, потому что выглядит проверенной. Выпуска нет вовсе —
     /// строки о дате нет совсем.
+    ///
+    /// Шаблон даты — <see cref="DateText"/> по языку панели (DEF-041): до 2.4.1 здесь стояло
+    /// жёсткое «22.10.2026», и английский раздел «Обновление» показывал русскую дату.
     /// </summary>
-    public static string PublishedLine(bool ok, string? published)
+    /// <param name="language">Язык панели; <c>null</c> — выбранный сейчас.</param>
+    public static string PublishedLine(bool ok, string? published, string? language = null)
     {
         if (!ok) return string.Empty;
 
@@ -74,7 +79,7 @@ public static class UpdateLines
         return string.Format(
             CultureInfo.CurrentCulture,
             PanelStrings.UpdatePublishedFormat,
-            at.ToLocalTime().ToString("dd.MM.yyyy", CultureInfo.CurrentCulture));
+            DateText.Date(at.ToLocalTime(), language));
     }
 
     /// <summary>

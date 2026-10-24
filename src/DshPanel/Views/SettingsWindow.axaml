@@ -107,7 +107,8 @@
                    и комментарии в ней, поэтому имя, названное в пояснении, делало бы мёртвую
                    строку «живой» — проверка замолчала бы ровно там, где она и нужна. -->
               <TextBlock x:Name="WorkDirLabel" />
-              <TextBox x:Name="WorkDirBox" />
+              <TextBox x:Name="WorkDirBox"
+                AutomationProperties.LabeledBy="{Binding #WorkDirLabel}" />
               <StackPanel Orientation="Horizontal" Spacing="12">
                 <Button x:Name="SuggestWorkDirButton" IsVisible="False" />
               </StackPanel>
@@ -126,17 +127,20 @@
               <TextBlock x:Name="PortExplainText" TextWrapping="Wrap" />
 
               <NumericUpDown x:Name="PortBox" Width="160" HorizontalAlignment="Left"
+                AutomationProperties.LabeledBy="{Binding #PortLabel}"
                              Minimum="1" Maximum="65535" Increment="1" />
               <TextBlock x:Name="PortHintText" Classes="hint" TextWrapping="Wrap" />
 
               <TextBlock x:Name="ThemeLabel" Margin="0,4,0,0" />
-              <ComboBox x:Name="ThemeBox" Width="260" HorizontalAlignment="Left" />
+              <ComboBox x:Name="ThemeBox" Width="260" HorizontalAlignment="Left"
+                AutomationProperties.LabeledBy="{Binding #ThemeLabel}" />
 
               <!-- Язык интерфейса. Решение дирижёра: язык применяется при СЛЕДУЮЩЕМ запуске панели
                    (пересобирать окна и меню на ходу — отдельная работа), и человеку об этом сказано
                    словами, а не умолчанием. -->
               <TextBlock x:Name="LanguageLabel" Margin="0,4,0,0" />
-              <ComboBox x:Name="LanguageBox" Width="260" HorizontalAlignment="Left" />
+              <ComboBox x:Name="LanguageBox" Width="260" HorizontalAlignment="Left"
+                AutomationProperties.LabeledBy="{Binding #LanguageLabel}" />
               <TextBlock x:Name="LanguageExplainText" TextWrapping="Wrap" />
               <TextBlock x:Name="LanguageHintText" Classes="hint" TextWrapping="Wrap" />
 
@@ -153,7 +157,8 @@
               <TextBlock x:Name="BackupSectionSubtitleText" Classes="hint" />
 
               <TextBlock x:Name="BackupFolderLabel" />
-              <TextBox x:Name="BackupFolderBox" />
+              <TextBox x:Name="BackupFolderBox"
+                AutomationProperties.LabeledBy="{Binding #BackupFolderLabel}" />
               <TextBlock x:Name="BackupFolderHintText" Classes="hint" />
 
               <!-- Расписание автокопий и предел хранения (v2.2): «каждые N часов» и «хранить N последних».
@@ -174,12 +179,14 @@
                 <TextBlock x:Name="BackupEveryLabel" Grid.Column="0" TextWrapping="Wrap"
                            VerticalAlignment="Center" />
                 <NumericUpDown x:Name="BackupEveryBox" Grid.Column="2" Width="140"
+                  AutomationProperties.LabeledBy="{Binding #BackupEveryLabel}"
                                Minimum="1" Maximum="168" Increment="1" />
               </Grid>
               <Grid ColumnDefinitions="*,12,Auto">
                 <TextBlock x:Name="BackupKeepLabel" Grid.Column="0" TextWrapping="Wrap"
                            VerticalAlignment="Center" />
                 <NumericUpDown x:Name="BackupKeepBox" Grid.Column="2" Width="140"
+                  AutomationProperties.LabeledBy="{Binding #BackupKeepLabel}"
                                Minimum="1" Maximum="20" Increment="1" />
               </Grid>
               <TextBlock x:Name="BackupScheduleNoteText" Classes="hint" />
@@ -196,7 +203,8 @@
               <CheckBox x:Name="BackupKeysCheck" />
               <TextBlock x:Name="BackupKeysWarningText" Classes="hint" />
               <TextBlock x:Name="BackupKeysDirsLabel" />
-              <TextBox x:Name="BackupKeysDirsBox" AcceptsReturn="True" Height="70" TextWrapping="Wrap" />
+              <TextBox x:Name="BackupKeysDirsBox" AcceptsReturn="True" Height="70" TextWrapping="Wrap"
+                AutomationProperties.LabeledBy="{Binding #BackupKeysDirsLabel}" />
               <TextBlock x:Name="BackupKeysDirsHint" Classes="hint" />
 
               <!--
@@ -215,7 +223,8 @@
               <TextBlock x:Name="BalanceSectionSubtitleText" Classes="hint" />
 
               <TextBlock x:Name="ActiveAgentLabel" />
-              <ComboBox x:Name="AgentBox" Width="260" HorizontalAlignment="Left" />
+              <ComboBox x:Name="AgentBox" Width="260" HorizontalAlignment="Left"
+                AutomationProperties.LabeledBy="{Binding #ActiveAgentLabel}" />
               <TextBlock x:Name="AgentNoteText" Classes="hint" Text="" />
 
               <CheckBox x:Name="BalanceAutoCheck" Margin="0,4,0,0" />
@@ -223,6 +232,7 @@
                 <TextBlock x:Name="BalancePeriodLabel" Grid.Column="0" TextWrapping="Wrap"
                            VerticalAlignment="Center" />
                 <NumericUpDown x:Name="RefreshMinutesBox" Grid.Column="2" Width="140"
+                  AutomationProperties.LabeledBy="{Binding #BalancePeriodLabel}"
                                Minimum="1" Maximum="1440" Increment="1" />
               </Grid>
 
@@ -231,6 +241,7 @@
                 <TextBlock x:Name="BalanceThresholdLabel" Grid.Column="0" TextWrapping="Wrap"
                            VerticalAlignment="Center" />
                 <NumericUpDown x:Name="ThresholdBox" Grid.Column="2" Width="140"
+                  AutomationProperties.LabeledBy="{Binding #BalanceThresholdLabel}"
                                Minimum="0" Maximum="1000000" Increment="1" />
               </Grid>
 
@@ -238,6 +249,7 @@
                 <TextBlock x:Name="PeakNotifyLabel" Grid.Column="0" TextWrapping="Wrap"
                            VerticalAlignment="Center" />
                 <NumericUpDown x:Name="PeakNotifyBox" Grid.Column="2" Width="140"
+                  AutomationProperties.LabeledBy="{Binding #PeakNotifyLabel}"
                                Minimum="0" Maximum="1440" Increment="5" />
               </Grid>
               <TextBlock x:Name="PeakNotifyNoteText" Classes="hint" Text="" />
@@ -342,7 +354,8 @@
                   </StackPanel>
 
                   <TextBlock x:Name="UpdateHintText" Classes="hint" TextWrapping="Wrap" />
-                  <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap" />
+                  <TextBlock x:Name="UpdateStatusText" TextWrapping="Wrap"
+                    AutomationProperties.LiveSetting="Polite" />
                   <ProgressBar x:Name="UpdateProgressBar" Minimum="0" Maximum="100" IsVisible="False" />
                   <TextBlock x:Name="UpdateProgressText" Classes="hint" TextWrapping="Wrap" />
                 </StackPanel>
@@ -543,6 +556,7 @@
                   <TextBlock x:Name="PhoneAddressText" FontSize="18" FontWeight="SemiBold"
                              TextWrapping="Wrap" IsVisible="False" />
                   <ComboBox x:Name="PhoneAddressCombo" Width="280" HorizontalAlignment="Left"
+                    AutomationProperties.LabeledBy="{Binding #PhoneAddressTitle}"
                             IsVisible="False" />
                   <TextBlock x:Name="PhoneAddressNoText" Classes="hint" TextWrapping="Wrap"
                              IsVisible="False" />
@@ -571,6 +585,7 @@
                 <StackPanel Spacing="8">
                   <TextBlock x:Name="PhonePortLabel" />
                   <NumericUpDown x:Name="PhonePortBox" Width="160" HorizontalAlignment="Left"
+                    AutomationProperties.LabeledBy="{Binding #PhonePortLabel}"
                                  Minimum="1" Maximum="65535" Increment="1" FormatString="0" />
                   <TextBlock x:Name="PhoneForbiddenPortsText" Classes="hint" TextWrapping="Wrap" />
                   <TextBlock x:Name="PhonePortNoteText" Classes="hint" TextWrapping="Wrap" />

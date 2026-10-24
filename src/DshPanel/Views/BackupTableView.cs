@@ -2,6 +2,7 @@ using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Input;
 using DshPanel.Backup;
+using DshPanel.Localization;
 using DshPanel.Shell;
 
 namespace DshPanel.Views;
@@ -78,14 +79,21 @@ public static class BackupTableView
         new(1, GridUnitType.Star),
     };
 
-    /// <summary>Момент копии словами: дата и время. Пустая дата названа словами, а не пустотой.</summary>
-    public static string Moment(BackupEntry entry)
+    /// <summary>
+    /// Момент копии словами: дата и время. Пустая дата названа словами, а не пустотой.
+    ///
+    /// Шаблон — <see cref="DateText"/> по языку панели (DEF-041): до 2.4.1 здесь стояло жёсткое
+    /// «22.10.2026 14:32» с инвариантной культурой, и в английской таблице копий человек читал
+    /// русскую запись даты.
+    /// </summary>
+    /// <param name="language">Язык панели; <c>null</c> — выбранный сейчас.</param>
+    public static string Moment(BackupEntry entry, string? language = null)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
         return entry.CreatedAt == default
             ? PanelStrings.BackupTimeUnknown
-            : entry.CreatedAt.ToString("dd.MM.yyyy HH:mm", CultureInfo.InvariantCulture);
+            : DateText.DateAndTime(entry.CreatedAt, language);
     }
 
     /// <summary>Тип копии: полная (с движком и Node) или тонкая.</summary>

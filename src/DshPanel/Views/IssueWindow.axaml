@@ -23,6 +23,7 @@
     <StackPanel Grid.Row="1" Margin="0,16,0,0" Spacing="8">
       <TextBlock x:Name="MessageLabelText" FontWeight="SemiBold" />
       <TextBox x:Name="MessageBox" AcceptsReturn="True" TextWrapping="Wrap"
+        AutomationProperties.LabeledBy="{Binding #MessageLabelText}"
                Height="72" PlaceholderText="" />
     </StackPanel>
 
@@ -33,6 +34,7 @@
     </StackPanel>
 
     <TextBox Grid.Row="3" x:Name="PreviewBox"
+      AutomationProperties.LabeledBy="{Binding #PreviewLabelText}"
              IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
              FontFamily="Consolas,Menlo,monospace" FontSize="12"
              VerticalContentAlignment="Top" />

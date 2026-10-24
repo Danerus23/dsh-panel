@@ -93,6 +93,26 @@ public static class ShotDrawers
     public static IUpdateInstall Install() => new ShotInstall();
 
     /// <summary>
+    /// ДВЕРЬ ЗАМЕНЫ ФАЙЛОВ ДЛЯ КАДРА «ПОДГОТОВЛЕНО» (DEF-009, 2.4.1): подготовка УДАЛАСЬ, замена
+    /// по-прежнему не запускается.
+    ///
+    /// **От какого случая.** Состояние «подготовлено» (карточка замены, её кнопка, путь сборки) —
+    /// это то, что человек видит после шага, и кадра у него не было вовсе: `settings-update` снимает
+    /// раздел ДО подготовки. Подставить готовый ответ в обход шва нельзя (кадр показал бы состояние,
+    /// которого продукт не производит), поэтому шов остаётся человеческий
+    /// (<c>SettingsWindow.PrepareNow</c>), а меняется только дверь: она отвечает УСПЕХОМ с путями-
+    /// литералами под маской, а не отказом, как <see cref="Install"/>.
+    ///
+    /// ⚠️ **<see cref="Install"/> НЕ МЕНЯЕТСЯ, и это правило, а не лень:** его отказ записан —
+    /// «съёмка не готовит и не заменяет файлы», и на нём стоят все прочие кадры раздела. Дверь
+    /// «подготовлено» выдаётся ТОЛЬКО кадру, у которого есть имя, и ничего не делает с машиной.
+    ///
+    /// ⚠️ Здесь нет ни одного пути владельца: имена каталогов — литералы под маской `~`
+    /// (<see cref="DshPanel.Shell.DisplayMask"/> показывает их как есть).
+    /// </summary>
+    public static IUpdateInstall PreparedInstall() => new ShotPreparedInstall();
+
+    /// <summary>
     /// ДВЕРЬ ЦЕН ДЛЯ КАДРА «ПИКИ И ТАРИФЫ» — ОБРАЗЦОВЫЙ СНИМОК, СЕТЬ НЕ СПРАШИВАЕТСЯ ВОВСЕ (t13, 18.10.2026).
     ///
     /// **От какого случая.** Кадр «пиков» получал НАСТОЯЩИЙ контроллер цен, а он в прогоне проверки
@@ -141,7 +161,8 @@ public sealed class ShotPricing : IPricingControl
             System.Globalization.CultureInfo.CurrentCulture,
             PanelStrings.PriceSourceFormat,
             _snapshot.SourceUrl,
-            PricingDecisions.CheckedText(PricingDecisions.Stamp(_snapshot.At)));
+            PricingDecisions.CheckedText(PricingDecisions.Stamp(_snapshot.At)),
+            PricingDecisions.CurrencyCode(_snapshot.Language));
 
     /// <summary>Спрашивать нечего: на кадре цены уже есть. Пусто — и это правило, а не заглушка.</summary>
     public void Refresh()
@@ -184,6 +205,47 @@ public sealed class ShotInstall : IUpdateInstall
             LogPath: string.Empty,
             CommandLine: string.Empty);
 
+    public string Launch(UpdatePreparation preparation) => PanelStrings.UpdateInstallUnavailable;
+}
+
+/// <summary>
+/// ЗАМЕНА ФАЙЛОВ НА КАДРЕ «ПОДГОТОВЛЕНО» (DEF-009, 2.4.1): подготовка УДАЛАСЬ, замена не идёт.
+///
+/// **Что это и чего тут нет.** Подготовка отвечает успехом с путями-ЛИТЕРАЛАМИ под маской `~`:
+/// ни скачивания, ни записи, ни чтения с машины. Замена (<see cref="Launch"/>) отвечает ОТКАЗОМ
+/// СЛОВАМИ — на кадре нажимать некому, а «получить успех» значило бы соврать о работе, которой
+/// не было (то же правило, что у <see cref="ShotInstall"/>).
+///
+/// ⚠️ Номер версии берётся из <see cref="ShotSamples.UpdateVersion"/> — того же источника, что
+/// называет выпуск в решении раздела: кадр не имеет права показать сборку версии, которой у выпуска
+/// нет.
+/// </summary>
+public sealed class ShotPreparedInstall : IUpdateInstall
+{
+    /// <summary>Право есть: кадр показывает рабочую панель, у которой замена файлов доступна.</summary>
+    public bool Allowed => true;
+
+    /// <summary>
+    /// УСПЕХ ПОДГОТОВКИ: пути — литералы под маской, ничего не скачано и не записано. Папка сборки
+    /// оканчивается номером образцового выпуска — так же, как её называет настоящее ядро.
+    /// </summary>
+    public UpdatePreparation Prepare(string release, ReleaseAssets assets, Action<UpdateProgress>? progress = null) =>
+        new(
+            Ok: true,
+            Refusal: UpdateRefusal.None,
+            Detail: string.Empty,
+            Version: release,
+            StagedFolder: @"~\AppData\Local\DshPanel2\state\update\" + ShotSamples.UpdateVersion,
+            BackupFolder: @"~\AppData\Local\DshPanel2\state\update\backup-" + ShotSamples.UpdateVersion,
+            TargetFolder: @"~\AppData\Local\Programs\DSH Panel",
+            ScriptPath: @"~\AppData\Local\DshPanel2\state\update\update.cmd",
+            LogPath: @"~\AppData\Local\DshPanel2\state\update\update.log",
+            CommandLine: @"~\\update.cmd 4242");
+
+    /// <summary>
+    /// ОТКАЗ СЛОВАМИ, А НЕ МОЛЧАЛИВЫЙ УСПЕХ: съёмка ничего не заменяет и не перезапускает.
+    /// Строка — та же, что у <see cref="ShotInstall"/>: панель в этом прогоне замену не делает.
+    /// </summary>
     public string Launch(UpdatePreparation preparation) => PanelStrings.UpdateInstallUnavailable;
 }
 

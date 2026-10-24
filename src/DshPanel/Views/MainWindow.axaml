@@ -166,7 +166,8 @@
           -->
           <StackPanel Orientation="Horizontal" Spacing="12">
             <TextBlock x:Name="ActiveAgentLabel" VerticalAlignment="Center" />
-            <ComboBox x:Name="AgentBox" Width="200" />
+            <ComboBox x:Name="AgentBox" Width="200"
+              AutomationProperties.LabeledBy="{Binding #ActiveAgentLabel}" />
           </StackPanel>
           <TextBlock x:Name="AgentNoteText" Classes="hint" Text="" />
 

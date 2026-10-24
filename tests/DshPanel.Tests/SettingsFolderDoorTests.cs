@@ -138,7 +138,7 @@ public class SettingsFolderDoorTests
 
         Assert.Contains(
             log,
-            line => line.Contains("Открыть каталог настроек не удалось", StringComparison.Ordinal));
+            line => line.Contains("Открыть папку настроек не удалось", StringComparison.Ordinal));
 
         var throwing = AgentBrowser.TryOpenFolder(
             mayOpenFolder: true,

@@ -497,7 +497,7 @@ public class RestoreTests
 
             Assert.True(plan.Ok, plan.Error);
             Assert.Equal(2, plan.UnsafeEntries);
-            Assert.Contains(plan.Notes, note => note.Contains("с выходом за каталог"));
+            Assert.Contains(plan.Notes, note => note.Contains("с выходом за папку"));
             Assert.Contains("опасных записей пропущено: 2", plan.Summary());
         }
         finally
