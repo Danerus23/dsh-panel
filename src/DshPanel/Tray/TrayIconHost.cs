@@ -111,6 +111,23 @@ public sealed class TrayIconHost : IDisposable
     /// <summary>Человек щёлкнул по всплывшему уведомлению.</summary>
     public event Action? NotificationClicked;
 
+    /// <summary>
+    /// СКОЛЬКО ПОДПИСЧИКОВ У ЩЕЛЧКА ПО УВЕДОМЛЕНИЮ — для прогона «подписка есть» (DEF-046).
+    /// У события .NET снаружи подписчиков не сосчитать, а утверждение «подписка есть» обязано
+    /// уметь падать: без счётчика мутация «снять подписку» прошла бы молча, как она и жила
+    /// до 2.4.0 (событие объявлено, подписчиков ноль).
+    /// </summary>
+    internal int NotificationClickSubscribers => NotificationClicked?.GetInvocationList().Length ?? 0;
+
+    /// <summary>
+    /// ПОДНЯТЬ ЩЕЛЧОК ПО УВЕДОМЛЕНИЮ БЕЗ ОБОЛОЧКИ — ровно тем путём, каким его поднимает
+    /// <see cref="HandleTrayCallback"/> при <c>NIN_BALLOONUSERCLICK</c>. Нужно прогону: сам шарик
+    /// Windows не ловится ни кадром, ни сообщением (это записано в самотесте трея), а путь
+    /// «щелчок → событие → дверь» проверить надо.
+    /// </summary>
+    internal void PostNotificationClickForSelfTest() =>
+        HandleTrayCallback(NativeMethods.NIN_BALLOONUSERCLICK);
+
     /// <summary>Пришло ли наше собственное сообщение: доказывает, что насос сообщений работает.</summary>
     public bool SelfTestMessageReceived { get; private set; }
 

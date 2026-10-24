@@ -118,7 +118,7 @@ public class SettingsLookTests
         {
             var icons = new List<Geometry>();
 
-            for (var index = 0; index < 6; index++)
+            for (var index = 0; index < PanelGlyph.SectionPaths.Count; index++)
             {
                 var icon = Item(list, index).GetVisualDescendants().OfType<PathIcon>().SingleOrDefault();
 
@@ -135,14 +135,14 @@ public class SettingsLookTests
 
             // Значки РАЗНЫЕ — и как органы, и как формы (данные пути, а не «четыре раза
             // один и тот же разобранный»).
-            Assert.Equal(6, icons.Distinct().Count());
-            Assert.Equal(6, PanelGlyph.SectionPaths.Distinct().Count());
+            Assert.Equal(7, icons.Distinct().Count());
+            Assert.Equal(7, PanelGlyph.SectionPaths.Distinct().Count());
             Assert.Equal(PanelGlyph.SectionPaths.Count, PanelGlyph.Sections.Count);
 
             // И подпись рядом со значком — на месте: значок дополняет слово, а не заменяет его.
             var titles = list.ItemsSource!.Cast<string>().ToList();
 
-            Assert.Equal(6, titles.Count);
+            Assert.Equal(7, titles.Count);
 
             for (var index = 0; index < titles.Count; index++)
             {
@@ -200,18 +200,23 @@ public class SettingsLookTests
     [Fact]
     public void Данные_значков_не_зависят_от_графики()
     {
-        Assert.Equal(6, PanelGlyph.SectionPaths.Count);
-        Assert.Equal(6, PanelGlyph.SectionPaths.Distinct().Count());
+        Assert.Equal(7, PanelGlyph.SectionPaths.Count);
+        Assert.Equal(7, PanelGlyph.SectionPaths.Distinct().Count());
         Assert.All(PanelGlyph.SectionPaths, path => Assert.False(string.IsNullOrWhiteSpace(path)));
     }
 
     // ------------------------------------------------------------------ подложка выбранного
 
     /// <summary>
-    /// ВЫБРАННЫЙ РАЗДЕЛ ОТМЕЧЕН СКРУГЛЁННОЙ ПОДЛОЖКОЙ ИЗ ТЕМЫ, а у СОСЕДНЕЙ строки её нет.
-    /// Цвет сверяется с кистью темы (<see cref="PanelLook.SectionSelectionKey"/>) — иначе
+    /// ВЫБРАННЫЙ РАЗДЕЛ ОТМЕЧЕН СКРУГЛЁННОЙ ПОДЛОЖКОЙ ИЗ ПАЛИТРЫ, а у СОСЕДНЕЙ строки её нет.
+    /// Цвет сверяется с кистью палитры (<see cref="PanelLook.SelectionFillKey"/>) — иначе
     /// «подобрали похожий оттенок в окне» осталось бы незамеченным, а на второй теме он бы
     /// слился с фоном.
+    ///
+    /// ⚠️ До 2.4.0 здесь стояла каркасная `SystemControlBackgroundChromeMediumLowBrush`, и она
+    /// совпадала с фоном списка: контраст 1,00:1, выбор был не виден (DEF-047). Числа контраста
+    /// по кадру стережёт `SelectionAndTodayTests`, а здесь остаётся «подложка вообще есть и она
+    /// из одного места с палитрой».
     /// </summary>
     [AvaloniaFact]
     public void Выбранная_строка_отмечена_скруглённой_подложкой_из_темы()
@@ -226,7 +231,7 @@ public class SettingsLookTests
             var selectedBackground = Presenter(selected).Background;
             var neighbourBackground = Presenter(neighbour).Background;
 
-            var brush = (ISolidColorBrush)ThemeBrush(PanelLook.SectionSelectionKey, window.ActualThemeVariant);
+            var brush = (ISolidColorBrush)ThemeBrush(PanelLook.SelectionFillKey, window.ActualThemeVariant);
 
             Assert.True(selectedBackground is ISolidColorBrush, "у выбранной строки нет подложки");
             Assert.Equal(brush.Color, ((ISolidColorBrush)selectedBackground!).Color);

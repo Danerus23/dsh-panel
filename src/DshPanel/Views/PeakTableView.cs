@@ -1,3 +1,4 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
 using DshPanel.Peak;
@@ -53,10 +54,14 @@ public static class PeakTableView
     /// «Пик» уезжала бы вправо от самих окон ровно на ширину слова «День», то есть заголовок
     /// стоял бы не над своей колонкой.
     ///
-    /// 56 — с запасом на самые длинные названия дней в трёх словарях (китайское «星期一» вдвое
-    /// с лишним шире русского «пн») и кратно шкале панели: 24 + 16 + 16.
+    /// ⚠️ **104, а не 56 (DEF-049, 2.4.0).** У сегодняшней строки день называется СЛОВОМ, а не
+    /// только цветом: «чт · сегодня» (`PanelStrings.PeakDayTodayFormat`). Это самое длинное
+    /// содержимое колонки во всех трёх словарях, и оно обязано влезать в ТУ ЖЕ ширину, что
+    /// у остальных строк: иначе колонка «Пик» сегодняшней строки сдвинулась бы вправо и таблица
+    /// перестала бы читаться столбцами. Запас — на «чт · сегодня» (≈94 точки при кегле 14),
+    /// «Thu · today» и «周四 · 今天»; 104 кратно 8 — шкала панели 4/8/12/16/24.
     /// </summary>
-    public const double DayColumnWidth = 56;
+    public const double DayColumnWidth = 104;
 
     /// <summary>
     /// Ширины пяти колонок: день, промежуток, окна пика, промежуток, окна дешёвого времени.
@@ -83,6 +88,12 @@ public static class PeakTableView
     ///
     /// <paramref name="inPeakNow"/> — идёт ли пик прямо сейчас: по нему выбирается, какая из двух
     /// колонок сегодняшней строки — ТЕКУЩЕЕ окно, и та получает подложку поплотнее.
+    ///
+    /// ⚠️ **Сегодняшний день назван СЛОВОМ (DEF-049, 2.4.0).** До правки зелёная подложка была
+    /// единственным признаком «сегодня» — кадр p8 (D-6) читал подсвеченное «чт» как четверг и
+    /// ничего больше; это провал WCAG 1.4.1 (цвет — не единственный носитель смысла). Теперь
+    /// в ячейке дня стоит «чт · сегодня» (`PanelStrings.PeakDayTodayFormat`), а подложка остаётся
+    /// вторым, цветовым признаком. День недели НЕ заменён — он остаётся содержанием таблицы.
     /// </summary>
     public static void Fill(Grid target, IReadOnlyList<PeakTableRow> rows, int todayIndex = -1, bool inPeakNow = false)
     {
@@ -108,7 +119,13 @@ public static class PeakTableView
         {
             var row = rows[index];
 
-            var day = TableGrid.Cell(row.Day, minWidth: DayColumnWidth);
+            // СЕГОДНЯ — СЛОВОМ, а не одной подложкой: день недели остаётся первым, «сегодня»
+            // добавляется из словаря (три языка), литерала здесь нет.
+            var day = TableGrid.Cell(
+                index == todayIndex
+                    ? string.Format(CultureInfo.CurrentCulture, PanelStrings.PeakDayTodayFormat, row.Day)
+                    : row.Day,
+                minWidth: DayColumnWidth);
             var peak = TableGrid.Cell(row.PeakWindows, wrap: true);
             var offPeak = TableGrid.Cell(row.OffPeakWindows, wrap: true);
 

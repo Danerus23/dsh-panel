@@ -42,11 +42,29 @@ public static class SkillPhrases
         return verdict.State switch
         {
             SkillState.Ok => Loc.T(SkillKeys.Checked),
-            SkillState.Missing => Unread(verdict) ? Loc.T(SkillKeys.VersionUnread) : Loc.T(SkillKeys.Trouble),
+            SkillState.Missing => Unread(verdict)
+                ? Loc.T(SkillKeys.VersionUnread)
+                : NotDeclared(verdict)
+                    ? Loc.T(SkillKeys.NotDeclared)
+                    : Loc.T(SkillKeys.Trouble),
 
             // «Не проверялась» — НЕ беда: панель об этом сервер DSH не спрашивала.
             _ => Loc.T(SkillKeys.NotChecked),
         };
+    }
+
+    /// <summary>
+    /// БЕДА, КОТОРАЯ НЕ ПОЛОМКА: умение проверено ПО ОБЪЯВЛЕНИЮ сервера, и сервер такого вызова
+    /// не объявляет (DEF-048, D-9). Прежнее слово метки — «не работает» — говорило человеку
+    /// «сломано», хотя чинить нечего: у этого сервера DSH просто нет вызова. Способ проверки
+    /// («по объявлению сервера») и есть признак случая — он приходит из
+    /// <see cref="EngineSkills.Measure"/> тем же вердиктом.
+    /// </summary>
+    public static bool NotDeclared(SkillVerdict verdict)
+    {
+        ArgumentNullException.ThrowIfNull(verdict);
+
+        return verdict.State == SkillState.Missing && verdict.HowKey == SkillKeys.HowDeclared;
     }
 
     /// <summary>

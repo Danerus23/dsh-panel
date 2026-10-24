@@ -280,6 +280,30 @@ public sealed class ServerController : IServerControl, IDisposable
     private bool _exitReported;
 
     /// <summary>
+    /// ИДЁТ ПОПЫТКА СТАРТА — <c>Start</c> выполняется прямо сейчас (DEF-054, 2.4.0).
+    ///
+    /// **Зачем отдельный флаг, а не «спросить состояние».** <c>Start</c> держит замок контроллера
+    /// всё время подъёма (до 240 с), поэтому <c>Refresh</c> из проверки первого запуска ждал бы
+    /// конца старта — на нитке интерфейса это замершая панель. Флаг ставится ДО замка и читается
+    /// без него: проверка узнаёт «идёт попытка» мгновенно и молчит, а решит после неё.
+    ///
+    /// ⚠️ <c>volatile</c>, а не поле под замком: читатель на нитке интерфейса не имеет права
+    /// ждать писателя, который сейчас спит в ожидании сервера.
+    /// </summary>
+    private volatile bool _startAttempt;
+
+    /// <summary>
+    /// ПРОЦЕСС ПОДНЯТ, НО ЕЩЁ НЕ ОТВЕТИЛ — «сервер достраивает профиль» (DEF-054).
+    ///
+    /// Так заканчивается <see cref="WaitUntilRunning"/>, когда ожидание кончилось, а процесс жив:
+    /// контроллер отдаёт состояние «не работает» с подробностью «ещё стартует» и процесс НЕ гасит.
+    /// Для проверки первого запуска это НЕ неудача, а продолжение попытки, и она обязана это
+    /// видеть: прежний разбор брал последнюю строку отказа как «не поднялся» — отсюда окно
+    /// «Сервер DSH не поднялся» в ту же секунду, что «Сервер DSH запущен» (журнал 23.10.2026).
+    /// </summary>
+    private volatile bool _engineStillStarting;
+
+    /// <summary>
     /// ЭТОТ процесс гасит ПАНЕЛЬ (человек нажал «Остановить»), а не он уходит сам.
     ///
     /// **От какого случая (t15, 18.10.2026).** Запись о завершении должна различать «погасили»
@@ -483,6 +507,18 @@ public sealed class ServerController : IServerControl, IDisposable
     /// </summary>
     public event Action? Changed;
 
+    /// <summary>
+    /// СВОЙ СЕРВЕР УПАЛ САМ (DEF-052/053, 2.4.0) — событие рядом с журналом и шариком.
+    ///
+    /// Поднимается ТОЛЬКО когда процесс ушёл сам, без слова панели: остановка кнопкой
+    /// «Остановить» (человеком) и гашение панелью падением не называются — это их слово,
+    /// а не беда. Факты (код выхода, момент, хвост вывода) — в <see cref="ServerCrash"/>.
+    ///
+    /// ⚠️ **Подписчик НИЧЕГО не поднимает.** Авто-подъём сервера запрещён решением владельца:
+    /// панель сообщает о падении и ждёт человека. Стережёт `ServerCrashTests`.
+    /// </summary>
+    public event Action<ServerCrash>? Crashed;
+
     private ServerState _state;
 
     /// <summary>
@@ -496,6 +532,19 @@ public sealed class ServerController : IServerControl, IDisposable
     public bool Known { get; private set; }
 
     public ServerOwner Owner { get; private set; } = ServerOwner.None;
+
+    /// <summary>
+    /// ИДЁТ ПОПЫТКА СТАРТА: контроллер поднимает процесс прямо сейчас ИЛИ процесс уже поднят,
+    /// но ещё не ответил (достраивает профиль). DEF-054, 2.4.0.
+    ///
+    /// **Что с этим делает проверка первого запуска.** Пока <c>Starting</c> — «Сервер DSH
+    /// не поднялся» человеку НЕ говорится: это не неудача, а незаконченное дело. Причина
+    /// называется только после попытки, и уже по устойчивому факту (`FirstRunDecisions.Reason`).
+    ///
+    /// ⚠️ Читается БЕЗ замка контроллера (оба поля — <c>volatile</c>): замок держит сам старт,
+    /// и «спросить состояние» на нитке интерфейса означало бы ждать его до 240 секунд.
+    /// </summary>
+    public bool Starting => _startAttempt || _engineStillStarting;
 
     /// <summary>
     /// Согласие человека на ЭТОТ встроенный сервер запомнено. Сверяется и порт: согласие,
@@ -524,6 +573,38 @@ public sealed class ServerController : IServerControl, IDisposable
     }
 
     // --- состояние ---------------------------------------------------------
+
+    /// <summary>
+    /// ПЕРЕЧИТАТЬ СОСТОЯНИЕ, НЕ ВСТАВАЯ В ОЧЕРЕДЬ ЗА ЗАМКОМ (DEF-054, 2.4.0).
+    ///
+    /// **Зачем.** <see cref="Refresh"/> ждёт замок контроллера, а его держит подъём сервера —
+    /// до 240 секунд. Проверке первого запуска (нитка интерфейса) ждать нельзя: панель замерла бы
+    /// ровно на время старта. Здесь попытка взять замок БЕЗ ожидания: занят — значит прямо сейчас
+    /// идёт работа (старт, гашение, встраивание), и честный ответ — «состояние в движении»,
+    /// а не «сервер не поднялся».
+    ///
+    /// Возвращает <c>false</c>, когда замок занят; <paramref name="state"/> тогда — прежнее
+    /// состояние (его нельзя читать как истину «сейчас», но вызывающий в этом случае и не решает).
+    /// </summary>
+    public bool TryRefresh(out ServerState state)
+    {
+        if (!Monitor.TryEnter(_gate))
+        {
+            state = _state;
+            return false;
+        }
+
+        try
+        {
+            // Refresh берёт тот же замок повторно — Monitor реентерабелен для своей нитки.
+            state = Refresh();
+            return true;
+        }
+        finally
+        {
+            Monitor.Exit(_gate);
+        }
+    }
 
     public ServerState Refresh()
     {
@@ -610,6 +691,11 @@ public sealed class ServerController : IServerControl, IDisposable
             // состояния идёт в ФОНЕ — значит и прогревать надо здесь.
             if (state.Presence == ServerPresence.Running && Owner == ServerOwner.Adopted)
                 WarmForeignLink(port);
+
+            // «ЕЩЁ СТАРТУЕТ» — ФАКТ ДЛЯ ПРОВЕРКИ ГОТОВНОСТИ (DEF-054): процесс поднят, но порт
+            // ещё не отвечает. Сбрасывается сам, как только сервер ответил или процесс ушёл:
+            // это не догадка, а следствие того же осмотра, из которого собрано состояние.
+            _engineStillStarting = _process is not null && !_process.HasExited && !state.IsRunning;
 
             return State = state;
         }
@@ -1315,7 +1401,31 @@ public sealed class ServerController : IServerControl, IDisposable
 
     // --- запуск и остановка ------------------------------------------------
 
+    /// <summary>
+    /// ПОДНЯТЬ СВОЙ СЕРВЕР. Флаг попытки ставится ДО замка (DEF-054): проверка готовности первого
+    /// запуска обязана узнать «идёт старт» мгновенно, не вставая в очередь за замком, который
+    /// старт держит до конца подъёма (до 240 с).
+    /// </summary>
     public ServerState Start(TimeSpan timeout)
+    {
+        _startAttempt = true;
+        _engineStillStarting = false;
+
+        try
+        {
+            return StartCore(timeout);
+        }
+        finally
+        {
+            // Попытка кончилась — чем бы ни кончилась. «Ещё стартует» после неё решает уже
+            // состояние: процесс жив и не ответил — Starting остаётся истинным через
+            // `_engineStillStarting` (его выставляет Refresh/WaitUntilRunning).
+            _startAttempt = false;
+        }
+    }
+
+    /// <summary>Тело <see cref="Start"/> под замком контроллера — отдельно только ради флага попытки.</summary>
+    private ServerState StartCore(TimeSpan timeout)
     {
         lock (_gate)
         {
@@ -1621,6 +1731,11 @@ public sealed class ServerController : IServerControl, IDisposable
             // ОБЕЩАНИЕ ПЕРВОГО ЗАПУСКА — ТОЛЬКО КОГДА ОН ПЕРВЫЙ (t15, 18.10.2026): слова выбирает
             // признак по каталогам профиля, а не «так писали всегда».
             var detail = EngineFirstRun.StillStartingDetail(FirstRunLooks, _port);
+
+            // ЭТО НЕ НЕУДАЧА, А ПРОДОЛЖЕНИЕ ПОПЫТКИ (DEF-054): проверка первого запуска смотрит
+            // на этот флаг и молчит, пока сервер достраивается.
+            _engineStillStarting = true;
+
             return State = ServerState.Stopped(_port, detail);
         }
 
@@ -1690,6 +1805,9 @@ public sealed class ServerController : IServerControl, IDisposable
             _process = null;
             Owner = ServerOwner.None;
             _ownPid = 0;
+
+            // ПАНЕЛЬ ПОГАСИЛА САМА — «ещё стартует» больше неправда (DEF-054).
+            _engineStillStarting = false;
 
             // Свой сервер погашен — запись «этот сервер наш» и ссылка входа больше не верны:
             // ссылка живёт ровно столько, сколько живёт сервер. Строка говорится ТОЛЬКО о том,
@@ -2085,6 +2203,10 @@ public sealed class ServerController : IServerControl, IDisposable
         _log(detail + suffix);
         _port = 0;
         Owner = ServerOwner.None;
+
+        // ПОПЫТКА КОНЧИЛАСЬ НЕУДАЧЕЙ — «ещё стартует» больше неправда (DEF-054).
+        _engineStillStarting = false;
+
         return State = ServerState.Stopped(0, detail);
     }
 
@@ -2099,6 +2221,10 @@ public sealed class ServerController : IServerControl, IDisposable
         _startRefusal = detail;
         _port = 0;
         Owner = ServerOwner.None;
+
+        // ОТКАЗ — это не «ещё стартует»: попытки не было вовсе (DEF-054).
+        _engineStillStarting = false;
+
         return State = ServerState.Stopped(0, detail);
     }
 
@@ -2161,6 +2287,10 @@ public sealed class ServerController : IServerControl, IDisposable
         _process = null;
         if (Owner == ServerOwner.Panel) Owner = ServerOwner.None;
 
+        // ПРОЦЕСС УШЁЛ — «ещё стартует» больше неправда (DEF-054): дальше это уже неудача,
+        // и проверка первого запуска обязана иметь право её назвать.
+        _engineStillStarting = false;
+
         // Сервер ушёл сам — запись «этот сервер наш» и ссылка входа перестали быть верными.
         // Не снять их значило бы показывать человеку мёртвый адрес и держать «свой» сервер,
         // которого нет.
@@ -2219,11 +2349,31 @@ public sealed class ServerController : IServerControl, IDisposable
     /// ПОДСТАВНОГО процесса (<c>cmd /c … exit 7</c>) и смотрит, что легло в журнал панели.
     /// Снаружи сборки этого шва не существует.
     /// </summary>
-    internal void JournalEngineExit(int pid, int? exitCode, bool stoppedByPanel, IReadOnlyList<string>? tail = null)
+    internal void JournalEngineExit(int pid, int? exitCode, bool stoppedByPanel, IReadOnlyList<string>? tail = null) =>
+        ReportEngineExit(pid, exitCode, _clock(), tail ?? EngineTail(), ours: Owner == ServerOwner.Panel, stoppedByPanel);
+
+    /// <summary>
+    /// ЗАВЕРШЕНИЕ ДВИЖКА: журнал ВСЕГДА, событие — только при падении (DEF-052/053, 2.4.0).
+    ///
+    /// <paramref name="ours"/> приходит доводом, а не читается из <see cref="Owner"/> здесь:
+    /// владельца выставляет только настоящий запуск, а проверке нужны оба ответа («свой процесс»
+    /// и «не свой») без поднятия сервера. Один шов — одна проверка на все три ветви завершения.
+    /// </summary>
+    internal void ReportEngineExit(
+        int pid, int? exitCode, DateTimeOffset at, IReadOnlyList<string>? tail, bool ours, bool stoppedByPanel)
     {
-        var lines = EngineExitReport.Lines(pid, exitCode, stoppedByPanel, _clock(), tail ?? EngineTail());
+        var facts = tail ?? Array.Empty<string>();
+
+        var lines = EngineExitReport.Lines(pid, exitCode, stoppedByPanel, at, facts);
 
         foreach (var line in lines) _log(line);
+
+        // ПАДЕНИЕ — ОТДЕЛЬНОЕ СОБЫТИЕ, А НЕ ТОЛЬКО СТРОКА ЖУРНАЛА. Журнал пишется ВСЕГДА
+        // (и когда гасила панель); событие — только когда свой сервер ушёл сам. Подписчик
+        // (шарик) не поднимает ничего, и это проверяется счётчиком поиска движка.
+        if (!ServerCrashDecisions.IsCrash(ours, stoppedByPanel)) return;
+
+        Crashed?.Invoke(new ServerCrash(pid, exitCode, at, ServerCrashDecisions.MaskedTail(facts)));
     }
 
     private string ProcessName(int pid)

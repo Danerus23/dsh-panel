@@ -55,5 +55,10 @@ public sealed record PricingResult(
 /// </summary>
 public interface IPricingClient
 {
-    PricingResult Query(string language, DateTimeOffset now);
+    /// <summary>
+    /// Прочитать страницу цен языка <paramref name="language"/> и вернуть цены МОДЕЛИ
+    /// <paramref name="model"/> — имени из профиля агента (DEF-056). Модели нет на странице —
+    /// ответ «не разобралось» словами, а не цены соседней колонки.
+    /// </summary>
+    PricingResult Query(string language, string model, DateTimeOffset now);
 }

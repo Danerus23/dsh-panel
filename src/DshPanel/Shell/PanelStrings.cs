@@ -554,6 +554,31 @@ public static class PanelStrings
     /// <summary>Заголовок сообщения о гашении сервера.</summary>
     public static string NotifyServerStopTitle => Loc.T(nameof(NotifyServerStopTitle));
 
+    /// <summary>
+    /// ШАРИК «СВОЙ СЕРВЕР УПАЛ САМ» (DEF-052/053, решение владельца 22.10.2026). Заголовок называет
+    /// то, чем падение отличается от остановки панелью — слово «сам» (в журнале то же:
+    /// `SrvEngineExitItselfLogFormat` = «завершился САМ»). Слова журнала и шарика — одни и те же:
+    /// человек видит одно событие в двух местах и не должен решать, об одном ли речь.
+    /// ⚠️ **Кнопки подъёма нет и не будет, авто-подъём запрещён владельцем**: поэтому тело говорит
+    /// «не поднимает» прямо, а не намекает.
+    /// </summary>
+    public static string NotifyServerCrashedTitle => Loc.T(nameof(NotifyServerCrashedTitle));
+
+    /// <summary>
+    /// Тело того же шарика: код выхода, время и честное «панель не поднимает» (`{0}` — код или
+    /// «нет кода», `{1}` — время). Обещания перезапуска здесь нет намеренно: его не будет.
+    /// </summary>
+    public static string NotifyServerCrashedFormat => Loc.T(nameof(NotifyServerCrashedFormat));
+
+    /// <summary>
+    /// ШАРИК «ОБНОВЛЕНИЕ СКАЧИВАЕТСЯ» (u2, решение капитана): ОДИН шарик на попытку, без чисел
+    /// и процентов — ход виден в разделе «Обновление». Заголовок называет, что идёт.
+    /// </summary>
+    public static string NotifyUpdatePreparingTitle => Loc.T(nameof(NotifyUpdatePreparingTitle));
+
+    /// <summary>Тело того же шарика: что панель делает и где смотреть ход. Без процентов — нарочно.</summary>
+    public static string NotifyUpdatePreparingText => Loc.T(nameof(NotifyUpdatePreparingText));
+
     /// <summary>Журнал: запись «что стоит сейчас» не удалась.</summary>
     public static string EngineInstallRecordFailedFormat => Loc.T(nameof(EngineInstallRecordFailedFormat));
 
@@ -611,7 +636,7 @@ public static class PanelStrings
     public static string ConfirmStopNo => Loc.T(nameof(ConfirmStopNo));
 
     /// <summary>
-    /// Состояние на время запуска: «Запускаю сервер…» — БЕЗ обещания первого запуска.
+    /// Состояние на время запуска: «Сервер запускается…» — БЕЗ обещания первого запуска.
     ///
     /// **От какого случая (слово владельца 18.10.2026).** Здесь стояло «первый запуск достраивает
     /// профиль, это до минуты» — и это была неправда на каждом обычном подъёме: профиль панель
@@ -884,6 +909,13 @@ public static class PanelStrings
     public static string PeakDayFriday => Loc.T(nameof(PeakDayFriday));
     public static string PeakDaySaturday => Loc.T(nameof(PeakDaySaturday));
 
+    /// <summary>
+    /// СЕГОДНЯШНИЙ ДЕНЬ В ТАБЛИЦЕ ПИКОВ: «чт · сегодня» (DEF-049, WCAG 1.4.1 «Use of Color»).
+    /// День недели остаётся, «сегодня» — ДОБАВКА, а не замена: цвет строки остаётся один и не
+    /// может быть единственным носителем смысла. Формат ставит таблица, литерала слова в коде нет.
+    /// </summary>
+    public static string PeakDayTodayFormat => Loc.T(nameof(PeakDayTodayFormat));
+
     // --- баланс -------------------------------------------------------------
 
     public static string BalanceTitle => Loc.T(nameof(BalanceTitle));
@@ -1069,9 +1101,6 @@ public static class PanelStrings
 
     /// <summary>Отчёт: заголовок раздела с хвостом журнала панели.</summary>
     public static string IssueReportHeadingLog => Loc.T(nameof(IssueReportHeadingLog));
-
-    /// <summary>Отчёт: подсказка в пустом разделе «что случилось» (скрытый комментарий Markdown).</summary>
-    public static string IssueReportMessageHint => Loc.T(nameof(IssueReportMessageHint));
 
     /// <summary>Отчёт: подпись строки «версия панели».</summary>
     public static string IssueReportVersion => Loc.T(nameof(IssueReportVersion));
@@ -1832,6 +1861,23 @@ public static class PanelStrings
     /// <summary>Отказ панели: идёт другая работа с копиями — второй не начинаем.</summary>
     public static string BackupBusy => Loc.T(nameof(BackupBusy));
 
+    /// <summary>
+    /// ВОПРОС ПРИ ЗАКРЫТИИ ОКНА КОПИЙ НА СЕРЕДИНЕ КОПИИ (DEF-045). Заголовок — ВОПРОС, тело
+    /// на него отвечает и заголовок не повторяет (норма та же, что у `BackupStopTitle`).
+    /// ⚠️ Отмены у домена НЕТ (`IBackupControl` без `CancellationToken`), поэтому вопрос не
+    /// «прервать ли копию», а «закрыть ли окно»: копия доделается в фоне.
+    /// </summary>
+    public static string BackupBusyCloseTitle => Loc.T(nameof(BackupBusyCloseTitle));
+
+    /// <summary>Тело вопроса: что будет с копией после закрытия окна и где искать итог.</summary>
+    public static string BackupBusyCloseQuestion => Loc.T(nameof(BackupBusyCloseQuestion));
+
+    /// <summary>Ответ «да»: окно закрывается, копия остаётся в фоне и доделывается.</summary>
+    public static string BackupBusyCloseYes => Loc.T(nameof(BackupBusyCloseYes));
+
+    /// <summary>Ответ «нет» (безопасный, он же `Esc`): закрытия не будет, человек возвращается в окно.</summary>
+    public static string BackupBusyCloseNo => Loc.T(nameof(BackupBusyCloseNo));
+
     /// <summary>Журнал ротации: удалять нечего — сколько копий и сколько храним.</summary>
     public static string BackupRotationNothingFormat => Loc.T(nameof(BackupRotationNothingFormat));
 
@@ -1892,9 +1938,12 @@ public static class PanelStrings
 
     // --- добавлено переносом строк на словари (этап 5) ---
 
-    /// <summary>Заголовок окна «О программе».</summary>
-    public static string AboutTitle => Loc.T(nameof(AboutTitle));
-
+    /// <summary>
+    /// Короткое имя РАЗДЕЛА «О программе» (u14, 2.4.0) — то, что стоит в списке разделов слева
+    /// и заголовком справа. Без имени продукта: раздел уже внутри панели, а длинная подпись
+    /// не влезает в колонку 240 (`SettingsSectionsTests.Подпись_раздела_влезает_в_колонку_целиком`).
+    /// </summary>
+    public static string AboutSectionTitle => Loc.T(nameof(AboutSectionTitle));
     /// <summary>Пункт меню значка и кнопка: открыть окно «О программе». Многоточие — как у настроек: за кнопкой окно, а не действие.</summary>
     public static string AboutButton => Loc.T(nameof(AboutButton));
 
@@ -1936,12 +1985,6 @@ public static class PanelStrings
 
     /// <summary>Кнопка закрытия окна «О программе».</summary>
     public static string AboutCloseButton => Loc.T(nameof(AboutCloseButton));
-
-    /// <summary>Строка журнала: окно «О программе» открыто.</summary>
-    public static string AboutOpenedLog => Loc.T(nameof(AboutOpenedLog));
-
-    /// <summary>Строка журнала: окно «О программе» уже было открыто.</summary>
-    public static string AboutRaisedLog => Loc.T(nameof(AboutRaisedLog));
 
     /// <summary>Подпись списка выбора языка.</summary>
     public static string SettingsLanguageLabel => Loc.T(nameof(SettingsLanguageLabel));
@@ -3006,9 +3049,6 @@ public static class PanelStrings
     // `OpenAgentReadyNote`), здесь НЕ повторяются: подсказка берёт ту же строку. Двойник
     // разошёлся бы с ней на первом же изменении.
 
-    /// <summary>Кнопка «О программе…»: что она откроет.</summary>
-    public static string TipAboutButton => Loc.T(nameof(TipAboutButton));
-
     /// <summary>Кнопка «Запустить»: что произойдёт.</summary>
     public static string TipStartServerButton => Loc.T(nameof(TipStartServerButton));
 
@@ -3286,6 +3326,19 @@ public static class PanelStrings
     /// <summary>Отказ разбора: на странице не нашлось таблицы с ценами.</summary>
     public static string PriceTableMissing => Loc.T(nameof(PriceTableMissing));
 
+    /// <summary>
+    /// Отказ разбора (DEF-056): сайт отдал ОБОЛОЧКУ — корневую страницу вместо страницы цен.
+    /// Это не «цены пусты» и не «нет модели»: таблицы цен нет вовсе, и человеку сказано, что
+    /// панель повторит попытку позже (норма `60-states.md`: «не прочиталось ≠ нет»).
+    /// </summary>
+    public static string PricePageShell => Loc.T(nameof(PricePageShell));
+
+    /// <summary>
+    /// Отказ разбора (DEF-056): модели из профиля агента на странице цен нет. Чужие цены панель
+    /// не подставляет — иначе человек считал бы свои пики по цене другой модели.
+    /// </summary>
+    public static string PriceModelMissingFormat => Loc.T(nameof(PriceModelMissingFormat));
+
     /// <summary>Откуда взяты цены: адрес страницы и когда проверено.</summary>
     public static string PriceSourceFormat => Loc.T(nameof(PriceSourceFormat));
 
@@ -3401,6 +3454,16 @@ public static class PanelStrings
 
     /// <summary>GitHub ответил отказом, который не назван выше, — с кодом ответа.</summary>
     public static string UpdateHttpFailedFormat => Loc.T(nameof(UpdateHttpFailedFormat));
+
+    /// <summary>
+    /// НЕТ СВЯЗИ (u2, DEF-007): человеку — причина и выход, а не тип исключения. Прежде на этом
+    /// месте в строку раздела попадала техстрока «HttpRequestException: …» — она ничего не говорит
+    /// тому, кто читает окно, и выглядит как поломка панели, хотя чинится сетью.
+    /// </summary>
+    public static string UpdateNetworkError => Loc.T(nameof(UpdateNetworkError));
+
+    /// <summary>Та же беда — в журнал, с технической подробностью (<c>{0}</c> = тип и сообщение).</summary>
+    public static string UpdateNetworkErrorLogFormat => Loc.T(nameof(UpdateNetworkErrorLogFormat));
 
     /// <summary>Строка журнала об исходе проверки: какая версия увиделась или почему её нет.</summary>
     public static string UpdateLogFormat => Loc.T(nameof(UpdateLogFormat));
@@ -3978,6 +4041,13 @@ public static class PanelStrings
 
     /// <summary>Умения: строка по ключу «EnvSkillTrouble».</summary>
     public static string EnvSkillTrouble => Loc.T(nameof(EnvSkillTrouble));
+
+    /// <summary>
+    /// Умения: строка по ключу «EnvSkillNotDeclared» — беда НЕ в поломке, а в том, что сервер DSH
+    /// такого вызова не объявляет (DEF-048, D-9). Прежде и здесь стояло «не работает», и человек
+    /// читал «сломано» там, где верно «этого у сервера нет».
+    /// </summary>
+    public static string EnvSkillNotDeclared => Loc.T(nameof(EnvSkillNotDeclared));
 
     /// <summary>Умения: строка по ключу «EnvSkillReasonNotChecked».</summary>
     public static string EnvSkillReasonNotChecked => Loc.T(nameof(EnvSkillReasonNotChecked));

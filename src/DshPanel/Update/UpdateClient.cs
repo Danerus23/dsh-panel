@@ -59,6 +59,13 @@ public sealed record UpdateRelease(
     /// ответ (окно, проверки, восстановление из настроек), называть примету, которой у него нет.
     /// </summary>
     public bool RateLimited { get; init; }
+
+    /// <summary>
+    /// ТЕХНИЧЕСКИЙ СЛЕД ОТКАЗА — ТОЛЬКО ДЛЯ ЖУРНАЛА (DEF-007, 2.4.0). В строке для человека его
+    /// нет и быть не должно: «HttpRequestException: The remote name could not be resolved» —
+    /// это не причина, а след, и человеку он ничего не говорит. Пусто — следа нет.
+    /// </summary>
+    public string Technical { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -224,9 +231,20 @@ public sealed class HttpUpdateClient : IUpdateClient
         }
         catch (Exception error)
         {
-            return Fail($"{error.GetType().Name}: {error.Message}", now);
+            // ⚠️ ЧЕЛОВЕКУ — СЛОВА, ЖУРНАЛУ — СЛЕД (DEF-007, 2.4.0). До 2.4.0 сюда уходила
+            // техстрока «HttpRequestException: …», и человек читал в разделе «Обновление»
+            // имя типа исключения вместо «нет связи». След не выбрасывается: он едет отдельным
+            // полем (`Technical`) и попадает в журнал панели — по нему разбирают, ЧТО порвалось.
+            return Fail(PanelStrings.UpdateNetworkError, now) with { Technical = Describe(error) };
         }
     }
+
+    /// <summary>
+    /// Причина отказа словами СРЕДЫ (тип и сообщение исключения) — для журнала, не для человека.
+    /// Так же поступает отказ записи файлов замены в <c>UpdateInstall</c>.
+    /// </summary>
+    private static string Describe(Exception error) =>
+        error.GetType().Name + ": " + error.Message;
 
     private static UpdateRelease Fail(string error, DateTimeOffset now) =>
         UpdateRelease.Failed(error, now);

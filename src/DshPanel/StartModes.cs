@@ -22,7 +22,7 @@ public static class StartModes
     /// <summary>Ключи проверок, ролей и модификаторов. Обычный запуск ключа не имеет вовсе.</summary>
     public static readonly string[] Known = new[]
     {
-        "--shot", "--tray-selftest", "--shell-selftest", "--instance-selftest", "--instance-probe",
+        "--shot", "--tray-selftest", "--shell-selftest", "--windows-selftest", "--instance-selftest", "--instance-probe",
         "--autostart-selftest", "--settings-selftest", "--balance-selftest", "--server-selftest",
         "--phone-selftest",
         "--backup-selftest", "--isolation-selftest", "--lang-selftest", "--update-selftest",
@@ -68,8 +68,17 @@ public static class StartModes
     /// <summary>Имя окна съёмки: копии и восстановление.</summary>
     public const string ShotBackup = "backup";
 
-    /// <summary>Имя окна съёмки: «О программе».</summary>
-    public const string ShotAbout = "about";
+    /// <summary>
+    /// Имя окна съёмки: раздел «О программе» настроек (u14, 2.4.0).
+    ///
+    /// ⚠️ **ПРЕЖНЕЕ ИМЯ <c>about</c> УДАЛЕНО, И ЭТО НАЗВАННОЕ ИЗМЕНЕНИЕ КОНТРАКТА.** «О программе»
+    /// перестало быть отдельным окном (решение владельца 27.09.2026, `docs\DECISIONS.md:32`):
+    /// ответ стал седьмым разделом настроек. Имя «about» больше не значит ничего, и `--shot about`
+    /// обязан давать **код 2** со списком известных имён, а не открывать панель молча: опечатка
+    /// в скрипте съёмки иначе положила бы в README не тот кадр. Список — тот же
+    /// <see cref="ShotWindows"/>, и живых имён-сирот в нём не остаётся.
+    /// </summary>
+    public const string ShotSettingsAbout = "settings-about";
 
     /// <summary>Имя окна съёмки: «Пики и тарифы».</summary>
     public const string ShotPeaks = "peaks";
@@ -119,6 +128,16 @@ public static class StartModes
     public const string ShotUnsavedChanges = "unsaved-changes";
 
     /// <summary>
+    /// Имя окна съёмки: вопрос при закрытии окна копий на середине копии (`BusyCloseWindow`,
+    /// DEF-045, 2.4.0).
+    ///
+    /// ⚠️ Имя добавлено ВМЕСТЕ с окном: окно, которого нет в списке, нельзя посмотреть вовсе
+    /// (`--shot` с незнакомым именем отвергается кодом 2) — и тогда новый вид не увидит ни
+    /// проверяющий, ни владелец.
+    /// </summary>
+    public const string ShotBackupClose = "backup-close";
+
+    /// <summary>
     /// Имя окна съёмки: ОКНО ПЕРВОГО ЗАПУСКА (`FirstRunWindow`, A5).
     ///
     /// ⚠️ Это единственный способ УВИДЕТЬ это окно, не трогая профиль и не притворяясь незнакомцем:
@@ -166,12 +185,12 @@ public static class StartModes
     public static readonly string[] ShotWindows =
     {
         ShotSettings, ShotSettingsGeneral, ShotSettingsBackup, ShotSettingsBalance, ShotSettingsUpdate,
-        ShotSettingsServer, ShotSettingsPhone,
-        ShotBackup, ShotAbout, ShotPeaks,
+        ShotSettingsServer, ShotSettingsPhone, ShotSettingsAbout,
+        ShotBackup, ShotPeaks,
         ShotPricingHistory, ShotIssue, ShotMainTwoServers,
 
         // ДИАЛОГИ (фаза 3, 12.10.2026): у каждого имени обязан быть кадр, и это стережёт прогон.
-        ShotConfirmStop, ShotConfirmEngine, ShotBackupStop, ShotUnsavedChanges,
+        ShotConfirmStop, ShotConfirmEngine, ShotBackupStop, ShotUnsavedChanges, ShotBackupClose,
 
         // ОКНО ПЕРВОГО ЗАПУСКА (A5): у человека оно показывается один раз, и увидеть его иначе
         // можно только кадром — поэтому имя живёт в этом же списке, а не в отдельном.

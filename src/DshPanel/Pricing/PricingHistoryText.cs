@@ -187,9 +187,16 @@ public static class PricingHistoryText
         var arrow = Arrow(direction, language);
         var difference = PricingChangeDecisions.Difference(before, after);
 
-        return direction == PricingChangeDirection.None || difference.Length == 0
+        // ⚠️ ОДНО НАПРАВЛЕНИЕ — ОДИН ЗНАК (DEF-048, D-7). Прежде ячейка выглядела как «↓ -$0.02»:
+        // стрелка говорила «вниз», знак «−» говорил то же второй раз. Кадр `pricing-history` это
+        // и показал. Стрелка остаётся (слово-знак читается и без цвета — WCAG 1.4.1), а знак из
+        // числа снимается здесь, в ОДНОМ месте, где ячейка собирается: разница со знаком нужна
+        // сама по себе (`PricingChangeDecisions.Difference`), но не рядом со стрелкой.
+        var amount = difference.TrimStart('+', '-');
+
+        return direction == PricingChangeDirection.None || amount.Length == 0
             ? arrow
-            : arrow + " " + difference;
+            : arrow + " " + amount;
     }
 
     /// <summary>Цена в ячейке истории. Пусто — прочерк: «цены не было» словами, а не пустым местом.</summary>

@@ -176,16 +176,91 @@ public class IssueReportTests
     }
 
     /// <summary>
-    /// СЛОВА ЧЕЛОВЕКА В ОТЧЁТЕ ЕСТЬ. Отчёт без описания того, что случилось, — это набор чисел:
-    /// разбирать его придётся догадками.
+    /// СЛОВА ЧЕЛОВЕКА В ОТЧЁТЕ ЕСТЬ, А СЛУЖЕБНЫХ ВСТАВОК НЕТ (DEF-051, кадр `issue`).
+    ///
+    /// **От какого случая.** Прежняя проверка требовала ОБРАТНОГО: «пустое поле — зовут написать».
+    /// Звало оно скрытым комментарием Markdown (`<!-- напишите здесь, что произошло -->`), и кадр
+    /// показал его человеку внутри превью «ровно тот текст, который уйдёт» — то есть шаблон уходил
+    /// на GitHub вместе с отчётом. Строка `IssueReportMessageHint` удалена из трёх словарей, а
+    /// пустое поле теперь оставляет раздел ПУСТЫМ: что писать, говорит подсказка самого поля.
+    ///
+    /// Мутация, которая обязана упасть здесь: вернуть подстановку шаблона в `Build`.
     /// </summary>
     [Fact]
-    public void Слова_человека_попадают_в_отчёт_а_пустые_зовут_написать()
+    public void Слова_человека_попадают_в_отчёт_а_пустое_поле_не_вставляет_шаблон()
     {
         var facts = Facts();
 
         Assert.Contains("сервер не отвечает после перезагрузки", IssueReport.Text(facts, "сервер не отвечает после перезагрузки"), StringComparison.Ordinal);
-        Assert.Contains("напишите здесь", IssueReport.Text(facts), StringComparison.Ordinal);
+
+        // Пустое поле: раздела «что случилось» с выдуманным текстом быть не может.
+        foreach (var language in new[] { "ru", "en", "zh" })
+        {
+            var empty = IssueReport.TextIn(language, facts);
+
+            Assert.DoesNotContain("<!--", empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("-->", empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("напишите здесь", empty, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// ПРЕВЬЮ = ОТПРАВЛЯЕМЫЙ ТЕКСТ, И В НЁМ НЕТ СЛУЖЕБНЫХ СТРОК (DEF-051).
+    ///
+    /// **Что проверяется, и почему именно это.** Кадр `issue` показал в превью две служебные вещи:
+    /// скрытый HTML-комментарий и одинокую строку «`.`» — это была ОДНА обратная кавычка, которой
+    /// в отчёте открывался «блок журнала». В Markdown одна кавычка — встроенный код: он не переносит
+    /// строки, поэтому сорок строк журнала на GitHub склеивались в один абзац. Теперь ограда — три
+    /// кавычки (`IssueReport.LogFence`), и их в тексте РОВНО ДВЕ: открыть и закрыть.
+    ///
+    /// Зеркал три, и без любого проверка была бы слепой: (1) непустой текст человека в отчёте есть;
+    /// (2) пустое поле не рождает ни одной служебной строки; (3) адрес GitHub разворачивается ровно
+    /// в тот же текст — превью и отправка не могут разойтись.
+    ///
+    /// Мутации, которые обязаны упасть здесь: «вернуть шаблон» (`<!-- … -->` в `Build`) ·
+    /// «вернуть одну кавычку вместо ограды».
+    /// </summary>
+    [Fact]
+    public void Превью_отчёта_не_содержит_служебных_строк()
+    {
+        var facts = Facts();
+        var said = "сервер не поднялся после перезагрузки";
+
+        foreach (var language in new[] { "ru", "en", "zh" })
+        {
+            // ⚠️ ПРОВЕРЯЮТСЯ ОБА СОСТОЯНИЯ ПОЛЯ, и это не формальность: шаблон в 2.3.2 подставлялся
+            // именно в ПУСТОМ — с непустым текстом он не появлялся вовсе, и проверка на одном лишь
+            // непустом поле была бы зелёной при живом дефекте.
+            foreach (var text in new[] { IssueReport.TextIn(language, facts, said), IssueReport.TextIn(language, facts) })
+            {
+                Assert.DoesNotContain("<!--", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("-->", text, StringComparison.Ordinal);
+
+                var lines = text.Replace("\r", string.Empty, StringComparison.Ordinal)
+                    .Split('\n')
+                    .Select(line => line.Trim())
+                    .ToList();
+
+                foreach (var line in lines)
+                {
+                    Assert.False(
+                        line is "." or "`",
+                        $"в отправляемом тексте ({language}) служебная строка «{line}»:" + Environment.NewLine + text);
+                }
+
+                Assert.Equal(2, lines.Count(line => line == IssueReport.LogFence));
+            }
+
+            // Текст человека — в отчёте, и ограда стоит ВОКРУГ журнала, а не вокруг его слов.
+            Assert.Contains(said, IssueReport.TextIn(language, facts, said), StringComparison.Ordinal);
+        }
+
+        // Превью и отправка — один и тот же текст: адрес разворачивается в него дословно.
+        var expected = IssueReport.TextIn("ru", facts, said);
+        var url = IssueReport.GitHubUrl(facts, said);
+        var body = Uri.UnescapeDataString(url[(url.IndexOf("body=", StringComparison.Ordinal) + 5)..]);
+
+        Assert.Equal(expected, body);
     }
 
     /// <summary>
@@ -394,7 +469,6 @@ public class IssueReportTests
                          nameof(PanelStrings.IssueReportHeadingWhat),
                          nameof(PanelStrings.IssueReportHeadingPanel),
                          nameof(PanelStrings.IssueReportHeadingLog),
-                         nameof(PanelStrings.IssueReportMessageHint),
                          nameof(PanelStrings.IssueReportVersion),
                          nameof(PanelStrings.IssueReportEngine),
                          nameof(PanelStrings.IssueReportLaunch),

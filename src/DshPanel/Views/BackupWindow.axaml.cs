@@ -106,6 +106,27 @@ public partial class BackupWindow : Window
     private bool _closed;
 
     /// <summary>
+    /// РАЗРЕШЕНО ЗАКРЫТЬСЯ — после ответа «оставить в фоне» (DEF-045, 2.4.0).
+    ///
+    /// Пока копия идёт, закрытие НЕ происходит сразу: <c>OnClosing</c> отменяет его и задаёт
+    /// вопрос. Флаг ставится ровно на ответе «оставить в фоне», иначе второй <c>Close()</c>
+    /// снова упёрся бы в тот же вопрос и окно нельзя было бы закрыть никогда.
+    /// </summary>
+    private bool _allowClose;
+
+    /// <summary>Вопрос уже задаётся — второй щелчок по крестику не поднимает второй вопрос.</summary>
+    private bool _askingBusyClose;
+
+    /// <summary>
+    /// Подстановка ответа на вопрос «закрыть, пока идёт копия?» для проверок без экрана: диалог
+    /// в прогоне показать некому. Пусто — спрашиваем настоящим окном (<see cref="BusyCloseWindow"/>).
+    /// </summary>
+    internal Func<BusyCloseChoice>? BusyCloseForTests { get; set; }
+
+    /// <summary>Сколько раз окно спросило про закрытие во время копии (для проверок).</summary>
+    internal int BusyCloseAsked { get; private set; }
+
+    /// <summary>
     /// СВОЯ нитка интерфейса, взятая при постройке окна (Н-1, задача D3 цикла 2.1.2).
     ///
     /// ⚠️ Спрашивать её заново в каждом ответе из фона НЕЛЬЗЯ: память общей двери одна на процесс,
@@ -277,6 +298,10 @@ public partial class BackupWindow : Window
             _closed = true;
             backups.Changed -= Render;
         };
+
+        // ЗАКРЫТИЕ НА СЕРЕДИНЕ КОПИИ СПРАШИВАЕТ (DEF-045, 2.4.0): прежде окно исчезало молча,
+        // копия продолжалась в фоне, и человек не знал ни что она идёт, ни где итог.
+        Closing += OnClosing;
 
         backups.Refresh();
         Render();
@@ -1031,6 +1056,67 @@ public partial class BackupWindow : Window
             });
     }
 
+    /// <summary>
+    /// ЗАКРЫТИЕ НА СЕРЕДИНЕ КОПИИ: СПРОСИТЬ, А НЕ ЗАМОЛЧАТЬ (DEF-045, 2.4.0).
+    ///
+    /// **От какого случая.** Окно копий закрывалось молча, даже когда копия шла: работа
+    /// продолжалась в фоне, а человек не знал ни что она идёт, ни где увидеть итог, и мог решить,
+    /// что копия пропала вместе с окном.
+    ///
+    /// **Почему закрытие ОТМЕНЯЕТСЯ, а не «спрашивается потом».** Вопрос задаётся в тот миг,
+    /// когда окно уже закрывают: если пропустить закрытие, спрашивать будет некого — окна нет.
+    /// Поэтому закрытие отменяется, задаётся вопрос и, если человек выбрал «закрыть», закрытие
+    /// повторяется с разрешением (<see cref="_allowClose"/>).
+    ///
+    /// ⚠️ **«Прервать» не предлагается:** отмены у копии нет (`IBackupControl` без
+    /// CancellationToken), и кнопка, которая ничего не прерывает, была бы ложью — той же, за
+    /// которую 2.4.0 заплатила в DEF-044.
+    /// </summary>
+    private void OnClosing(object? sender, WindowClosingEventArgs e)
+    {
+        // Уже закрываемся по ответу человека — не спрашиваем второй раз.
+        if (_allowClose || _closed) return;
+
+        // Копия/накат не идёт — закрываемся молча: спрашивать не о чем.
+        if (!_busy) return;
+
+        e.Cancel = true;
+
+        if (_askingBusyClose) return;
+
+        _askingBusyClose = true;
+
+        // Вопрос — ПОСЛЕ обработки события: показывать диалог изнутри Closing нельзя.
+        UiThread.PostTo(_ui, () => _ = AskAndCloseAsync());
+    }
+
+    /// <summary>Задать вопрос и, если человек велел, закрыть окно. Один путь на вопрос и на закрытие.</summary>
+    private async Task AskAndCloseAsync()
+    {
+        BusyCloseAsked++;
+
+        var choice = BusyCloseForTests is not null
+            ? BusyCloseForTests()
+            : await AskBusyClose();
+
+        _askingBusyClose = false;
+
+        if (choice != BusyCloseChoice.LeaveInBackground) return;
+
+        _allowClose = true;
+        Close();
+    }
+
+    /// <summary>Спросить настоящим окном. Проверка без экрана подставляет ответ выше.</summary>
+    private async Task<BusyCloseChoice> AskBusyClose()
+    {
+        var dialog = new BusyCloseWindow();
+
+        await dialog.ShowDialog(this);
+
+        return dialog.Choice;
+    }
+
     /// <summary>Спросить про работающий сервер. Возвращает выбор человека, а не решение окна.</summary>
     private async Task<StopChoice> AskAboutServer()
     {
@@ -1111,6 +1197,12 @@ public partial class BackupWindow : Window
         Task.Run(work).ContinueWith(task => UiThread.PostTo(_ui, () =>
         {
             _busy = false;
+
+            // ОКНО ЗАКРЫЛИ, ПОКА РАБОТА ШЛА (DEF-045): органы закрытого окна уже не наши, и
+            // трогать их нельзя. Итог при этом НЕ теряется — его записал домен (журнал, список
+            // копий при следующем открытии), а уведомление о неудаче идёт своей дверью.
+            // Прежде ответ из фона всё равно писал в строку состояния закрытого окна.
+            if (_closed) return;
 
             if (task.IsCompletedSuccessfully)
             {

@@ -50,7 +50,7 @@ namespace DshPanel.Views;
 /// Поле, которое ничего не меняет, вреднее пустого места: человек ставит галочку, ничего
 /// не происходит, и он перестаёт верить остальным.
 /// </summary>
-public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
+public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow, IAboutSectionWindow
 {
     private ISettingsControl? _settings;
     private IAutostartControl? _autostart;
@@ -355,9 +355,47 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         PanelToolTip.Set(UpdateReplaceButton, PanelStrings.TipUpdateReplaceButton);
         UpdateReplaceButton.Click += (_, _) => ReplaceUpdate();
 
-        // ДВЕРЬ В «О ПРОГРАММЕ» — та же подпись, что была у двери в главном окне и что стоит
-        // у пункта меню значка: дверь одна, и три разных текста для неё разошлись бы.
-        AboutButton.Content = PanelStrings.AboutButton;
+        // РАЗДЕЛ «О ПРОГРАММЕ» (u14, 2.4.0) — СЕДЬМОЙ И ПОСЛЕДНИЙ. Прежде это было ОТДЕЛЬНОЕ ОКНО
+        // (отдельное окно «О программе»), а в нижней строке стояла дверь в него. Решение владельца 27.09.2026
+        // (`docs\DECISIONS.md:32` — «предлагаю перенести вообще в настройки») исполнено до конца:
+        // окно удалено, ответ живёт разделом, и дверь меню значка открывает ЭТОТ раздел.
+        //
+        // Содержание — обязательный минимум по строке дизайн-лидера (`_team\240\u14-dizayn.md`):
+        // версия (числовая, без хеша), что делает панель, ЖИВЫЕ ссылки, «Сообщить о проблеме…»,
+        // MIT, ©. «Закрыть» из содержания убрано вместе с окном: закрытие делает само окно
+        // настроек. `AboutTranslationNote`, `AboutDonateNote` и строка отказа оставлены —
+        // это ответы, а не украшение.
+        AboutSectionTitle.Text = PanelStrings.AboutSectionTitle;
+        AboutVersionText.Text = string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            PanelStrings.AboutVersionFormat,
+            AboutInfo.PanelVersion);
+        AboutPurposeHeadingText.Text = PanelStrings.AboutPurposeHeading;
+        AboutPurposeText.Text = PanelStrings.AboutPurpose;
+        AboutLinksHeadingText.Text = PanelStrings.AboutLinksHeading;
+        AboutRepoLinkButton.Content = PanelStrings.AboutRepoLink;
+        AboutDonateLinkButton.Content = PanelStrings.AboutDonateLink;
+        AboutDonateNoteText.Text = PanelStrings.AboutDonateNote;
+        AboutTranslationNoteText.Text = PanelStrings.AboutTranslationNote;
+        AboutIssueHeadingText.Text = PanelStrings.AboutIssueHeading;
+        AboutIssueNoteText.Text = PanelStrings.AboutIssueNote;
+        AboutIssueButton.Content = PanelStrings.AboutIssueButton;
+        AboutLicenseText.Text = PanelStrings.AboutLicense;
+        AboutCopyrightText.Text = PanelStrings.AboutCopyright;
+
+        AboutRepoLinkButton.Click += (_, _) => OpenAboutLink(ProductLinks.RepositoryUrl);
+        AboutDonateLinkButton.Click += (_, _) => OpenAboutLink(ProductLinks.Donate);
+
+        // Дверь в окно «Сообщить о проблеме» даёт ВЛАДЕЛЕЦ окна (App) — разделу не нужны
+        // ни журнал панели, ни состояние сервера. Без двери блок скрыт: кнопка в никуда хуже
+        // отсутствующей кнопки. Перерисовка — здесь же, иначе блок остался бы скрытым навсегда.
+        AboutIssueButton.Click += (_, _) => _openIssue?.Invoke();
+
+        PanelToolTip.Set(AboutRepoLinkButton, PanelStrings.TipRepoLinkButton);
+        PanelToolTip.Set(AboutDonateLinkButton, PanelStrings.TipDonateLinkButton);
+        PanelToolTip.Set(AboutIssueButton, PanelStrings.TipAboutIssueButton);
+
+        RenderAbout();
 
         // ДВЕРЬ В ОБНОВЛЕНИЕ ПАНЕЛИ здесь БОЛЬШЕ НЕТ — обновление стало РАЗДЕЛОМ списка слева
         // (решение владельца 28.09.2026: «это будет просто нормальный пункт меню как и остальные
@@ -445,7 +483,6 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         PanelToolTip.Set(SuggestWorkDirButton, PanelStrings.TipSuggestWorkDirButton);
         PanelToolTip.Set(CheckEnvironmentButton, PanelStrings.TipCheckEnvironmentButton);
         PanelToolTip.Set(SaveButton, PanelStrings.TipSaveSettingsButton);
-        PanelToolTip.Set(AboutButton, PanelStrings.TipAboutButton);
 
         // ВТОРИЧНАЯ КНОПКА ШАПКИ — «Открыть файл настроек»: показать человеку сам файл, который
         // панель правит (он его правит и руками). Открывается тем же путём, что ссылка агента:
@@ -460,9 +497,8 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         // Второй, «свой» крестик стоял рядом с «Открыть файл настроек» и читался третьей
         // кнопкой панели инструментов, делая то же самое.
 
-        // Дверь «О программе» — как кнопка настроек в главном окне: она не имеет отношения
-        // ни к серверу, ни к балансу, и открываться обязана всегда.
-        AboutButton.Click += (_, _) => AboutRequested?.Invoke();
+        // ⚠️ ДВЕРИ «О ПРОГРАММЕ» В НИЖНЕМ РЯДУ БОЛЬШЕ НЕТ (u14, 2.4.0): она стала разделом.
+        // Просьбу о двери в отчёт подаёт сам раздел (см. `AttachIssueDoor`), а не кнопка окна.
     }
 
     /// <summary>
@@ -553,11 +589,75 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     }
 
     /// <summary>
-    /// Человек попросил окно «О программе». Окно настроек, как и главное, ничего не решает:
-    /// оно сообщает о просьбе связке, а та выводит на передний план уже открытое окно
-    /// (или открывает его впервые). Второго окна «О программе» в панели быть не должно.
+    /// ДВЕРЬ В ОТЧЁТ О ПРОБЛЕМЕ, данная владельцем окна (<see cref="AttachIssueDoor"/>).
+    /// Пусто — кнопки нет: раздел без двери не должен показывать кнопку в никуда.
+    ///
+    /// ⚠️ Ссылку даёт `App`: отчёт собирается из журнала панели и состояния сервера, а раздел
+    /// «О программе» их не знает и знать не должен. Порядок тот же, что был у удалённого окна.
     /// </summary>
-    public event Action? AboutRequested;
+    private Action? _openIssue;
+
+    /// <summary>
+    /// Привязать дверь «Сообщить о проблеме» и перерисовать раздел.
+    /// ⚠️ Перерисовка ЗДЕСЬ обязательна: конструктор уже вызвал <see cref="RenderAbout"/>, когда
+    /// двери ещё не было, — без этого вызова блок оставался бы скрытым НАВСЕГДА.
+    /// </summary>
+    public void AttachIssueDoor(Action? openIssue)
+    {
+        _openIssue = openIssue;
+        RenderAbout();
+    }
+
+    /// <summary>
+    /// Разложить по строкам то, что РЕШЕНО предикатами: какие ссылки показывать и показывать ли
+    /// строку о машинном переводе. Зовётся при построении окна, при выдаче двери и проверками —
+    /// второго места, где эти решения принимаются, в окне нет.
+    /// </summary>
+    public void RenderAbout()
+    {
+        AboutRepoLinkButton.IsVisible = ProductLinks.ShouldShow(ProductLinks.RepositoryUrl);
+
+        AboutDonateLinkButton.IsVisible = ProductLinks.ShouldShow(ProductLinks.Donate);
+        // Пояснение про донаты живёт ПОД ссылкой и без неё выглядело бы брошенным.
+        AboutDonateNoteText.IsVisible = AboutDonateLinkButton.IsVisible;
+
+        AboutTranslationNoteText.IsVisible = AboutInfo.ShowsTranslationNote(
+            DshPanel.Localization.Loc.Language);
+
+        // Блок «Сообщить о проблеме» показывается, только если у раздела ЕСТЬ дверь.
+        AboutIssuePanel.IsVisible = AboutInfo.ShowIssueBlock(_openIssue is not null);
+    }
+
+    /// <summary>
+    /// Щёлкнуть по ссылке раздела — открыть её общей дверью `<see cref="ProductLinks.Open"/>`;
+    /// ошибка идёт СТРОКОЙ здесь же, а не отдельным окном ради одной строки.
+    /// </summary>
+    private void OpenAboutLink(string url)
+    {
+        var error = AboutOpenLinkForTests is not null
+            ? AboutOpenLinkForTests(url)
+            : ProductLinks.Open(url);
+
+        AboutLinkStatusText.Text = error.Length == 0
+            ? string.Empty
+            : string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.AboutLinkFailedFormat,
+                error);
+
+        AboutLinkStatusText.IsVisible = AboutLinkStatusText.Text!.Length > 0;
+    }
+
+    /// <summary>
+    /// Шов ТОЛЬКО для проверок без экрана: чем отвечать на «открой ссылку». В жизни ответ даёт
+    /// <see cref="ProductLinks.Open"/> и он же открывает браузер человека; проверка показать
+    /// браузер не имеет права. У обычного запуска это свойство <c>null</c>.
+    /// </summary>
+    internal Func<string, string>? AboutOpenLinkForTests { get; set; }
+
+    /// <summary>Щёлкнуть по ссылке донатов — так же, как это делает человек (для проверок).</summary>
+    public void ClickAboutDonate() =>
+        AboutDonateLinkButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
 
     /// <summary>
     /// Номера разделов. Числа, а не строки: по строкам решение о разделе зависело бы от языка,
@@ -589,7 +689,14 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     /// </summary>
     public const int PhoneSection = 5;
 
-    /// <summary>Подписи ШЕСТИ разделов — в порядке списка слева.</summary>
+    /// <summary>
+    /// Раздел «О программе» — СЕДЬМОЙ и ПОСЛЕДНИЙ (u14, 2.4.0). Открыт наружу: проверка «дверь
+    /// меню значка ведёт ИМЕННО сюда» идёт прогоном, а кадр `--shot settings-about` снимает
+    /// ровно этот раздел.
+    /// </summary>
+    public const int AboutSection = 6;
+
+    /// <summary>Подписи СЕМИ разделов — в порядке списка слева.</summary>
     private static string[] SectionTitles() => new[]
     {
         PanelStrings.SettingsGeneral,
@@ -598,6 +705,10 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         PanelStrings.SettingsServerSection,
         PanelStrings.UpdateSectionTitle,
         PanelStrings.PhoneSectionTitle,
+
+        // «О программе» — последняя, потому что это справка, а не настройка. Нормы порядка
+        // в банке нет: решение наше и названо в строке дизайн-лидера u14.
+        PanelStrings.AboutSectionTitle,
     };
 
     /// <summary>Панели разделов — в том же порядке, что и подписи.</summary>
@@ -609,6 +720,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         ServerSectionPanel,
         UpdateSectionPanel,
         PhoneSectionPanel,
+        AboutSectionPanel,
     };
 
     /// <summary>
@@ -685,6 +797,15 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     /// </summary>
     public int ShowUpdateSection() => ShowSection(UpdateSection);
 
+    /// <summary>
+    /// ПОКАЗАТЬ РАЗДЕЛ «О ПРОГРАММЕ» — уговор <see cref="IAboutSectionWindow"/>, которым
+    /// пользуется дверь связки `PanelShell.OpenAboutSection` (пункт меню значка «О программе…»).
+    ///
+    /// ⚠️ Номер раздела живёт ЗДЕСЬ и только здесь (<see cref="AboutSection"/>): связка не знает,
+    /// какое окно ей вернут, и второй копии этого числа в панели быть не должно.
+    /// </summary>
+    public int ShowAboutSection() => ShowSection(AboutSection);
+
     /// <summary>Что сейчас показывает окно — для проверок без экрана: номер видимого раздела.</summary>
     public int VisibleSection
     {
@@ -703,6 +824,35 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
 
     /// <summary>Было ли сохранение, которое действительно прошло. Нужно вызывающему — и проверкам.</summary>
     public bool Saved => _saved;
+
+    // ------------------------------------------------------------------ «О программе»: то, что видно
+
+    /// <summary>Строка версии в разделе «О программе».</summary>
+    public string AboutVersionLine => AboutVersionText.Text ?? string.Empty;
+
+    /// <summary>«Что делает панель» — ответ на вопрос, а не визитка.</summary>
+    public string AboutPurposeLine => AboutPurposeText.Text ?? string.Empty;
+
+    /// <summary>Строка лицензии.</summary>
+    public string AboutLicenseLine => AboutLicenseText.Text ?? string.Empty;
+
+    /// <summary>Строка авторского права.</summary>
+    public string AboutCopyrightLine => AboutCopyrightText.Text ?? string.Empty;
+
+    /// <summary>Строка отказа при открытии ссылки: пусто или причина.</summary>
+    public string AboutStatus => AboutLinkStatusText.Text ?? string.Empty;
+
+    /// <summary>Видна ли строка ссылки на репозиторий.</summary>
+    public bool AboutRepoVisible => AboutRepoLinkButton.IsVisible;
+
+    /// <summary>Видна ли ссылка на донаты (и пояснение под ней).</summary>
+    public bool AboutDonateVisible => AboutDonateLinkButton.IsVisible;
+
+    /// <summary>Видна ли строка о машинном переводе.</summary>
+    public bool AboutTranslationNoteVisible => AboutTranslationNoteText.IsVisible;
+
+    /// <summary>Виден ли блок «Сообщить о проблеме» (он же — есть ли дверь).</summary>
+    public bool AboutIssueVisible => AboutIssuePanel.IsVisible;
 
     /// <summary>
     /// Есть ли в окне несохранённая правка — то, о чём окно обязано спросить при закрытии.
@@ -889,6 +1039,16 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         UpdateNotes = _settings?.Settings.UpdateNotes ?? string.Empty,
         UpdateNotesRaw = _settings?.Settings.UpdateNotesRaw ?? string.Empty,
         UpdateSkippedVersion = _settings?.Settings.UpdateSkippedVersion ?? string.Empty,
+
+        // ⚠️ СЛЕД ПОПЫТКИ ПРОВЕРКИ — тоже через окно и НЕТРОНУТЫМ (DEF-036, 2.4.0).
+        // Без этих трёх полей сравнение «есть ли несохранённая правка» видело разницу
+        // ПОСЛЕ ОДНОЙ ПРОВЕРКИ ОБНОВЛЕНИЯ: проверка пишет след в настройки, окно о нём
+        // не знает и подставляет пусто — и человек получал вопрос «сохранить изменения?»,
+        // не тронув ни одного поля. Такой вопрос перестают читать, и однажды теряется
+        // настоящая правка. Проверка — «Проверили_обновление_закрытие_не_спрашивает».
+        UpdateAttemptAt = _settings?.Settings.UpdateAttemptAt ?? string.Empty,
+        UpdateAttemptKind = _settings?.Settings.UpdateAttemptKind ?? string.Empty,
+        UpdateAttemptError = _settings?.Settings.UpdateAttemptError ?? string.Empty,
 
         // Размер и положение ГЛАВНОГО окна в этом окне не показываются — но обязаны пройти
         // через сохранение НЕТРОНУТЫМИ, по той же причине: окно пишет настройки целиком,
@@ -1959,7 +2119,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
         var result = update?.Result;
         var ok = result?.Ok == true;
 
-        var current = update?.Current ?? AboutWindow.PanelVersion;
+        var current = update?.Current ?? AboutInfo.PanelVersion;
         var latest = result?.Latest ?? string.Empty;
         var skipped = update?.Skipped == true;
 
@@ -2000,7 +2160,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
 
         // Подготовленная сборка уже лежит на диске: второй раз готовить нечего, и кнопка молчит
         // делом — она недоступна.
-        UpdatePrepareButton.IsEnabled = ready && !_updateBusy && _updatePrepared is null;
+        UpdatePrepareButton.IsEnabled = UpdatePrepareDecisions.ButtonEnabled(ready, _updateBusy, _updatePrepared is not null);
         UpdateCheckButton.IsEnabled = update?.Allowed == true;
         PanelToolTip.Set(
             UpdateCheckButton,
@@ -2135,6 +2295,11 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow
     public void PrepareUpdate()
     {
         if (_update is null || _install is null) return;
+
+        // ⚠️ ВТОРОЕ НАЖАТИЕ В ПОЛЁТЕ НЕ СТАРТУЕТ ВТОРОЙ ПОДГОТОВКИ (DEF-006, 2.4.0). Кнопка
+        // гаснет, но между щелчком и перерисовкой остаётся мгновение, а щелчок человек делает
+        // и вслепую; решение — в чистой функции, чтобы проверялось прогоном.
+        if (!UpdatePrepareDecisions.MayStart(_updateBusy)) return;
 
         _updateBusy = true;
         _updatePrepared = null;

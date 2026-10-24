@@ -92,6 +92,14 @@ public sealed class UpdateInstallController : IUpdateInstall
     public bool Allowed { get; }
 
     /// <summary>
+    /// НАЧАЛАСЬ ПОПЫТКА ПОДГОТОВКИ — ровно один раз на вызов <see cref="Prepare"/>. По этому
+    /// событию панель показывает ОДИН шарик «идёт скачивание» (u2, DEF-046): процентов в шарике
+    /// нет, ход виден в разделе «Обновление», и щелчок ведёт туда. Событие, а не вызов шарика
+    /// отсюда: показ — дело общей двери панели (`App.Notify`), которая одна решает про изоляцию.
+    /// </summary>
+    public event Action? Preparing;
+
+    /// <summary>
     /// Подготовить замену. Момент берётся у часов панели и уходит в запрос — иначе шапка журнала
     /// замены врала бы, а проверка зависела бы от системного времени.
     ///
@@ -105,6 +113,10 @@ public sealed class UpdateInstallController : IUpdateInstall
             System.Globalization.CultureInfo.CurrentCulture,
             PanelStrings.UpdatePrepareStartedLogFormat,
             release));
+
+        // ОДИН ШАРИК НА ПОПЫТКУ (u2): поднимается здесь, а не в окне, — иначе окно, закрытое
+        // сразу после нажатия, оставило бы человека без единого слова о том, что работа пошла.
+        Preparing?.Invoke();
 
         var preparation = UpdateInstall.Prepare(
             new UpdateRequest(

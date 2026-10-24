@@ -193,7 +193,10 @@ public sealed class SkillReportTests
 
         var group = Assert.Single(report.Groups, g => g.Title == Loc.T(SkillKeys.Title));
 
-        var words = new[] { SkillKeys.Checked, SkillKeys.NotChecked, SkillKeys.Trouble, SkillKeys.VersionUnread }
+        // ⚠️ СЛОВО «не поддерживается сервером» — ЧЕТВЁРТОЕ ЗАКОННОЕ (DEF-048, D-9): постановка
+        // задачи и отмена проверяются по объявлению, и сервер, который такого вызова не объявляет,
+        // — не поломка. Список слов берётся из словаря (`SkillKeys`), а не литералами.
+        var words = new[] { SkillKeys.Checked, SkillKeys.NotChecked, SkillKeys.Trouble, SkillKeys.VersionUnread, SkillKeys.NotDeclared }
             .Select(key => Loc.T(key))
             .ToList();
 

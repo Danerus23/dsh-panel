@@ -36,7 +36,7 @@
 
 **Сервер DSH под рукой** — и целиком в трее. Один файл `DshPanel.exe`: ставится в профиль
 пользователя, права администратора не нужны, .NET ставить не надо — он внутри. Версия панели —
-**2.3.0**.
+**2.4.0**.
 
 Запуск и остановка сервера, установка и обновление DSH по проверенному набору версий, живой
 значок состояния, баланс, окна пика и история цен, копии данных с восстановлением, ответ на вопрос
@@ -72,7 +72,7 @@
 
 ## Как обновиться
 
-Откройте раздел **«Обновление»** и нажмите «Проверить сейчас». Панель найдёт 2.3.0, скачает
+Откройте раздел **«Обновление»** и нажмите «Проверить сейчас». Панель найдёт 2.4.0, скачает
 `DshPanel.zip` из этого выпуска, сверит сумму и заменит файлы **после выхода** панели; перед
 заменой снимается страховочная копия прежней версии. Распаковывать и удалять что-либо руками
 не нужно.
@@ -220,7 +220,7 @@ DSH вместе с работой агента.
 
 ### Сообщить о проблеме
 
-В окне «О программе» есть кнопка отчёта. Панель собирает технический отчёт и **показывает вам
+В разделе «О программе» есть кнопка отчёта. Панель собирает технический отчёт и **показывает вам
 ровно тот текст, который уйдёт**. Отправки «сами собой» нет: отчёт уходит только по вашему
 нажатию — открыть страницу нового issue в браузере, скопировать или сохранить в файл. Ключ
 модели, баланс и ссылка входа в отчёт не попадают.
@@ -276,7 +276,7 @@ DSH вместе с работой агента.
 | Пики и тарифы | [peaks](docs/screenshots/en/peaks.png) | [пики](docs/screenshots/ru/peaks.png) | [价格高峰](docs/screenshots/zh/peaks.png) |
 | История цен | [price history](docs/screenshots/en/pricing-history.png) | [история цен](docs/screenshots/ru/pricing-history.png) | [价格历史](docs/screenshots/zh/pricing-history.png) |
 | Настройки | [settings](docs/screenshots/en/settings.png) | [настройки](docs/screenshots/ru/settings.png) | [设置](docs/screenshots/zh/settings.png) |
-| О программе | [about](docs/screenshots/en/about.png) | [о программе](docs/screenshots/ru/about.png) | [关于](docs/screenshots/zh/about.png) |
+| О программе (раздел настроек) | [about](docs/screenshots/en/about.png) | [о программе](docs/screenshots/ru/about.png) | [关于](docs/screenshots/zh/about.png) |
 | Обновление панели (раздел настроек) | [update](docs/screenshots/en/update.png) | [обновление](docs/screenshots/ru/update.png) | [更新](docs/screenshots/zh/update.png) |
 | Телефон (раздел настроек) | [phone](docs/screenshots/en/phone.png) | [телефон](docs/screenshots/ru/phone.png) | [手机](docs/screenshots/zh/phone.png) |
 | Сервер DSH (раздел настроек) | [server](docs/screenshots/en/server.png) | [сервер](docs/screenshots/ru/server.png) | [服务器](docs/screenshots/zh/server.png) |

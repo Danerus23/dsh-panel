@@ -366,7 +366,11 @@ public static class UpdateInstall
         if (target.Length == 0)
             return UpdatePreparation.Refuse(UpdateRefusal.NoTarget, "не названа папка панели");
 
-        var client = download ?? new HttpUpdateDownload();
+        // ⚠️ ЗАГРУЗЧИК ПОЛУЧАЕТ КАТАЛОГ ОБНОВЛЕНИЯ, и это не мелочь: в нём он держит запись
+        // о незаконченной загрузке и журнал попыток (DEF-035). Панель, закрытую посреди
+        // скачивания, следующий запуск продолжит с принятого байта, а не начнёт сорок
+        // мегабайт заново. Подстановка проверок остаётся подстановкой — состояние ей не нужно.
+        var client = download ?? new HttpUpdateDownload(stateDir: root);
         var now = request.At ?? DateTimeOffset.Now;
 
         // Итог уборки ПАПКИ СБОРКИ, снятой распаковкой. Объявлен до `Fail`, потому что отказ

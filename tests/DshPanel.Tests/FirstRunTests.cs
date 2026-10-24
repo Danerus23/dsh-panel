@@ -165,34 +165,94 @@ public class FirstRunTests
     {
         // Сервера DSH нет — строку не спрашиваем вовсе, что бы ни лежало в фактах.
         Assert.Null(FirstRunDecisions.Reason(
-            enginePresent: false, running: false, ServerPresence.BusyByOther, ServerOwner.None, "занято"));
+            enginePresent: false, running: false, starting: false, ServerPresence.BusyByOther, ServerOwner.None, "занято"));
 
         // Сервер отвечает — причины нет.
         Assert.Null(FirstRunDecisions.Reason(
-            enginePresent: true, running: true, ServerPresence.Running, ServerOwner.Panel, ""));
+            enginePresent: true, running: true, starting: false, ServerPresence.Running, ServerOwner.Panel, ""));
 
         // Порт занят ЧУЖОЙ программой — устойчивый факт, и он называется.
         Assert.Equal(
             FirstRunReason.PortBusy,
-            FirstRunDecisions.Reason(true, false, ServerPresence.BusyByOther, ServerOwner.None, ""));
+            FirstRunDecisions.Reason(true, false, false, ServerPresence.BusyByOther, ServerOwner.None, ""));
 
         // Отказ системы в запуске — по строке отказа самого контроллера, а не по догадке.
         Assert.Equal(
             FirstRunReason.StartRefused,
-            FirstRunDecisions.Reason(true, false, ServerPresence.Stopped, ServerOwner.None, PanelStrings.SrvEngineStartRefused));
+            FirstRunDecisions.Reason(true, false, false, ServerPresence.Stopped, ServerOwner.None, PanelStrings.SrvEngineStartRefused));
 
         // Сервер был наш и его нет — «завершился, не начав отвечать».
         Assert.Equal(
             FirstRunReason.ExitedSilent,
-            FirstRunDecisions.Reason(true, false, ServerPresence.Stopped, ServerOwner.Panel, ""));
+            FirstRunDecisions.Reason(true, false, false, ServerPresence.Stopped, ServerOwner.Panel, ""));
 
         // Прочий названный отказ — «подробности в окне панели»: машинный текст в окно не идёт.
         Assert.Equal(
             FirstRunReason.Unknown,
-            FirstRunDecisions.Reason(true, false, ServerPresence.Stopped, ServerOwner.None, "какая-то беда"));
+            FirstRunDecisions.Reason(true, false, false, ServerPresence.Stopped, ServerOwner.None, "какая-то беда"));
 
         // СВОБОДНЫЙ ПОРТ — ЭТО НЕ ОТКАЗ: сервер ещё не поднимали.
-        Assert.Null(FirstRunDecisions.Reason(true, false, ServerPresence.Stopped, ServerOwner.None, PanelStrings.SrvPortFree));
+        Assert.Null(FirstRunDecisions.Reason(true, false, false, ServerPresence.Stopped, ServerOwner.None, PanelStrings.SrvPortFree));
+    }
+
+    /// <summary>
+    /// ПОКА ИДЁТ СТАРТ, «НЕ ПОДНЯЛСЯ» НЕ ГОВОРИТСЯ — а после настоящей неудачи говорится
+    /// (DEF-054, 2.4.0).
+    ///
+    /// **От какого случая.** При старте ПК панель поднимает сервер в фоне, и окно первого запуска
+    /// успевало сказать «Сервер DSH не поднялся» в ту же секунду, что журнал писал «Сервер DSH
+    /// запущен» (журнал 23.10.2026 10:07:42). Контроллер в такие секунды отдаёт СВОЙ устойчивый
+    /// ответ «ещё стартует» и процесс не гасит — то есть проверка называла неудачей незаконченное
+    /// дело.
+    ///
+    /// **Что перебирается.** Четыре положения, и каждое — свой ответ:
+    /// * старт идёт (`starting`) при состоянии «не работает» — причины НЕТ, строки нет, окна нет;
+    /// * старт идёт, а контроллер уже назвал отказ строкой («ещё стартует») — тоже НЕТ: попытка
+    ///   не кончилась, и её слово «не поднялся» не значит;
+    /// * старт кончился настоящей неудачей (наш сервер был и его нет) — причина есть, ОКНО ЕСТЬ;
+    /// * старт кончился, а сервер отвечает — причины нет.
+    ///
+    /// **Мутация, которая обязана упасть:** «показывать до старта» — снять проверку `starting`
+    /// в `FirstRunDecisions.Reason`; тогда первые два положения дадут строку и окно.
+    /// </summary>
+    [Fact]
+    public void Медленный_старт_не_зовёт_окна_а_настоящая_неудача_зовёт()
+    {
+        // «Ещё стартует» — слова самого контроллера (`WaitUntilRunning`), а не выдумка проверки.
+        var stillStarting = EngineFirstRun.StillStartingDetail(firstRunLooks: true, port: 3080);
+
+        var slowStart = FirstRunDecisions.Reason(
+            enginePresent: true, running: false, starting: true,
+            ServerPresence.Stopped, ServerOwner.Panel, stillStarting);
+
+        Assert.Null(slowStart);
+
+        // И окна в этом положении нет: других строк тоже нет (сервер DSH есть, ключ есть).
+        var slowRows = FirstRunDecisions.Rows(new FirstRunFacts(
+            EnginePresent: true, ServerProblem: slowStart, KeyFound: true, KeyReadable: true));
+
+        Assert.Empty(slowRows);
+        Assert.False(FirstRunDecisions.ShouldShow(
+            humanLaunch: true, isolated: false, shownAt: "", slowRows));
+
+        // НАСТОЯЩАЯ НЕУДАЧА — попытка кончилась, сервер был наш и его нет.
+        var failed = FirstRunDecisions.Reason(
+            enginePresent: true, running: false, starting: false,
+            ServerPresence.Stopped, ServerOwner.Panel, "");
+
+        Assert.Equal(FirstRunReason.ExitedSilent, failed);
+
+        var failedRows = FirstRunDecisions.Rows(new FirstRunFacts(
+            EnginePresent: true, ServerProblem: failed, KeyFound: true, KeyReadable: true));
+
+        Assert.Equal(new[] { FirstRunRowKind.ServerNotStarted }, failedRows);
+        Assert.True(FirstRunDecisions.ShouldShow(
+            humanLaunch: true, isolated: false, shownAt: "", failedRows));
+
+        // Старт кончился удачей — говорить нечего.
+        Assert.Null(FirstRunDecisions.Reason(
+            enginePresent: true, running: true, starting: false,
+            ServerPresence.Running, ServerOwner.Panel, ""));
     }
 
     // --- «один раз»: настоящий файл настроек ---------------------------------
@@ -437,5 +497,55 @@ public class FirstRunTests
 
         // 3. Отметка пишется ТОЛЬКО по факту показа — тем же членом, а не «где-то при старте».
         Assert.Contains("WelcomeShownAt = FirstRunDecisions.Stamp(", app, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ПРОВЕРКА ГОТОВНОСТИ СПРАШИВАЕТ КОНТРОЛЛЕР ОБ ИДУЩЕМ СТАРТЕ (DEF-054, 2.4.0) — ВОРОТА
+    /// ПО ИСХОДНИКАМ, потому что App в проверке не построить.
+    ///
+    /// **Почему одних решений мало.** `FirstRunDecisions.Reason` может быть идеально правильным,
+    /// а факт «старт идёт» — не дойти до неё: тогда на старте ПК окно снова скажет «не поднялся».
+    /// Это тот же класс, что и ворота выше («решение можно не позвать»).
+    ///
+    /// **Что проверяется пятью строками:**
+    /// 1. у контроллера есть сам факт (`Starting`), и он читается без замка старта;
+    /// 2. проба первого запуска его спрашивает;
+    /// 3. состояние читается без ожидания замка (`TryRefresh`);
+    /// 4. факт доходит до решения;
+    /// 5. после попытки проверка спрашивается снова.
+    ///
+    /// **Мутации, которые обязаны упасть:** «не спрашивать Starting» · «спросить и не передать» ·
+    /// «после попытки не переспрашивать».
+    /// </summary>
+    [Fact]
+    public void Проверка_готовности_спрашивает_контроллер_об_идущем_старте()
+    {
+        var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
+
+        Assert.False(string.IsNullOrEmpty(root), "не нашёл корень репозитория");
+
+        var app = File.ReadAllText(Path.Combine(root!, "src", "DshPanel", "App.axaml.cs"));
+        var controller = File.ReadAllText(Path.Combine(root!, "src", "DshPanel", "Server", "ServerController.cs"));
+
+        // 1. Факт существует и назван словами «идёт попытка старта».
+        Assert.Contains("public bool Starting => _startAttempt || _engineStillStarting;", controller, StringComparison.Ordinal);
+
+        // 1а. И «процесс жив, но не ответил» ставится ТАМ, где контроллер сам говорит «ещё стартует»
+        // (`WaitUntilRunning`): без этой строки `Starting` после конца ожидания станет ложью.
+        Assert.Contains("_engineStillStarting = true;", controller, StringComparison.Ordinal);
+
+        // 2. Проба первого запуска его спрашивает.
+        Assert.Contains("var starting = _server?.Starting == true;", app, StringComparison.Ordinal);
+
+        // 3. И состояние читается БЕЗ ОЖИДАНИЯ ЗАМКА старта: `Refresh` на нитке интерфейса
+        // замер бы панель на всё время подъёма. Занятый замок — тоже «в движении», а не «не поднялся».
+        Assert.Contains("_server.TryRefresh(out var fresh)", app, StringComparison.Ordinal);
+
+        // 4. И факт доходит до чистого решения.
+        Assert.Contains("enginePresent, state.IsRunning, starting,", app, StringComparison.Ordinal);
+
+        // 5. ПОСЛЕ ПОПЫТКИ проверка спрашивается СНОВА: иначе настоящую неудачу этого запуска
+        // человек не увидит — окно показывается один раз, и второго случая не будет.
+        Assert.Contains("ShowFirstRunAfterStart(autoStart, paths, log, human, isolated)", app, StringComparison.Ordinal);
     }
 }

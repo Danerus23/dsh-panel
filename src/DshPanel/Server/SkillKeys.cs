@@ -28,6 +28,13 @@ public static class SkillKeys
     public const string Trouble = "EnvSkillTrouble";
 
     /// <summary>
+    /// Слово для беды, которая НЕ поломка: сервер DSH такого вызова не объявляет (DEF-048, кадр
+    /// `settings-server`). «Не работает» читалось как «сломано», а верное — «этого у сервера нет».
+    /// Признак случая — способ проверки «по объявлению сервера» (<see cref="HowDeclared"/>).
+    /// </summary>
+    public const string NotDeclared = "EnvSkillNotDeclared";
+
+    /// <summary>
     /// Версия сервера DSH не прочиталась — «не прочитана» и жёлтая метка, а не красная беда:
     /// «неизвестно» и «сломано» — разные ответы (решение владельца 14.10.2026).
     /// </summary>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -10,6 +11,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using DshPanel.Isolation;
 using DshPanel.Update;
 using Xunit;
 
@@ -43,15 +45,23 @@ namespace DshPanel.Tests;
 /// 5. **Отсутствие названной длины — отказ, а не «положим обрезанное».**
 /// 6. **ВОСПРОИЗВОДИМЫЙ СЦЕНАРИЙ ОБРЫВА НА 30 % ФАЙЛА (серия P5, 22.10.2026).** Сервер рвёт
 ///    ровно один ответ — тот, который начинается с 30 % файла, — и повторный запрос
-///    <c>Range: bytes=300000-</c> получает остаток (206 + <c>Content-Range</c>). Доказывается:
-///    файл на рабочем пути совпадает с ожидаемым БАЙТ В БАЙТ, запрос на кусок с 30 % был
-///    ПОВТОРЁН, с нуля файл больше не просили, ход доходит до 100 % и укладывается в счёт
-///    (цикла в ходе нет). Это заменяет «ждём живого обрыва»: сценарий идёт одной командой,
-///    без сети наружу.
+///    <c>Range: bytes=308192-</c> (300 000 + 8 192 принятых) получает остаток
+///    (206 + <c>Content-Range</c>). Доказывается: файл на рабочем пути совпадает с ожидаемым
+///    БАЙТ В БАЙТ, запрос на кусок с 30 % был ПОВТОРЁН, с нуля файл больше не просили, ход
+///    доходит до 100 % и укладывается в счёт (цикла в ходе нет). Это заменяет «ждём живого
+///    обрыва»: сценарий идёт одной командой, без сети наружу.
 /// 7. **Невосстановимый обрыв — отказ с ПРИЧИНОЙ и за конечное время.** Сервер рвёт каждую
 ///    попытку: исход <see cref="UpdateDownloadOutcome.Interrupted"/>, причина названа значением
 ///    («read N of M»), попыток ровно по политике, ход не объявляет файл готовым. Загрузка идёт
 ///    под сторожем: зацикленный повтор роняет проверку таймаутом, а не вешает прогон.
+/// 8. **ПЕРЕЗАПУСК ПАНЕЛИ ПРОДОЛЖАЕТ ЗАГРУЗКУ (2.4.0, DEF-035).** Первый «запуск» обрывается на
+///    каждой попытке куска с 30 % и оставляет файл состояния и куски; второй «запуск» — ДРУГОЙ
+///    загрузчик, никакой памяти о первом, — продолжает с байта <c>324 576</c> и кончает файл
+///    байт в байт. С нуля не спрашивается НИ ОДНОГО байта.
+/// 9. **Чужое состояние не приклеивается.** Если сервер отдаёт файл другой длины, прошлые куски
+///    сносятся и загрузка начинается с нуля: склейка двух выпусков хуже повторной загрузки.
+/// 10. **Журнал попыток и замер «8 МиБ ≤ 30 с»** — файлами рядом с состоянием: каждая попытка
+///    названа номером, байтом, исходом и секундами; кусок замера — отдельной строкой с числом.
 /// </summary>
 public class UpdateDownloadTests
 {
@@ -90,6 +100,13 @@ public class UpdateDownloadTests
 
         public string Path { get; }
 
+        /// <summary>
+        /// Каталог состояния загрузки — тот же, что у панели (<c>state\update\</c>): в нём лежат
+        /// запись о незаконченной загрузке и журнал попыток. Заводится только тогда, когда
+        /// проверке нужна докачка после перезапуска; проверки без него живут прежним правилом.
+        /// </summary>
+        public string StateDir => System.IO.Path.Combine(Root, "state", UpdateInstall.UpdateFolderName);
+
         /// <summary>Уборка только СВОЕГО каталога: общий родитель семейства не снимается (t3, `TempRoots`).</summary>
         public void Dispose() => TempRoots.Remove(Root);
     }
@@ -104,8 +121,8 @@ public class UpdateDownloadTests
     /// </summary>
     private sealed class Loop : IDisposable
     {
-        private readonly byte[] _bytes;
-        private readonly Func<int, long, long, bool> _break;
+        private volatile byte[] _bytes;
+        private volatile Func<int, long, long, bool> _break;
         private readonly bool _truncate;
         private readonly TcpListener _listener;
         private readonly Thread _thread;
@@ -142,6 +159,17 @@ public class UpdateDownloadTests
         }
 
         public string Url { get; }
+
+        /// <summary>
+        /// СМЕНИТЬ ОТДАВАЕМЫЙ ФАЙЛ, не меняя адреса: так проверяется «сервер стал отдавать
+        /// другой выпуск» — длина и содержимое другие, адрес тот же. Ссылка на массив
+        /// подменяется целиком, а не байт в байте: сервер читает её на каждом запросе.
+        /// </summary>
+        public void Swap(byte[] bytes) => _bytes = bytes;
+
+        /// <summary>СМЕНИТЬ ПРАВИЛО ОБРЫВА: тот же сервер может начать отдавать файл целиком.</summary>
+        public void SetBreak(Func<int, long, long, bool>? @break) =>
+            _break = @break ?? ((_, _, _) => false);
 
         private bool Chunked { get; }
 
@@ -397,10 +425,11 @@ public class UpdateDownloadTests
         Sandbox box,
         string? sum,
         UpdateDownloadPolicy? policy = null,
-        Action<long, long>? progress = null)
+        Action<long, long>? progress = null,
+        string? stateDir = null)
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-        var client = new HttpUpdateDownload(http);
+        var client = new HttpUpdateDownload(http, stateDir);
 
         return client.Save(loop.Url, box.Path, sum, progress, policy);
     }
@@ -709,10 +738,11 @@ public class UpdateDownloadTests
     /// 4. ход доходит до <c>100 %</c>, не перескакивает целое и укладывается в счёт обращений —
     ///    цикла в ходе нет; загрузка целиком идёт под сторожем (<see cref="Within"/>).
     ///
-    /// ⚠️ ТОЧНОСТЬ ПРОДОЛЖЕНИЯ — ДО НАЧАЛА КУСКА, а не до байта обрыва: повтор спрашивает
-    /// <c>bytes=300000-</c>, а не <c>bytes=308192-</c>, поэтому 8 192 уже принятых байта куска
-    /// качаются заново. Файл от этого не портится (он верный), но «докачать ровно с байта»
-    /// панель пока не умеет — это названо в отчёте P5 и относится к 2.4.0.
+    /// ⚠️ ТОЧНОСТЬ ПРОДОЛЖЕНИЯ — ДО БАЙТА, а не до начала куска (2.4.0, DEF-035): повтор
+    /// спрашивает <c>bytes=308192-</c>, то есть 8 192 уже принятых байта НЕ качаются заново.
+    /// Прежнее поведение (повтор с 300 000) названо в отчёте P5 и относилось к 2.4.0; здесь
+    /// оно проверяется обратным утверждением — запроса ровно с <c>300000</c> один, а повтор
+    /// назван <c>308192</c>.
     /// </summary>
     [Fact]
     public void Обрыв_на_тридцати_процентах_докачивает_с_места_обрыва_и_файл_совпадает_побайтово()
@@ -753,16 +783,19 @@ public class UpdateDownloadTests
         Assert.Equal(bytes.Length, saved.Length);
         Assert.True(saved.AsSpan().SequenceEqual(bytes), "файл на рабочем пути отличается от ожидаемого побайтово");
 
-        // 2. КУСОК С 30 % ЗАПРОШЕН ДВАЖДЫ: оборванный ответ и настоящий повтор.
-        Assert.Equal(2, loop.Ranges.Count(range => range.From == chunk));
+        // 2. ОБОРВАННЫЙ ОТВЕТ БЫЛ РОВНО ОДИН — тот, что начинается с 30 % файла.
+        Assert.Equal(1, loop.Ranges.Count(range => range.From == chunk));
 
-        // 3. С НУЛЯ ФАЙЛ БОЛЬШЕ НЕ ПРОСИЛИ: продолжение, а не «начать заново».
+        // 3. ПОВТОР ПОШЁЛ С БАЙТА ОБРЫВА: 300 000 + 8 192 = 308 192, а не с начала куска.
+        Assert.Equal(1, loop.Ranges.Count(range => range.From == chunk + 8192));
+
+        // 4. С НУЛЯ ФАЙЛ БОЛЬШЕ НЕ ПРОСИЛИ: продолжение, а не «начать заново».
         Assert.Equal(1, loop.Ranges.Count(range => range.From == 0));
 
-        // Всего запросов ПЯТЬ: 0-…, 300000-… (обрыв), 300000-… (повтор), 600000-…, 900000-…
+        // Всего запросов ПЯТЬ: 0-…, 300000-… (обрыв), 308192-… (повтор), 600000-…, 900000-…
         Assert.Equal(5, loop.Requests);
 
-        // 4. ХОД: от 0 до 100 %, без перескока и без цикла.
+        // 5. ХОД: от 0 до 100 %, без перескока и без цикла.
         List<(long Done, long Total)> seen;
 
         lock (ticks) seen = new List<(long Done, long Total)>(ticks);
@@ -886,5 +919,379 @@ public class UpdateDownloadTests
         var chunks = (release + HttpUpdateDownload.ChunkSize - 1) / HttpUpdateDownload.ChunkSize;
 
         Assert.Equal(6L, chunks);
+    }
+
+    // ------------------------------------------------------------------ (з) состояние в файле, журнал и замер
+
+    /// <summary>Сколько запросов сервер увидел с этого байта (считая только запросы после <paramref name="mark"/>).</summary>
+    private static int AskedFrom(IReadOnlyList<(long From, long To)> ranges, long from, int mark = 0) =>
+        ranges.Skip(mark).Count(range => range.From == from);
+
+    /// <summary>СТРОКИ ЖУРНАЛА ПОПЫТОК рядом с записью состояния: лента, по строке на попытку.</summary>
+    private static string[] AttemptLog(Sandbox box)
+    {
+        var path = UpdateDownloadStateFile.LogOf(box.StateDir);
+
+        return File.Exists(path) ? File.ReadAllLines(path) : Array.Empty<string>();
+    }
+
+    /// <summary>Значение поля строки журнала («chunk=1» → «1»); пусто — поля нет.</summary>
+    private static string Field(string line, string name)
+    {
+        foreach (var part in line.Split(' '))
+        {
+            if (part.StartsWith(name + "=", StringComparison.Ordinal)) return part[(name.Length + 1)..];
+        }
+
+        return string.Empty;
+    }
+
+    /// <summary>Число из поля журнала (секунды); -1 — поля нет или оно не число.</summary>
+    private static double Number(string line, string name) =>
+        double.TryParse(Field(line, name), NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : -1;
+
+    /// <summary>
+    /// ПЕРЕЗАПУСК ПАНЕЛИ ПРОДОЛЖАЕТ ЗАГРУЗКУ С МЕСТА ОБРЫВА (2.4.0, DEF-035).
+    ///
+    /// Обрыв на каждой попытке куска с 30 % файла — это не «помеха», а отсутствие канала: загрузка
+    /// отказывает, НО оставляет после себя запись о загрузке и принятые байты. Дальше начинается
+    /// второй «запуск панели»: НОВЫЙ загрузчик, никакой памяти о первом, только файл на диске.
+    ///
+    /// **Что утверждается, и каждое утверждение может упасть:**
+    ///
+    /// 1. после отказа рабочий путь НЕ занят, а состояние и куски — на месте: именно они и есть
+    ///    «переживает перезапуск»;
+    /// 2. запись называет файл целиком: длину, размер куска и принятые байты каждого куска
+    ///    (первый кусок цел, в оборванном — 24 576 = 3 × 8 192);
+    /// 3. второй заход спрашивает РОВНО с байта обрыва — <c>324 576</c> = 300 000 + 3 × 8 192 —
+    ///    и НИ ОДНОГО раза с нуля;
+    /// 4. всего запросов три: остаток куска 1, кусок 2 и кусок 3. Целые куски не качались;
+    /// 5. ход начинается с принятого (<c>324 576</c>), а не с нуля: человек видит продолжение,
+    ///    а не «0 %» на сорока мегабайтах;
+    /// 6. файл на рабочем пути совпадает с ожидаемым БАЙТ В БАЙТ, а записи и кусков после
+    ///    удачи не остаётся.
+    /// </summary>
+    [Fact]
+    public void Перезапуск_панели_докачивает_с_байта_обрыва_и_файл_совпадает_побайтово()
+    {
+        using var box = new Sandbox();
+
+        var bytes = Payload(1_000_000);
+        const long chunk = 300_000;
+        const int attempts = 3;
+
+        // ОДИН сервер на оба захода: панель перезапускается, а адрес выпуска — нет. Сначала
+        // канал пропадает на каждой попытке куска с 30 % файла, потом его «починили».
+        using var loop = new Loop(bytes, (_, from, _) => from >= chunk, truncate: true);
+
+        // --- ЗАХОД ПЕРВОЙ «ПАНЕЛИ»: канал пропал на куске с 30 % файла -----------------------
+        var first = Within(
+            TimeSpan.FromSeconds(20),
+            () => Fetch(loop, box, Sha(bytes), Small(chunk, attempts), stateDir: box.StateDir),
+            "обрыв на куске с 30 % (первый запуск)");
+
+        Assert.False(first.Ok, "загрузка не отказала, хотя канал пропал");
+        Assert.Equal(UpdateDownloadOutcome.Interrupted, first.Outcome);
+
+        // 1. РАБОЧИЙ ПУТЬ НЕ ЗАНЯТ — недокачанный файл никогда не занимает место рабочего...
+        Assert.False(File.Exists(box.Path), "недокачанный файл занял рабочий путь");
+
+        // ...а состояние и принятые байты — на месте.
+        var saved = UpdateDownloadStateFile.Read(box.StateDir);
+
+        Assert.NotNull(saved);
+        Assert.Equal(bytes.Length, saved!.Total);
+        Assert.Equal(chunk, saved.ChunkSize);
+        Assert.Equal(chunk, saved.Done(0));
+        Assert.Equal(24_576L, saved.Done(1)); // 3 попытки по 8 192 принятых байта
+        Assert.Equal(4, saved.Attempts);      // кусок 0 — одна попытка, кусок 1 — три
+        Assert.True(
+            File.Exists(HttpUpdateDownload.PartPath(box.Path, 1)),
+            "принятые байты оборванного куска снесены — продолжать нечем");
+
+        // --- ЗАХОД ВТОРОЙ «ПАНЕЛИ»: другой загрузчик, та же память на диске -----------------
+        // «Канал починили»: тот же сервер больше не рвёт ответы.
+        loop.SetBreak(null);
+
+        var mark = loop.Ranges.Count;
+        var before = loop.Requests;
+
+        var ticks = new List<(long Done, long Total)>();
+
+        var second = Within(
+            TimeSpan.FromSeconds(20),
+            () => Fetch(
+                loop,
+                box,
+                Sha(bytes),
+                Small(chunk, attempts),
+                (done, total) =>
+                {
+                    lock (ticks) ticks.Add((done, total));
+                },
+                box.StateDir),
+            "докачка после перезапуска");
+
+        Assert.True(second.Ok, "докачка после перезапуска не удалась: " + second.Report());
+
+        // 6. ФАЙЛ — БАЙТ В БАЙТ.
+        var file = File.ReadAllBytes(box.Path);
+
+        Assert.Equal(bytes.Length, file.Length);
+        Assert.True(file.AsSpan().SequenceEqual(bytes), "файл после докачки отличается побайтово");
+
+        // 3. С НУЛЯ НЕ НАЧИНАЛИ — ни одного запроса с нуля...
+        Assert.Equal(0, AskedFrom(loop.Ranges, 0, mark));
+
+        // ...и спросили ровно с байта обрыва.
+        Assert.Equal(1, AskedFrom(loop.Ranges, chunk + 3 * 8192, mark));
+
+        // 4. ВСЕГО ЗАПРОСОВ ТРИ: остаток куска 1, кусок 2, кусок 3.
+        Assert.Equal(3, loop.Requests - before);
+
+        // 5. ХОД НАЧАЛСЯ С ПРИНЯТОГО, а не с нуля, и дошёл до 100 %.
+        List<(long Done, long Total)> seen;
+
+        lock (ticks) seen = new List<(long Done, long Total)>(ticks);
+
+        Assert.NotEmpty(seen);
+        Assert.Equal((chunk + 3 * 8192, 1_000_000L), seen[0]);
+        Assert.Equal((1_000_000L, 1_000_000L), seen[^1]);
+
+        // 6. ПОСЛЕ УДАЧИ ЗАПИСИ И КУСКОВ НЕТ: следующий запуск не ищет продолжение у готового файла.
+        Assert.False(File.Exists(UpdateDownloadStateFile.Of(box.StateDir)), "запись о загрузке осталась после удачи");
+        AssertNoLeftovers(box);
+    }
+
+    /// <summary>
+    /// СТАРОЕ СОСТОЯНИЕ НЕ ПРИКЛЕИВАЕТСЯ К ДРУГОМУ ФАЙЛУ. Тот же адрес, тот же размер куска,
+    /// сумма не названа — расходится ТОЛЬКО длина: сервер стал отдавать более короткий файл.
+    /// Склейка двух выпусков дала бы файл, который не сойдётся ни с одной суммой, поэтому
+    /// панель обязана снести прошлые куски и начать с нуля.
+    ///
+    /// Утверждается: первый запрос второго захода идёт с байта обрыва (продолжение попробовали),
+    /// ответ называет другую длину — и ЗА НИМ следует запрос с нуля; файл на рабочем пути
+    /// совпадает с НОВЫМ файлом байт в байт, а не с их смесью.
+    /// </summary>
+    [Fact]
+    public void Состояние_другого_файла_не_склеивается_с_новым()
+    {
+        using var box = new Sandbox();
+
+        var first = Payload(1_000_000);
+        const long chunk = 300_000;
+
+        using var loop = new Loop(first, (_, from, _) => from >= chunk, truncate: true);
+
+        var broken = Fetch(loop, box, string.Empty, Small(chunk, 3), stateDir: box.StateDir);
+
+        Assert.Equal(UpdateDownloadOutcome.Interrupted, broken.Outcome);
+        Assert.NotNull(UpdateDownloadStateFile.Read(box.StateDir));
+
+        // Тот же сервер начал отдавать ДРУГОЙ файл, короче. Адрес, размер куска и путь те же.
+        var second = Payload(800_000);
+
+        loop.Swap(second);
+        loop.SetBreak(null);
+
+        var mark = loop.Ranges.Count;
+
+        var result = Within(
+            TimeSpan.FromSeconds(20),
+            () => Fetch(loop, box, string.Empty, Small(chunk, 3), stateDir: box.StateDir),
+            "подмена файла на том же адресе");
+
+        Assert.True(result.Ok, "второй файл не скачался: " + result.Report());
+
+        // ПРОДОЛЖИТЬ ПОПРОБОВАЛИ — и только потом начали заново: оба запроса названы.
+        Assert.Equal(1, AskedFrom(loop.Ranges, chunk + 3 * 8192, mark));
+        Assert.Equal(1, AskedFrom(loop.Ranges, 0, mark));
+
+        // ФАЙЛ — НОВЫЙ ЦЕЛИКОМ, а не склейка: сверяются сами байты.
+        var file = File.ReadAllBytes(box.Path);
+
+        Assert.Equal(second.Length, file.Length);
+        Assert.True(file.AsSpan().SequenceEqual(second), "на рабочем пути оказалась склейка двух файлов");
+
+        Assert.False(File.Exists(UpdateDownloadStateFile.Of(box.StateDir)));
+        AssertNoLeftovers(box);
+    }
+
+    /// <summary>
+    /// ЖУРНАЛ ПОПЫТОК НАЗЫВАЕТ КАЖДЫЙ ПОВТОР И БАЙТ, С КОТОРОГО ОН ПОШЁЛ (2.4.0, DEF-035).
+    ///
+    /// Без этого журнала «8 МиБ за 3–5 минут» неотличимы от «медленного канала»: видно только
+    /// время. С ним видно, сколько было попыток, сколько байт каждая приняла и с какого байта
+    /// пошёл повтор.
+    ///
+    /// **Мутация «не логировать повторы» роняет эту проверку:** строк станет меньше, чем
+    /// запросов, и строки <c>attempt=2</c> не будет вовсе.
+    /// </summary>
+    [Fact]
+    public void Журнал_попыток_называет_повтор_и_байт_с_которого_он_пошёл()
+    {
+        using var box = new Sandbox();
+
+        var bytes = Payload(1_000_000);
+        const long chunk = 300_000;
+
+        // Обрыв РОВНО ОДИН — на куске с 30 %: дальше повтор обязан быть живым.
+        var broken = 0;
+
+        using var loop = new Loop(
+            bytes,
+            (_, from, _) => from == chunk && Interlocked.Exchange(ref broken, 1) == 0,
+            truncate: true);
+
+        var result = Fetch(loop, box, Sha(bytes), Small(chunk, 3), stateDir: box.StateDir);
+
+        Assert.True(result.Ok, "загрузка не закончилась: " + result.Report());
+
+        var log = AttemptLog(box);
+
+        Assert.NotEmpty(log);
+
+        // КАЖДАЯ ПОПЫТКА — СТРОКА, и строк ровно столько, сколько запросов видел сервер.
+        Assert.Equal(loop.Requests, log.Length);
+
+        // ОБОРВАННАЯ ПОПЫТКА НАЗВАНА: кусок 1, попытка 1, с 300 000, принято 8 192, секунды есть.
+        var firstTry = Assert.Single(log, line => Field(line, "chunk") == "1" && Field(line, "attempt") == "1");
+
+        Assert.Equal("300000", Field(firstTry, "from"));
+        Assert.Equal("8192", Field(firstTry, "got"));
+        Assert.Equal("interrupted", Field(firstTry, "outcome"));
+        Assert.True(Number(firstTry, "seconds") >= 0, "у попытки нет замера секунд: " + firstTry);
+
+        // ПОВТОР НАЗВАН СВОИМ БАЙТОМ: 300 000 + 8 192 = 308 192, а не с начала куска.
+        var retry = Assert.Single(log, line => Field(line, "chunk") == "1" && Field(line, "attempt") == "2");
+
+        Assert.Equal("308192", Field(retry, "from"));
+        Assert.Equal("ok", Field(retry, "outcome"));
+
+        // Кусок 0 качался с первой попытки — повтора у него не было.
+        Assert.DoesNotContain(log, line => Field(line, "chunk") == "0" && Field(line, "attempt") != "1");
+    }
+
+    /// <summary>
+    /// ЗАМЕР «8 МиБ ≤ 30 с» — ЧИСЛОМ (2.4.0, DEF-035). Настоящий сервер на петле отдаёт ровно
+    /// 8 МиБ — один кусок панели; загрузка идёт политикой ПАНЕЛИ (8 МиБ, три попытки, пауза 2 с),
+    /// а не уменьшенной политикой проверок.
+    ///
+    /// Утверждается: 8 МиБ скачались ЦЕЛИКОМ, часы проверки показали число не больше 30 с,
+    /// и в журнале лежит отдельная строка замера с тем же числом — <c>bytes=8388608</c>,
+    /// <c>limit=30</c>, <c>slow=no</c>. Строка не «на память»: её пишет сам загрузчик, и
+    /// расхождение с часами проверки больше секунды роняет утверждение.
+    ///
+    /// ⚠️ Петля, а не живая сеть: 30 с здесь — предел, за которым кусок такого размера означает
+    /// повторную загрузку, а не канал. Живой GitHub этим замером не проверяется (и не должен:
+    /// сеть владельца — его право).
+    /// </summary>
+    [Fact]
+    public void Замер_восьми_мегабайт_укладывается_в_тридцать_секунд()
+    {
+        using var box = new Sandbox();
+
+        var bytes = Payload((int)UpdateDownloadMeasure.Bytes); // ровно 8 МиБ
+        using var loop = new Loop(bytes);
+
+        var clock = Stopwatch.StartNew();
+        var result = Fetch(loop, box, Sha(bytes), stateDir: box.StateDir);
+        clock.Stop();
+
+        Assert.True(result.Ok, "8 МиБ не скачались: " + result.Report());
+        Assert.Equal((long)bytes.Length, new FileInfo(box.Path).Length);
+
+        // ЧИСЛО: кусок замера уложился в предел.
+        Assert.True(
+            clock.Elapsed <= UpdateDownloadMeasure.Limit,
+            "8 МиБ качались " + clock.Elapsed.TotalSeconds.ToString("0.000", CultureInfo.InvariantCulture) +
+            " с — больше 30 с");
+
+        var metric = Assert.Single(
+            AttemptLog(box), line => line.Contains("metric=8MiB", StringComparison.Ordinal));
+
+        var seconds = Number(metric, "seconds");
+
+        Assert.True(
+            seconds >= 0 && seconds <= UpdateDownloadMeasure.Limit.TotalSeconds,
+            "замер в журнале не число или больше предела: " + metric);
+
+        Assert.Equal("8388608", Field(metric, "bytes"));
+        Assert.Equal("30", Field(metric, "limit"));
+        Assert.Equal("no", Field(metric, "slow"));
+
+        // Журнал и часы проверки — об одном и том же: разойтись больше секунды они не вправе.
+        Assert.True(
+            Math.Abs(seconds - clock.Elapsed.TotalSeconds) <= 1.0,
+            "журнал и часы проверки разошлись: " + metric);
+
+        // Сеть одна: кусок замера спрошен ОДИН раз, повторов не было.
+        Assert.Equal(1, loop.Requests);
+    }
+
+    /// <summary>
+    /// СОСТОЯНИЕ ЛОЖИТСЯ В <c>state\update\</c> ЖИВЫМ ПУТЁМ ПОДГОТОВКИ, а не только когда его
+    /// позвала проверка. Здесь работает НАСТОЯЩАЯ дверь <see cref="UpdateInstall.Prepare"/>:
+    /// подстановки загрузчика нет, файлы приходят с сервера на петле, канал рвётся на каждой
+    /// попытке — и после отказа в каталоге обновления обязаны остаться запись о загрузке и
+    /// журнал попыток с адресом оборванного файла.
+    ///
+    /// Без этой проверки правка «передать каталог состояния в загрузчик» держалась бы только
+    /// глазами: подстановки проверок в остальных местах каталога не получают.
+    /// </summary>
+    [Fact]
+    public void Подготовка_оставляет_состояние_загрузки_в_state_update()
+    {
+        using var box = new Sandbox();
+
+        var archive = Payload(400_000);
+
+        // Файл сумм — свой, на своём «сервере»: без него подготовка отказывает раньше загрузки.
+        using var sums = new Loop(Encoding.UTF8.GetBytes(new string('a', 64) + "  " + UpdateAssets.ArchiveName + "\n"));
+
+        // Архив рвётся на каждой попытке: подготовка обязана отказать отказом скачивания.
+        using var broken = new Loop(archive, (_, _, _) => true, truncate: true);
+
+        var paths = AppPaths.Under(Path.Combine(box.Root, "run"));
+        var target = Path.Combine(box.Root, "panel");
+
+        Directory.CreateDirectory(target);
+        File.WriteAllText(Path.Combine(target, "DshPanel.exe"), "панель");
+
+        var request = new UpdateRequest(
+            paths,
+            "2.3.2",
+            target,
+            "2.4.0",
+            new ReleaseAssets(broken.Url, string.Empty, sums.Url),
+            Allowed: true,
+            At: new DateTimeOffset(2026, 10, 24, 2, 0, 0, TimeSpan.Zero));
+
+        var preparation = UpdateInstall.Prepare(request);
+
+        Assert.False(preparation.Ok, "подготовка объявила удачу при оборванном канале");
+        Assert.Equal(UpdateRefusal.ArchiveDownloadFailed, preparation.Refusal);
+
+        var root = UpdateInstall.UpdateRoot(paths);
+
+        Assert.True(
+            File.Exists(UpdateDownloadStateFile.Of(root)),
+            "состояния загрузки нет в state\\update\\: загрузчик не получил каталог состояния");
+        Assert.True(
+            File.Exists(UpdateDownloadStateFile.LogOf(root)),
+            "журнала попыток нет рядом с состоянием");
+
+        var saved = UpdateDownloadStateFile.Read(root);
+
+        Assert.NotNull(saved);
+        Assert.Equal(broken.Url, saved!.Url);
+        Assert.Equal(archive.Length, saved.Total);
+
+        // Рабочего архива после отказа нет: недокачанное не занимает место готового.
+        Assert.False(
+            File.Exists(Path.Combine(root, UpdateInstall.ArchiveFileName("2.4.0"))),
+            "недокачанный архив занял рабочее имя");
     }
 }

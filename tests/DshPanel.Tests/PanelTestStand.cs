@@ -7,7 +7,9 @@ using System.Security.Cryptography;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DshPanel.Isolation;
@@ -219,6 +221,64 @@ internal static class PanelTestStand
         }
 
         return colors.Count;
+    }
+
+    /// <summary>
+    /// ЦВЕТ ОДНОГО ПИКСЕЛЯ нарисованного окна — «какого цвета вот эта точка кадра».
+    ///
+    /// **Зачем.** Второй счётчик цветов заводить запрещено (`tests\AGENTS.md`, находка F-1), но
+    /// считать цвета — не то же, что ЗНАТЬ цвет: контраст пары «подложка выбранной строки к фону
+    /// списка» числом по кадру (DEF-047) требует именно цвета точки, а не их количества. Читается
+    /// тот же кадр, что у <see cref="FrameHash"/> и <see cref="ColorsIn"/>: то же окно, тот же
+    /// размер, та же отрисовка 96 точек на дюйм, поэтому точка (x,y) — это пиксель кадра.
+    ///
+    /// ⚠️ Точка округляется ВНИЗ и обязана лежать внутри кадра — иначе проверка падала бы
+    /// утверждением «вне кадра», а не возвращала цвет фона за окном.
+    ///
+    /// ⚠️ Порядок каналов берётся у самой картинки: `RenderTargetBitmap` (Skia) отдаёт BGRA,
+    /// и «прочитать как RGB» покрасило бы красную подложку синей — замер контраста поехал бы
+    /// молча, потому что оба цвета остались бы цветами.
+    /// </summary>
+    public static Color ColorAt(Window window, Point point)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        Settle();
+
+        var width = (int)Math.Ceiling(window.ClientSize.Width);
+        var height = (int)Math.Ceiling(window.ClientSize.Height);
+
+        var x = (int)Math.Floor(point.X);
+        var y = (int)Math.Floor(point.Y);
+
+        Assert.True(
+            width > 0 && height > 0,
+            $"пустой размер окна {width}x{height} — читать нечего");
+
+        Assert.True(
+            x >= 0 && x < width && y >= 0 && y < height,
+            $"точка {x},{y} вне кадра {width}x{height}");
+
+        var bitmap = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
+        bitmap.Render(window);
+
+        var buffer = new byte[4];
+        var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+
+        try
+        {
+            bitmap.CopyPixels(new PixelRect(x, y, 1, 1), handle.AddrOfPinnedObject(), buffer.Length, 4);
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        var bgra = bitmap.Format == PixelFormats.Bgra8888 || bitmap.Format == PixelFormats.Bgr32;
+
+        return bgra
+            ? Color.FromRgb(buffer[2], buffer[1], buffer[0])
+            : Color.FromRgb(buffer[0], buffer[1], buffer[2]);
     }
 
     /// <summary>Кнопки окна — в порядке дерева. По ИМЕНИ, а не по подписи: подпись переводят.</summary>

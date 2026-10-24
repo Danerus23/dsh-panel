@@ -17,6 +17,13 @@ public readonly record struct PeakWindow(IReadOnlyList<int> Days, int FromMinute
 ///
 /// Ключ модели панель НЕ хранит: в профиле лежит только ИМЯ ключа в файле движка
 /// (<c>~/.dsh/.credentials.yaml</c>). Значение читается в момент запроса и никуда не пишется.
+///
+/// ⚠️ <see cref="PricingModel"/> — НЕ ключ и не секрет: это ИМЯ МОДЕЛИ НА СТРАНИЦЕ ЦЕН
+/// (DEF-056, 2.4.0). Страница объявляет две модели (`deepseek-flash`, `deepseek-v4-pro`)
+/// отдельными колонками, и цены у них разные. Панель обязана показать цены ТОЙ модели, которую
+/// называет профиль, а не «первую колонку»: колонки могут поменяться местами, и тогда молчаливое
+/// «первая» показало бы человеку чужие цены. Имени нет на странице — окно скажет об этом словами
+/// и НЕ подставит цены другой модели (<see cref="Pricing.PricingPage"/>).
 /// </summary>
 public sealed record AgentProfile(
     string Id,
@@ -24,6 +31,7 @@ public sealed record AgentProfile(
     string KeyName,
     string BalanceUrl,
     string PricingSource,
+    string PricingModel,
     string PricingChecked,
     IReadOnlyList<PeakWindow> PeakWindows)
 {
@@ -50,7 +58,7 @@ public static class AgentCatalog
     /// Тарифные окна DeepSeek и дата проверки.
     ///
     /// ✅ **Проверено 24.09.2026** по официальной странице
-    /// (<c>https://api-docs.deepseek.com/quick_start/pricing</c>), дословно: «Peak hours are
+    /// (<c>https://api-docs.deepseek.com/quick_start/pricing/</c>), дословно: «Peak hours are
     /// 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday… All other hours are off-peak,
     /// including weekends and Chinese public holidays in full», «Off-peak rates are half of the
     /// peak rates». Таблица совпала с той, по которой работала v1 (<c>pricing.json</c>).
@@ -65,7 +73,17 @@ public static class AgentCatalog
         Title: "DeepSeek",
         KeyName: "DEEPSEEK_API_KEY",
         BalanceUrl: "https://api.deepseek.com/user/balance",
-        PricingSource: "https://api-docs.deepseek.com/quick_start/pricing",
+
+        // Слеш на конце — канонический адрес (DEF-056): без него сайт отвечает корневой страницей.
+        PricingSource: "https://api-docs.deepseek.com/quick_start/pricing/",
+
+        // МОДЕЛЬ, ЧЬИ ЦЕНЫ ПОКАЗЫВАЕТ ПАНЕЛЬ (DEF-056). На странице цен их две колонки:
+        // deepseek-flash и deepseek-v4-pro, и цены у них разные. Имя названо здесь, в профиле
+        // агента, — а не выведено из «первая колонка»: колонки вправе поменяться местами,
+        // и тогда «первая» молча показала бы человеку чужие цены. Flash — та модель, чьи цены
+        // панель показывала и раньше (первая колонка страницы), и самая дешёвая из двух.
+        PricingModel: "deepseek-flash",
+
         PricingChecked: "2026-09-24",
         PeakWindows: new[]
         {

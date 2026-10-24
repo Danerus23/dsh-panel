@@ -25,7 +25,7 @@ public sealed class HttpPricingClient : IPricingClient
     public HttpPricingClient(HttpClient? http = null) =>
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
 
-    public PricingResult Query(string language, DateTimeOffset now)
+    public PricingResult Query(string language, string model, DateTimeOffset now)
     {
         var url = PricingDecisions.Url(language);
 
@@ -43,7 +43,7 @@ public sealed class HttpPricingClient : IPricingClient
             }
 
             using var reader = new StreamReader(response.Content.ReadAsStream(), Encoding.UTF8);
-            return PricingPage.Parse(reader.ReadToEnd(), language, url, now);
+            return PricingPage.Parse(reader.ReadToEnd(), language, url, model, now);
         }
         catch (Exception ex)
         {

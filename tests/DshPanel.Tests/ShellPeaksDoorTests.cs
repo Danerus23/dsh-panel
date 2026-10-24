@@ -58,7 +58,6 @@ public class ShellPeaksDoorTests
                 new TrayStatusLine("тариф", TrayTone.Neutral),
                 new TrayStatusLine("обновление", TrayTone.Neutral)),
             notify: (_, _, _) => { },
-            createAbout: () => new AboutWindow(),
                 createIssue: () => new IssueWindow(),
             checkUpdate: () => { },
             createPeaks: createPeaks,

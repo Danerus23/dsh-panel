@@ -108,31 +108,38 @@ public static class ShotSamples
     /// Время — 10:00 UTC, чтобы при любом поясе от −9 до +13 местная дата оставалась 17.10.2026
     /// (полночь по UTC показала бы 18.10 у нас — и кадр снова соврал бы).
     /// </summary>
-    public const string ReleasePublished = "2026-10-17T10:00:00Z";
+    public const string ReleasePublished = "2026-10-24T10:00:00Z";
 
     /// <summary>
     /// КОГДА ПРОВЕРЯЛИ ОБРАЗЦОВЫЙ ВЫПУСК — 18.10.2026, время то же, что стояло в образце
     /// (12:00 UTC, то есть 15:00 по машине владельца). Дата выпуска — 17.10, проверка — на
     /// следующий день: ровно так и было в цикле 2.1.0.
     /// </summary>
-    public static readonly DateTimeOffset ReleaseCheckedAt = new(2026, 10, 18, 12, 0, 0, TimeSpan.Zero);
+    public static readonly DateTimeOffset ReleaseCheckedAt = new(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
 
     /// <summary>
-    /// СНИМОК ЦЕН ДЛЯ КАДРА «ПИКИ И ТАРИФЫ» — те же пары, что в образце истории цен.
+    /// СНИМОК ЦЕН ДЛЯ КАДРА «ПИКИ И ТАРИФЫ» — ЧИСЛА СТРАНИЦЫ ЦЕН (U16, 2.4.0).
+    ///
+    /// ⚠️ **От какого случая.** Витрина рисовала выдуманную модель `deepseek-chat` и старые числа
+    /// ($0.25/$0.50), а с 24.10.2026 страница цен даёт `deepseek-flash` и $0.003/$0.006, $0.15/$0.3,
+    /// $0.6/$1.2 (фикстура `tests/DshPanel.Tests/fixtures/pricing-en.html`). Кадр витрины — не
+    /// разбор страницы, но он ОБЯЗАН называть те же числа и ту модель, что видит человек.
+    /// Модель берётся у профиля агента (`AgentCatalog.DeepSeek.PricingModel`), а не литералом:
+    /// второго имени модели в кадре быть не должно.
     ///
     /// **От какого случая.** Владелец увидел на кадре «пиков» ПУСТОЙ блок «Стоимость» со словами
     /// «Цены не читались: это прогон проверки — в сеть панель не ходит»: кадр показывал нашу
     /// механику вместо вида продукта. Окно цен ЖДЁТ дверь (<c>IPricingControl</c>) и рисует
     /// таблицу по ней — значит лечение и есть образцовая дверь, а окно не меняется
     /// (<see cref="ShotDrawers.Pricing"/>). Пары те же, что видит человек в «Истории цен»:
-    /// 0,25 вне пика и 0,50 в пик.
+    /// числа страницы цен: $0.003/$0.006, $0.15/$0.3, $0.6/$1.2.
     /// </summary>
     public static PricingSnapshot PricingSnapshotSample() =>
         Snapshot(
             ReleaseCheckedAt,
-            ("chat · input", "$0.25", "$0.50"),
-            ("chat · output", "$1.00", "$2.00"),
-            ("reasoner · input", "$0.55", "$1.20"));
+            ("1M INPUT TOKENS (CACHE HIT)", "$0.003", "$0.006"),
+            ("1M INPUT TOKENS (CACHE MISS)", "$0.15", "$0.3"),
+            ("1M OUTPUT TOKENS", "$0.6", "$1.2"));
 
     /// <summary>
     /// НАСТРОЙКИ ДЛЯ КАДРА: рабочие значения, а не умолчания.
@@ -264,8 +271,11 @@ public static class ShotSamples
                 Skill(PanelStrings.EnvSkillEntryLink, PanelStrings.EnvSkillChecked, EnvLineState.Ok, PanelStrings.EnvSkillHowLive),
                 Skill(PanelStrings.EnvSkillSessionList, PanelStrings.EnvSkillChecked, EnvLineState.Ok, PanelStrings.EnvSkillHowLive),
                 Skill(PanelStrings.EnvSkillQuestionAnswer, PanelStrings.EnvSkillChecked, EnvLineState.Ok, PanelStrings.EnvSkillHowLive),
-                Skill(PanelStrings.EnvSkillTaskPrompt, PanelStrings.EnvSkillTrouble, EnvLineState.Error, PanelStrings.EnvSkillTaskPromptNo),
-                Skill(PanelStrings.EnvSkillTaskCancel, PanelStrings.EnvSkillTrouble, EnvLineState.Error, PanelStrings.EnvSkillTaskCancelNo),
+                // ⚠️ У постановки задачи и отмены метка — «не поддерживается сервером», а НЕ
+                // «не работает» (DEF-048, D-9): сервер такого вызова не объявляет, чинить нечего.
+                // Слово берётся тем же ключом, каким его назовёт `SkillPhrases.Word` в живом окне.
+                Skill(PanelStrings.EnvSkillTaskPrompt, PanelStrings.EnvSkillNotDeclared, EnvLineState.Error, PanelStrings.EnvSkillTaskPromptNo),
+                Skill(PanelStrings.EnvSkillTaskCancel, PanelStrings.EnvSkillNotDeclared, EnvLineState.Error, PanelStrings.EnvSkillTaskCancelNo),
                 Skill(PanelStrings.EnvSkillModelKey, PanelStrings.EnvSkillChecked, EnvLineState.Ok, PanelStrings.EnvSkillHowFile),
                 Skill(PanelStrings.EnvSkillBackupLayout, PanelStrings.EnvSkillChecked, EnvLineState.Ok, PanelStrings.EnvSkillHowFile),
                 Skill(PanelStrings.EnvSkillEngineVersion, PanelStrings.EnvSkillVersionUnread, EnvLineState.Warning, PanelStrings.EnvSkillEngineVersionNo),
@@ -346,21 +356,21 @@ public static class ShotSamples
     {
         var anchor = Snapshot(
             new DateTimeOffset(2026, 10, 8, 9, 0, 0, TimeSpan.FromHours(3)),
-            ("chat · input", "$0.27", "$0.55"),
-            ("chat · output", "$1.10", "$2.20"),
-            ("reasoner · input", "$0.55", "$1.10"));
+            ("1M INPUT TOKENS (CACHE HIT)", "$0.004", "$0.008"),
+            ("1M INPUT TOKENS (CACHE MISS)", "$0.20", "$0.40"),
+            ("1M OUTPUT TOKENS", "$0.80", "$1.60"));
 
         var first = Change(
             new DateTimeOffset(2026, 10, 10, 9, 0, 0, TimeSpan.FromHours(3)),
-            new[] { new PriceChangeRow("chat · output", "$1.10", "$1.00", "$2.20", "$2.00") });
+            new[] { new PriceChangeRow("1M INPUT TOKENS (CACHE HIT)", "$0.004", "$0.003", "$0.008", "$0.006") });
 
         var second = Change(
             new DateTimeOffset(2026, 10, 11, 9, 0, 0, TimeSpan.FromHours(3)),
-            new[] { new PriceChangeRow("reasoner · input", "$0.55", "$0.55", "$1.10", "$1.20") });
+            new[] { new PriceChangeRow("1M INPUT TOKENS (CACHE MISS)", "$0.20", "$0.15", "$0.40", "$0.3") });
 
         var third = Change(
             new DateTimeOffset(2026, 10, 12, 9, 0, 0, TimeSpan.FromHours(3)),
-            new[] { new PriceChangeRow("chat · input", "$0.27", "$0.25", "$0.55", "$0.50") });
+            new[] { new PriceChangeRow("1M OUTPUT TOKENS", "$0.80", "$0.6", "$1.60", "$1.2") });
 
         return PricingHistoryStore.Encode(new PricingHistory(anchor, new[] { first, second, third }, 0));
     }
@@ -371,7 +381,7 @@ public static class ShotSamples
             at,
             PricingDecisions.Url(LanguageDecisions.Auto),
             LanguageDecisions.Auto,
-            "deepseek-chat",
+            AgentCatalog.DeepSeek.PricingModel,
             rows.Select(row => new PriceRow(row.Item, row.OffPeak, row.Peak)).ToList(),
             AgentCatalog.DeepSeek.PeakWindows);
 
@@ -384,7 +394,7 @@ public static class ShotSamples
             at,
             PricingDecisions.Url(LanguageDecisions.Auto),
             LanguageDecisions.Auto,
-            "deepseek-chat",
+            AgentCatalog.DeepSeek.PricingModel,
             prices,
             windows,
             windows);

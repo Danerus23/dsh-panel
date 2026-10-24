@@ -279,18 +279,6 @@ public class PanelShellTests
         Assert.Equal(2, built);
     }
 
-    /// <summary>
-    /// Дверь в «О программе» в изолированном прогоне МОЛЧИТ: прогон проверки не показывает
-    /// владельцу ничего (красная линия 8). Проверяется чистым предикатом, потому что связку
-    /// со значком в тестах не поднять — значок встаёт на рабочий стол владельца.
-    /// </summary>
-    [Fact]
-    public void В_изолированном_прогоне_окно_о_программе_не_показывается()
-    {
-        Assert.False(PanelShell.ShouldShowAbout(isolatedRun: true));
-        Assert.True(PanelShell.ShouldShowAbout(isolatedRun: false));
-    }
-
     // ------------------------------------------------------- «Открыть панель»: отказ виден человеку
 
     /// <summary>
@@ -414,7 +402,7 @@ public class PanelShellTests
 
         foreach (var name in new[]
                  {
-                     "SettingsWindow.axaml", "BackupWindow.axaml", "PeakWindow.axaml", "AboutWindow.axaml",
+                     "SettingsWindow.axaml", "BackupWindow.axaml", "PeakWindow.axaml",
                      "PricingHistoryWindow.axaml",
                  })
         {
@@ -460,7 +448,6 @@ public class PanelShellTests
                      "_settings.Open(_createSettings, Place)",
                      "_backups.Open(_createBackups, Place)",
                      "_peaks.Open(_createPeaks, Place)",
-                     "_about.Open(_createAbout, Place)",
                      "_pricingHistory.Open(_createPricingHistory, Place)",
                  })
         {

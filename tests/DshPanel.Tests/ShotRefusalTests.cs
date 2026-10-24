@@ -94,11 +94,43 @@ public class ShotRefusalTests
     }
 
     /// <summary>
-    /// ЗАПУСТИТЬ СОБРАННУЮ ПАНЕЛЬ, ДЕРЖА ЗАМОК ЖИВОЙ ПАНЕЛИ, — и вернуть код и вывод.
+    /// ИМЯ КАДРА «О ПРОГРАММЕ» СМЕНИЛОСЬ НАЗВАННЫМ ОБРАЗОМ (u14, 2.4.0): старое `about` больше
+    /// не значит ничего и обязано ОТКАЗАТЬ кодом 2, а `settings-about` — снять кадр и вернуть 0.
     ///
-    /// Замок берётся на время запуска и отпускается сразу: проверка не должна мешать другим
-    /// проверкам и настоящей панели.
+    /// **От какого случая.** «О программе» перестало быть отдельным окном: ответ стал седьмым
+    /// разделом настроек (решение владельца 27.09.2026, `docs\DECISIONS.md:32`). Если бы старое
+    /// имя молча осталось в списке, скрипт съёмки положил бы в README кадр, которого больше нет
+    /// (или открыл бы панель владельцу) — ровно та «молчаливая поломка имени», которую задача
+    /// запрещает. Мутация «вернуть about в `ShotWindows`» роняет первую половину.
     /// </summary>
+    [Fact]
+    public void Старое_имя_about_отказывает_а_settings_about_снимает_кадр()
+    {
+        var old = Path.Combine(Path.GetTempPath(), "dsh-about-" + Guid.NewGuid().ToString("N") + ".png");
+        var fresh = Path.Combine(Path.GetTempPath(), "dsh-about-" + Guid.NewGuid().ToString("N") + ".png");
+
+        try
+        {
+            var refused = RunPanel("--shot", old, "about");
+
+            Assert.Equal(2, refused.Code);
+            Assert.Contains("неизвестное окно", refused.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(old), "отказ кодом 2, а кадр старого имени всё-таки снят");
+
+            var taken = RunPanel("--shot", fresh, "settings-about");
+
+            Assert.Equal(0, taken.Code);
+            Assert.True(File.Exists(fresh), "новое имя кадра не сняло кадр");
+            Assert.True(new FileInfo(fresh).Length > 0, "кадр пустой");
+        }
+        finally
+        {
+            if (File.Exists(old)) File.Delete(old);
+            if (File.Exists(fresh)) File.Delete(fresh);
+        }
+    }
+
+
     /// <summary>
     /// ЗАПУСТИТЬ СОБРАННУЮ ПАНЕЛЬ С ЭТИМИ ДОВОДАМИ — и вернуть код и вывод.
     ///

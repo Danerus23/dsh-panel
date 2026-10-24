@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using System.Threading;
 using DshPanel.Agents;
 using DshPanel.Isolation;
@@ -51,10 +55,14 @@ public class PricingTests
 
         public List<string> Languages { get; } = new();
 
-        public PricingResult Query(string language, DateTimeOffset now)
+        /// <summary>Модели, с которыми панель пришла за ценами (DEF-056): имя — из профиля агента.</summary>
+        public List<string> Models { get; } = new();
+
+        public PricingResult Query(string language, string model, DateTimeOffset now)
         {
             Calls++;
             Languages.Add(language);
+            Models.Add(model);
 
             return _answer(language);
         }
@@ -111,7 +119,7 @@ public class PricingTests
     [Fact]
     public void Английская_страница_разбирается_в_три_строки_цены()
     {
-        var result = PricingPage.Parse(EnglishPage, "ru", PricingDecisions.EnglishUrl, Now);
+        var result = PricingPage.Parse(EnglishPage, "ru", PricingDecisions.EnglishUrl, "deepseek-flash", Now);
 
         Assert.True(result.Ok, result.Error);
         Assert.Equal(3, result.Rows.Count);
@@ -138,7 +146,7 @@ public class PricingTests
     [Fact]
     public void Китайская_страница_даёт_юани_а_не_пересчёт()
     {
-        var result = PricingPage.Parse(PricingFixture.ChineseTable, "zh", PricingDecisions.ChineseUrl, Now);
+        var result = PricingPage.Parse(PricingFixture.ChineseTable, "zh", PricingDecisions.ChineseUrl, "deepseek-flash", Now);
 
         Assert.True(result.Ok, result.Error);
         Assert.Equal(3, result.Rows.Count);
@@ -208,7 +216,7 @@ public class PricingTests
     [Fact]
     public void Без_фразы_про_часы_окон_нет_а_цены_есть()
     {
-        var result = PricingPage.Parse(PricingFixture.ChineseTable, "zh", PricingDecisions.ChineseUrl, Now);
+        var result = PricingPage.Parse(PricingFixture.ChineseTable, "zh", PricingDecisions.ChineseUrl, "deepseek-flash", Now);
 
         Assert.True(result.Ok, result.Error);
         Assert.True(result.HasRows);
@@ -226,13 +234,244 @@ public class PricingTests
     {
         Assert.Equal(
             PanelStrings.PricePageEmpty,
-            PricingPage.Parse(string.Empty, "ru", PricingDecisions.EnglishUrl, Now).Error);
+            PricingPage.Parse(string.Empty, "ru", PricingDecisions.EnglishUrl, "deepseek-flash", Now).Error);
 
-        var noTable = PricingPage.Parse("<html><body>цены переехали</body></html>", "ru", PricingDecisions.EnglishUrl, Now);
+        var noTable = PricingPage.Parse("<html><body>цены переехали</body></html>", "ru", PricingDecisions.EnglishUrl, "deepseek-flash", Now);
 
         Assert.False(noTable.Ok);
         Assert.Equal(PanelStrings.PriceTableMissing, noTable.Error);
         Assert.Empty(noTable.Rows);
+    }
+
+    /// <summary>
+    /// АДРЕС СТРАНИЦЫ ЦЕН — КАНОНИЧЕСКИЙ, СО СЛЕШЕМ НА КОНЦЕ (DEF-056, 2.4.0).
+    ///
+    /// **От какого случая.** 24.10.2026 сайт отвечал на адрес БЕЗ слеша кодом 200 и КОРНЕВОЙ
+    /// страницей «Your First API Call» — без таблицы цен. Панель говорила «цены прочитать
+    /// не удалось» (журнал: 6 строк, последняя 24.10 02:42). Слеш — часть адреса, а не оформление:
+    /// редиректа сайт не делает.
+    ///
+    /// **Мутация, которая обязана упасть:** убрать завершающий слеш из `EnglishUrl`
+    /// (тогда панель снова получит оболочку).
+    /// </summary>
+    [Fact]
+    public void Адрес_страницы_цен_кончается_слешем()
+    {
+        Assert.StartsWith("https://", PricingDecisions.EnglishUrl, StringComparison.Ordinal);
+        Assert.EndsWith("/", PricingDecisions.EnglishUrl, StringComparison.Ordinal);
+        Assert.EndsWith("/", PricingDecisions.ChineseUrl, StringComparison.Ordinal);
+
+        // И адрес источника в профиле агента — ТОТ ЖЕ (слеш входит в него): строка «откуда взято»
+        // не имеет права показывать адрес, который отдаёт оболочку.
+        Assert.EndsWith("/", AgentCatalog.DeepSeek.PricingSource, StringComparison.Ordinal);
+        Assert.Equal(PricingDecisions.EnglishUrl, AgentCatalog.DeepSeek.PricingSource);
+
+        Assert.Equal(PricingDecisions.EnglishUrl, PricingDecisions.Url("ru"));
+        Assert.Equal(PricingDecisions.ChineseUrl, PricingDecisions.Url("zh"));
+    }
+
+    /// <summary>
+    /// СТРАНИЦА БЕЗ СЛЕША — ОБОЛОЧКА, И ОНА НАЗЫВАЕТСЯ СВОИМИ СЛОВАМИ, А НЕ «ТАБЛИЦЫ НЕ НАШЛОСЬ»
+    /// (DEF-056, пункт 3).
+    ///
+    /// Проверяется по ЦЕЛОЙ живой странице (`fixtures\pricing-en-shell.html`, 49 316 байт,
+    /// `<title>Your First API Call`). Признак оболочки — ЗАГОЛОВОК документа, а не текст в теле:
+    /// на настоящей странице цен та же фраза стоит в боковом меню (2 совпадения), и поиск по всему
+    /// HTML объявил бы оболочкой НАСТОЯЩУЮ страницу.
+    ///
+    /// **Мутации, которые обязаны упасть:** «вернуть оболочку как успех» (снять проверку
+    /// `IsShellPage` в разборе) · «называть оболочку словами таблицы» (подменить
+    /// `PricePageShell` на `PriceTableMissing`).
+    /// </summary>
+    [Fact]
+    public void Страница_без_слеша_оболочка_и_это_названо_словами()
+    {
+        var shell = PricingFixture.LivePage(PricingFixture.ShellPageFile);
+
+        Assert.True(PricingPage.IsShellPage(shell), "записанная страница без слеша не опознана как оболочка");
+        Assert.False(PricingPage.LooksLikePricingPage(shell), "оболочка названа страницей цен");
+
+        var result = PricingPage.Parse(
+            shell, "ru", PricingDecisions.EnglishUrl, AgentCatalog.DeepSeek.PricingModel, Now);
+
+        Assert.False(result.Ok);
+        Assert.Equal(PanelStrings.PricePageShell, result.Error);
+        Assert.NotEqual(PanelStrings.PriceTableMissing, result.Error);
+        Assert.Empty(result.Rows);
+        Assert.Empty(result.Windows);
+    }
+
+    /// <summary>
+    /// ЖИВАЯ АНГЛИЙСКАЯ СТРАНИЦА (со слешем) ДАЁТ ЦЕНЫ ОБЕИХ МОДЕЛЕЙ — ПО ИМЕНИ, А НЕ ПО КОЛОНКЕ
+    /// (DEF-056, пункт 2).
+    ///
+    /// Числа — со страницы, снятой 24.10.2026: flash `$0.003/$0.006`, `$0.15/$0.3`, `$0.6/$1.2`;
+    /// v4-pro `$0.022/$0.044`, `$0.66/$1.32`, `$1.98/$3.96`.
+    ///
+    /// **Мутации, которые обязаны упасть:** «всегда первая колонка» (тогда v4-pro получил бы цены
+    /// flash) · «модель из шапки не читать» (разбор не найдёт модель и ответит отказом).
+    /// </summary>
+    [Fact]
+    public void Живая_английская_страница_даёт_цены_обеих_моделей_по_имени()
+    {
+        var html = PricingFixture.LivePage(PricingFixture.LiveEnglishPageFile);
+
+        Assert.True(PricingPage.LooksLikePricingPage(html), "живая страница цен не опознана по заголовку");
+
+        var flash = PricingPage.Parse(html, "ru", PricingDecisions.EnglishUrl, "deepseek-flash", Now);
+
+        Assert.True(flash.Ok, flash.Error);
+        Assert.Equal("deepseek-flash", flash.Model);
+        Assert.Equal(3, flash.Rows.Count);
+        Assert.Equal(
+            new[] { "1M INPUT TOKENS (CACHE HIT)", "1M INPUT TOKENS (CACHE MISS)", "1M OUTPUT TOKENS" },
+            flash.Rows.Select(row => row.Item));
+        Assert.Equal(new[] { "$0.003", "$0.15", "$0.6" }, flash.Rows.Select(row => row.OffPeak));
+        Assert.Equal(new[] { "$0.006", "$0.3", "$1.2" }, flash.Rows.Select(row => row.Peak));
+
+        var pro = PricingPage.Parse(html, "ru", PricingDecisions.EnglishUrl, "deepseek-v4-pro", Now);
+
+        Assert.True(pro.Ok, pro.Error);
+        Assert.Equal("deepseek-v4-pro", pro.Model);
+        Assert.Equal(new[] { "$0.022", "$0.66", "$1.98" }, pro.Rows.Select(row => row.OffPeak));
+        Assert.Equal(new[] { "$0.044", "$1.32", "$3.96" }, pro.Rows.Select(row => row.Peak));
+
+        // Окна пика со страницы читаются независимо от модели.
+        Assert.Equal(2, flash.Windows.Count);
+    }
+
+    /// <summary>
+    /// ЖИВАЯ КИТАЙСКАЯ СТРАНИЦА: те же две модели, но ЧИСЛА В ЮАНЯХ — и панель их не пересчитывает
+    /// (курс ей неизвестен). flash `¥0.02/¥0.04`, `¥1/¥2`, `¥4/¥8`; v4-pro `¥0.15/¥0.30`,
+    /// `¥4.5/¥9.0`, `¥13.5/¥27.0`.
+    /// </summary>
+    [Fact]
+    public void Живая_китайская_страница_даёт_юани_обеих_моделей()
+    {
+        var html = PricingFixture.LivePage(PricingFixture.LiveChinesePageFile);
+
+        Assert.True(PricingPage.LooksLikePricingPage(html), "живая китайская страница не опознана по заголовку");
+
+        var flash = PricingPage.Parse(html, "zh", PricingDecisions.ChineseUrl, "deepseek-flash", Now);
+
+        Assert.True(flash.Ok, flash.Error);
+        Assert.Equal(new[] { "¥0.02", "¥1", "¥4" }, flash.Rows.Select(row => row.OffPeak));
+        Assert.Equal(new[] { "¥0.04", "¥2", "¥8" }, flash.Rows.Select(row => row.Peak));
+
+        var pro = PricingPage.Parse(html, "zh", PricingDecisions.ChineseUrl, "deepseek-v4-pro", Now);
+
+        Assert.True(pro.Ok, pro.Error);
+        Assert.Equal(new[] { "¥0.15", "¥4.5", "¥13.5" }, pro.Rows.Select(row => row.OffPeak));
+        Assert.Equal(new[] { "¥0.30", "¥9.0", "¥27.0" }, pro.Rows.Select(row => row.Peak));
+    }
+
+    /// <summary>
+    /// МОДЕЛИ ИЗ ПРОФИЛЯ НЕТ НА СТРАНИЦЕ — ОТВЕТ СЛОВАМИ, А НЕ ЦЕНЫ СОСЕДНЕЙ КОЛОНКИ (DEF-056,
+    /// пункт 2: «имя не совпало — сказать словами, чужие цены не подставлять»).
+    ///
+    /// `deepseek-chat` — имя, которое панель показывала ДО переписывания страницы: на нынешней
+    /// странице такой модели нет, и подставить ей цены flash значило бы соврать человеку.
+    ///
+    /// **Мутация, которая обязана упасть:** «нет модели — берём первую» (`ModelColumn` при
+    /// несовпадении возвращает 0) — тогда ответ станет успешным с чужими ценами.
+    /// </summary>
+    [Fact]
+    public void Модели_нет_на_странице_чужие_цены_не_подставляются()
+    {
+        var html = PricingFixture.LivePage(PricingFixture.LiveEnglishPageFile);
+
+        var result = PricingPage.Parse(html, "ru", PricingDecisions.EnglishUrl, "deepseek-chat", Now);
+
+        Assert.False(result.Ok);
+        Assert.Equal(
+            string.Format(System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.PriceModelMissingFormat, "deepseek-chat"),
+            result.Error);
+        Assert.Empty(result.Rows);
+    }
+
+    /// <summary>
+    /// ПАНЕЛЬ СПРАШИВАЕТ ЦЕНЫ МОДЕЛИ ИЗ ПРОФИЛЯ АГЕНТА — и передаёт её в дверь сети (DEF-056).
+    ///
+    /// **Зачем отдельная проверка на вызов.** Разбор может быть идеально правильным, а модель —
+    /// не дойти до него (зашитая «первая» в клиенте или контроллере). Это тот класс, который ловят
+    /// воротами по вызову: здесь смотрит ПОДСТАВНОЙ клиент — какую модель ему назвали.
+    ///
+    /// **Мутации, которые обязаны упасть:** «модель не передавать» · «передавать чужую константу
+    /// вместо профиля».
+    /// </summary>
+    [Fact]
+    public void Контроллер_спрашивает_цены_модели_из_профиля_агента()
+    {
+        var client = new Client(Good);
+        var controller = Controller(client, new PanelSettings());
+
+        controller.Refresh();
+
+        Assert.True(SpinWait.SpinUntil(() => !controller.Busy, 5000), "разбор не завершился");
+
+        Assert.Equal(1, client.Calls);
+        Assert.Equal(new[] { AgentCatalog.DeepSeek.PricingModel }, client.Models);
+        Assert.Equal("deepseek-flash", AgentCatalog.DeepSeek.PricingModel);
+    }
+
+    /// <summary>
+    /// КЛИЕНТ СЕТИ ОТДАЁТ ПРИЧИНУ РАЗБОРА КАК ЕСТЬ: если сайт ответил оболочкой, человек увидит
+    /// СЛОВА ПРО ОБОЛОЧКУ, а не «таблицы не нашлось» (DEF-056, пункт 3).
+    ///
+    /// Сеть не нужна: подставной <see cref="HttpMessageHandler"/> отдаёт записанную страницу,
+    /// а запрос идёт тем же путём, каким его делает панель.
+    /// </summary>
+    [Fact]
+    public void Клиент_сети_называет_оболочку_словами()
+    {
+        var shell = PricingFixture.LivePage(PricingFixture.ShellPageFile);
+        using var http = new HttpClient(new StaticAnswer(shell));
+
+        var result = new HttpPricingClient(http).Query("ru", "deepseek-flash", Now);
+
+        Assert.False(result.Ok);
+        Assert.Equal(PanelStrings.PricePageShell, result.Error);
+    }
+
+    /// <summary>
+    /// МОДЕЛЬ ДЛЯ ЦЕН БЕРЁТСЯ ИЗ ПРОФИЛЯ АГЕНТА, А НЕ ЛИТЕРАЛОМ В КОНТРОЛЛЕРЕ — ВОРОТА
+    /// ПО ИСХОДНИКАМ (DEF-056).
+    ///
+    /// **Зачем отдельно от подстановки клиента.** У агента сейчас один профиль, поэтому подмена
+    /// «профиль → литерал `deepseek-flash`» поведением не отличается: подстановка увидит ТУ ЖЕ
+    /// строку. Ворота называют выражение, которым модель приходит из профиля, и подмена краснеет.
+    ///
+    /// **Мутация, которая обязана упасть:** заменить выражение литералом (или убрать передачу
+    /// модели в дверь сети).
+    /// </summary>
+    [Fact]
+    public void Модель_для_цен_берётся_из_профиля_агента_а_не_литералом()
+    {
+        var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
+
+        Assert.False(string.IsNullOrEmpty(root), "не нашёл корень репозитория");
+
+        var controller = File.ReadAllText(
+            Path.Combine(root!, "src", "DshPanel", "Pricing", "PricingController.cs"));
+
+        Assert.Contains("AgentCatalog.Find(_settings().ActiveAgent).PricingModel", controller, StringComparison.Ordinal);
+        Assert.Contains("client.Query(language, model, now)", controller, StringComparison.Ordinal);
+    }
+
+    /// <summary>Подставной обработчик HTTP: отдаёт записанную страницу на любой запрос.</summary>
+    private sealed class StaticAnswer : HttpMessageHandler
+    {
+        private readonly string _html;
+
+        public StaticAnswer(string html) => _html = html;
+
+        protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            new(HttpStatusCode.OK) { Content = new StringContent(_html, Encoding.UTF8, "text/html") };
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(Send(request, cancellationToken));
     }
 
     /// <summary>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -681,7 +681,7 @@ public class PhoneSectionTests
             var titles = list!.ItemsSource!.Cast<string>().ToList();
 
             Assert.Contains(PanelStrings.PhoneSectionTitle, titles);
-            Assert.Equal(6, titles.Count);
+            Assert.Equal(7, titles.Count);
             Assert.Equal(SettingsWindow.PhoneSection, window.ShowSection(SettingsWindow.PhoneSection));
             Assert.Equal(SettingsWindow.PhoneSection, window.VisibleSection);
             Assert.Equal(SettingsWindow.PhoneSection, list.SelectedIndex);

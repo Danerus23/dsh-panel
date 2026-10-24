@@ -176,6 +176,30 @@ internal static class Program
             return ShellSelfTest(Math.Clamp(seconds, 1, 120));
         }
 
+        // ЖИВАЯ ПРОБА ВЛАДЕНИЯ ОКНАМИ (u14, 2.4.0): настоящие окна, кнопка панели задач числом,
+        // z-порядок, «свернуть/вернуть». Отказывается в изоляции и в сессии 0 по той же причине,
+        // что самотест связки: без рабочего стола окон нет, и проверять нечего.
+        if (rest.Length >= 1 && rest[0] == "--windows-selftest")
+        {
+            if (isolated)
+            {
+                Console.WriteLine(
+                    "ИЗОЛЯЦИЯ ПРОВАЛ: живая проба владения показывает настоящие окна на рабочем столе, " +
+                    "а изолированный прогон не показывает ничего. Запустите пробу без корня.");
+                return 2;
+            }
+
+            if (SessionZero())
+            {
+                Console.WriteLine(
+                    "WINDOWS НЕПРИМЕНИМО: сессия 0 — интерактивного рабочего стола нет, окон и панели " +
+                    "задач не будет. Запустите пробу в сессии человека.");
+                return 2;
+            }
+
+            return WindowsSelfTestRun();
+        }
+
         // Самотест сервера: поднимает НАСТОЯЩИЙ движок на своём свободном порту и гасит его.
         // Без изоляции отказывается сам (ServerSelfTest): движок пишет в домашний каталог,
         // а у настоящего прогона это ~/.dsh владельца.
@@ -812,12 +836,21 @@ internal static class Program
         // две серые строки о том, чего панель НЕ СМОГЛА, а не о том, что человек видит в жизни.
         if (samples is not null) settingsWindow.AttachEngineUpdate(ShotDrawers.Engine());
 
+        // РАЗДЕЛ «О ПРОГРАММЕ» НА КАДРЕ (u14, 2.4.0) — и дверь, которую легко забыть: блок
+        // «Сообщить о проблеме» показывается ТОЛЬКО когда у раздела есть дверь
+        // (`AboutInfo.ShowIssueBlock`). Без неё кадр показал бы раздел БЕДНЕЕ того, какой видит
+        // человек, — из него пропало бы то, ради чего блок заводился. Дверь пустая: нажатие
+        // в кадре ничего не открывает, и открывать нечего — прогон проверки владельцу не
+        // показывает ничего (красная линия 8).
+        settingsWindow.AttachIssueDoor(() => { });
+
         // Кадр `settings` снимает САМЫЙ ДЛИННЫЙ раздел («Резервное копирование»), а не первый:
         // только на нём видно полосу прокрутки и то, что она не наезжает на поля
         // (жалоба владельца 27.09.2026), и что подпись раздела влезает в колонку.
         // `settings-balance` — раздел «Баланс и тариф», `settings-update` — раздел
         // «Обновление» (он появился 28.09.2026, и кадр нужен и проверяющему, и README),
-        // `settings-phone` — раздел «Телефон» (F1.d).
+        // `settings-phone` — раздел «Телефон» (F1.d), `settings-about` — седьмой раздел
+        // «О программе» (u14, 2.4.0: окна больше нет, ответ живёт разделом).
         settingsWindow.ShowSection(kind switch
         {
             StartModes.ShotSettingsGeneral => SettingsWindow.GeneralSection,
@@ -825,6 +858,7 @@ internal static class Program
             StartModes.ShotSettingsUpdate => SettingsWindow.UpdateSection,
             StartModes.ShotSettingsServer => SettingsWindow.ServerSection,
             StartModes.ShotSettingsPhone => SettingsWindow.PhoneSection,
+            StartModes.ShotSettingsAbout => SettingsWindow.AboutSection,
             _ => SettingsWindow.BackupSection,
         });
 
@@ -1110,7 +1144,8 @@ internal static class Program
 
         if (kind is StartModes.ShotSettings or StartModes.ShotSettingsGeneral or StartModes.ShotSettingsBackup
             or StartModes.ShotSettingsBalance or StartModes.ShotSettingsUpdate
-            or StartModes.ShotSettingsServer or StartModes.ShotSettingsPhone)
+            or StartModes.ShotSettingsServer or StartModes.ShotSettingsPhone
+            or StartModes.ShotSettingsAbout)
         {
             // Сборка окна настроек для кадра — ОДНИМ членом (`BuildShotSettingsWindow`), а не здесь:
             // иначе проверке до неё не дотянуться, и дефект обвязки съёмки (раздел «Телефон» на кадре
@@ -1153,25 +1188,6 @@ internal static class Program
             backupWindow.Attach(ShotDrawers.Backup());
             doors.Add("backup");
             window = backupWindow;
-        }
-        else if (kind == StartModes.ShotAbout)
-        {
-            // Окно «О программе» на кадре — как его видит человек: строки текущего языка
-            // (язык задан ключом `--lang` или переменной), ссылки продукта и версия панели.
-            // Ни ключа владельца, ни его путей этому окну не нужно вовсе, поэтому в кадр
-            // личное попасть не может — и это проверяется не словами, а чтением кадра.
-            //
-            // Ссылки на кадре НЕ нажимаются: съёмка ничего не открывает (браузер владельца —
-            // это окно на его рабочем столе).
-            //
-            // ⚠️ А дверь в отчёт о проблеме кадру ДАЁТСЯ, и это не противоречие: без двери блок
-            // в окне скрыт (ShowIssueBlock), и кадр показывал бы окно БЕДНЕЕ того, какое видит
-            // человек, — из него пропало бы то, ради чего окно менялось 29.09.2026. Дверь пустая:
-            // нажатие в кадре ничего не открывает, и открывать нечего — прогон проверки владельцу
-            // не показывает ничего (красная линия 8).
-            var about = new AboutWindow();
-            about.AttachIssueDoor(() => { });
-            window = about;
         }
         else if (kind == StartModes.ShotPeaks)
         {
@@ -1266,6 +1282,13 @@ internal static class Program
             // Подписи и подсказки ставит сам конструктор: окно, построенное без наполнения,
             // не должно выглядеть пустым — и на кадре это видно.
             window = new UnsavedChangesWindow();
+        }
+        else if (kind == StartModes.ShotBackupClose)
+        {
+            // «ЗАКРЫТЬ ОКНО, ПОКА ИДЁТ КОПИЯ?» (DEF-045, 2.4.0) — вопрос, который панель задаёт,
+            // когда человек закрывает окно копий на середине копии. Подписи и тело ставит
+            // конструктор: кадр не может разойтись с жизнью.
+            window = new BusyCloseWindow();
         }
         else if (kind == StartModes.ShotFirstRun)
         {
@@ -1604,6 +1627,28 @@ internal static class Program
     }
 
     /// <summary>
+    /// ЖИВАЯ ПРОБА ВЛАДЕНИЯ ОКНАМИ (u14, 2.4.0). Окна строит <see cref="App"/> после подъёма
+    /// платформы (до неё окно падает «Unable to locate IWindowingPlatform»), а здесь — только
+    /// запуск цикла и вердикт. `SkipDefaultUi` выключает обычный путь панели: значок и сервер
+    /// пробе не нужны, и второй значок на столе владельца был бы шумом.
+    /// </summary>
+    private static int WindowsSelfTestRun()
+    {
+        var selfTest = new WindowsSelfTest();
+
+        ProgramOptions.WindowsSelfTest = selfTest;
+        ProgramOptions.SkipDefaultUi = true;
+
+        AppBuilder.Configure<App>()
+            .UseWin32()
+            .UseSkia()
+            .UseHarfBuzz()
+            .WithInterFont()
+            .StartWithClassicDesktopLifetime(Array.Empty<string>(), _ => { });
+
+        return selfTest.Verdict();
+    }
+    /// <summary>
     /// ОБРАЗЕЦ СОСТОЯНИЯ ДЛЯ КАДРА ОКНА ОБНОВЛЕНИЯ — и только для него.
     ///
     /// **Зачем образец, а не живой контроллер.** Съёмка — прогон проверки: в сеть она не ходит
@@ -1645,12 +1690,12 @@ internal static class Program
             // показывал состояние «есть новое»; но витрина выпуска не должна называть числом
             // версию, которой у людей нет: читатель витрины сверил бы её со своей панелью
             // и решил, что отстал. «Есть новое» при этом видно и так: предложенный выпуск — v2.1.0.
-            Current = "2.0.3";
+            Current = AboutInfo.PanelVersion;
 
             Result = new UpdateRelease(
                 true,
                 string.Empty,
-                "v2.1.0",
+                "v2.4.0",
                 ProductLinks.ReleasesPageUrl,
 
                 // ⚠️ ДАТА ВЫПУСКА — ИЗ ОДНОГО ИСТОЧНИКА (`ShotSamples.ReleasePublished`), t13, 18.10.2026.

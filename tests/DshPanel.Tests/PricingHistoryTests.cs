@@ -103,9 +103,13 @@ public class PricingHistoryTests
 
         public int Calls { get; private set; }
 
-        public PricingResult Query(string language, DateTimeOffset now)
+        /// <summary>Модели, с которыми пришли за ценами: имя берётся из профиля агента (DEF-056).</summary>
+        public List<string> Models { get; } = new();
+
+        public PricingResult Query(string language, string model, DateTimeOffset now)
         {
             Calls++;
+            Models.Add(model);
             return _answers.Count > 0 ? _answers.Dequeue() : Answer();
         }
     }
@@ -1029,7 +1033,6 @@ public class PricingHistoryTests
                 new TrayStatusLine("тариф", TrayTone.Neutral),
                 new TrayStatusLine("обновление", TrayTone.Neutral)),
             notify: (_, _, _) => { },
-            createAbout: () => new AboutWindow(),
                 createIssue: () => new IssueWindow(),
             checkUpdate: () => { },
             createPricingHistory: () => { var window = new PricingHistoryWindow(); built.Add(window); return window; });
@@ -1074,7 +1077,6 @@ public class PricingHistoryTests
                 new TrayStatusLine("тариф", TrayTone.Neutral),
                 new TrayStatusLine("обновление", TrayTone.Neutral)),
             notify: (_, _, _) => { },
-            createAbout: () => new AboutWindow(),
                 createIssue: () => new IssueWindow(),
             checkUpdate: () => { });
 

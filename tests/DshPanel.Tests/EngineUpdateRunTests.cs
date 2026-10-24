@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using DshPanel.Server;
+using DshPanel.Shell;
 using Xunit;
 
 namespace DshPanel.Tests;
@@ -84,8 +85,14 @@ public class EngineUpdateRunTests
         Assert.False(result.Ok);
         Assert.Equal(EngineUpdateOutcome.CopyFailed, result.Outcome);
         Assert.False(installed, "установка пошла, хотя копии профиля нет");
-        Assert.DoesNotContain(result.Lines, line => line.Contains("ставлю движок", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(result.Lines, line => line.Contains("не начинаю", StringComparison.OrdinalIgnoreCase));
+        // ⚠️ Строки — ИЗ ПРОДУКТА, а не литералами: 2.4.0 переписала голос (DEF-040), и прежний
+        // литерал «не начинаю» перестал быть правдой, ничего не сказав о том, что именно сломалось.
+        // Установочная строка содержит подстановку версии, поэтому сверяем её устойчивое начало.
+        var install = PanelStrings.EngineUpdateInstallByLockFormat;
+        var installHead = install[..install.IndexOf('{')].Trim();
+        Assert.NotEmpty(installHead);
+        Assert.DoesNotContain(result.Lines, line => line.Contains(installHead, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Lines, line => line.Contains(PanelStrings.EngineUpdateCopyNotWhole, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>И движок не погасился — тоже не начинаем: подменять версию под работающим движком нельзя.</summary>

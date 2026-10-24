@@ -1,0 +1,31 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="DshPanel.Views.BusyCloseWindow"
+        Width="560" SizeToContent="Height"
+        MinWidth="440"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner">
+  <!--
+    ВОПРОС ПРИ ЗАКРЫТИИ ОКНА КОПИЙ НА СЕРЕДИНЕ КОПИИ (DEF-045, 2.4.0).
+
+    Прежде окно закрывалось молча: копия продолжалась в фоне, но человек об этом не знал —
+    ни что копия идёт, ни где увидеть итог. Вопрос задаётся ДВУМЯ ответами, и оба — про одно
+    и то же дело: «Оставить в фоне» (закрыть окно, копия идёт дальше) и «Вернуться в окно»
+    (безопасный ответ, он же Esc и крестик).
+
+    ⚠️ «Прервать» здесь НЕТ и быть не может: у домена копий нет отмены (`IBackupControl` без
+    CancellationToken), и кнопка «прервать», которая ничего не прерывает, была бы такой же
+    ложью, как прежнее «Выйти без сохранения» (DEF-044). Это названо в отчёте задачи.
+
+    Текстов в разметке нет: заголовок, вопрос и подписи ставит код из словаря (`PanelStrings`).
+  -->
+  <StackPanel Margin="24" Spacing="16">
+    <TextBlock x:Name="QuestionText" TextWrapping="Wrap" FontSize="14" />
+
+    <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+      <Button x:Name="LeaveButton" />
+      <Button x:Name="StayButton" IsCancel="True" />
+    </StackPanel>
+  </StackPanel>
+</Window>

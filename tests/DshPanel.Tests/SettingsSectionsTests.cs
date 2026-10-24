@@ -41,6 +41,9 @@ public class SettingsSectionsTests
     private const int Update = 4;
     private const int Phone = 5;
 
+    /// <summary>Седьмой и последний раздел — «О программе» (u14, 2.4.0).</summary>
+    private const int About = 6;
+
     private static void Settle() => PanelTestStand.Settle();
 
     /// <summary>Контейнер строки списка — тот, по которому видно выбор (подсветка и подпись).</summary>
@@ -75,7 +78,7 @@ public class SettingsSectionsTests
 
             var titles = list!.ItemsSource!.Cast<string>().ToList();
 
-            Assert.Equal(6, titles.Count);
+            Assert.Equal(7, titles.Count);
             Assert.Equal(
                 new[]
                 {
@@ -85,6 +88,7 @@ public class SettingsSectionsTests
                     PanelStrings.SettingsServerSection,
                     PanelStrings.UpdateSectionTitle,
                     PanelStrings.PhoneSectionTitle,
+                    PanelStrings.AboutSectionTitle,
                 },
                 titles);
 
@@ -92,7 +96,7 @@ public class SettingsSectionsTests
             Assert.Equal(General, list.SelectedIndex);
             Assert.Equal(General, window.VisibleSection);
 
-            foreach (var index in new[] { General, Backup, Balance, Server, Update, Phone })
+            foreach (var index in new[] { General, Backup, Balance, Server, Update, Phone, About })
             {
                 window.ShowSection(index);
                 Settle();
@@ -307,7 +311,7 @@ public class SettingsSectionsTests
             var save = window.FindControl<Button>("SaveButton");
             Assert.NotNull(save);
 
-            for (var index = 0; index < 6; index++)
+            for (var index = 0; index < 7; index++)
             {
                 window.ShowSection(index);
                 Settle();
@@ -353,7 +357,7 @@ public class SettingsSectionsTests
             var size = window.ClientSize;
             var viewport = scroll!.Viewport.Height;
 
-            for (var index = 0; index < 6; index++)
+            for (var index = 0; index < 7; index++)
             {
                 window.ShowSection(index);
                 Settle();
@@ -402,7 +406,7 @@ public class SettingsSectionsTests
             Assert.NotNull(list);
 
             var items = list!.GetVisualDescendants().OfType<ListBoxItem>().ToList();
-            Assert.Equal(6, items.Count);
+            Assert.Equal(7, items.Count);
 
             var listRight = list.TranslatePoint(new Point(0, 0), window);
             Assert.NotNull(listRight);

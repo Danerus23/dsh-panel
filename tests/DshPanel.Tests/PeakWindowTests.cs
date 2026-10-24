@@ -195,11 +195,10 @@ public class PeakWindowTests
         window.Close();
     }
 
-    /// <summary>Подпись кнопки закрытия — ТА ЖЕ, что у окна «О программе»: второго набора слов нет.</summary>
+    /// <summary>Подпись кнопки закрытия берётся из тех же строк панели, что и раньше: второго набора слов нет.</summary>
     [AvaloniaFact]
     public void Кнопка_закрытия_названа_теми_же_словами_что_в_о_программе()
     {
-        var about = new AboutWindow();
         var window = new PeakView();
 
         window.Show();
@@ -208,7 +207,6 @@ public class PeakWindowTests
         var close = window.FindControl<Button>("CloseButton")!;
 
         Assert.Equal(PanelStrings.AboutCloseButton, close.Content?.ToString());
-        Assert.Equal(about.CloseLine, close.Content?.ToString());
         Assert.Equal(PanelStrings.TipCloseAboutButton, ToolTip.GetTip(close));
 
         close.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));

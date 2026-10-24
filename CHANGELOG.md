@@ -2,6 +2,103 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.4.0 - 2026-10-24
+
+**A batch of accumulated corrections: the update runs in the background and does not touch
+the working server, windows behave as one whole, and the screen tells the truth about what the panel
+is doing.** There are no new capabilities — what changes is what a person sees and reads, and how
+the doors that already exist behave. The version is in "About": it says **2.4.0**.
+
+### The update runs in the background and leaves the working server alone
+
+Preparing an update no longer holds the window and no longer breaks on a panel restart:
+
+* **The preparation state lives in a file** next to the download chunks (address, sum, length, size
+  of the future file), so after a restart the panel continues where it stopped instead of starting
+  over.
+* **The download resumes by `Range`** — a retry asks for the remainder, not the whole file. Before,
+  a retry could jump back to the beginning and throw away what was already downloaded; that is where
+  "8 MiB in 3–5 minutes" came from.
+* **Measured on a real release:** an 8 MiB chunk (8 388 608 B) took **7.5 s** against a 30 s limit;
+  the whole release file (44 572 116 B) — **19.4 s**, in 8 MiB chunks, the SHA-256 sum matched. Every
+  attempt is recorded in the journal as a number: `metric=8MiB seconds=… limit=30 slow=no`.
+* **Background preparation does not stop the shared server on 3080.** Installing the update is still
+  **by button only**; there is no auto-restart.
+
+The notification bubble now shows the preparation's progress and outcome, and a click on it leads
+where the bubble points: the "Update" section, or the settings section when the matter is autostart.
+There is no percentage or bar in the bubble — numbers and the bar stay in the "Update" section
+(one event — one message). Network errors are named in words: "what happened and what to
+do"; the technical line goes to the journal only. The prepare button no longer stays clickable
+"in flight".
+
+**If the panel's own server has ended by itself**, the panel says so through three channels:
+a bubble "The DSH server ended by itself" with the code and time, a journal line ("by itself", exit
+code, tail of the output masked) and an event for subscribers. **There is no raise button and no
+auto-raise** — that is a separate decision by the person.
+
+### The panel start does not scare with a false window
+
+At PC start the first-run window "The DSH server did not start" no longer appears while a start
+attempt is in progress: "starting" is not "did not start". A real failure of that start is still
+shown — after the attempt has ended.
+
+### Windows behave as one whole
+
+Satellites (backups, update, "Peaks") hide and close together with the panel, and the panel has
+**one taskbar button**. A satellite is shown above the panel, and a window closed by the person does
+not pop back on its own. **"About" has become the seventh settings section** — the separate window
+is gone; it holds the version, "what it does", links, "Report a problem…", the MIT licence and ©.
+
+### Small fixes you can see and hear
+
+* **Esc closes four panel dialogs** and does not silently discard an unsaved edit.
+* **The selected row is visible as selected** — a backplate and a bold label, not colour alone;
+  in the peaks table "today" is named in words, not only by a green colour.
+* **The main window at 640×640**: the bottom row of buttons is fully inside the window, margins are
+  at least 8 points.
+* **The backup window asks when closed mid-copy**: interrupt the copy or leave it in the background;
+  the safe answer does not break the work.
+* **The stop-server-before-backup dialog**: the title is a question ("Stop the server before the
+  backup?"), the answers name different things ("Stop it and back up" / "Back up on the fly"), and
+  the caption "Close without saving" says what will happen.
+* **The report preview is exactly the text that will be sent**: no service HTML comment and no lone
+  dot; an empty field stays an empty section.
+* **Buttons with a picture name themselves by their label** — the screen reader says "Refresh
+  balance", not the content type.
+* **Six small look-and-wording fixes from the frames**: the port explanation sits under its own
+  label, a refusal names the available checkbox, "the server does not declare the call" is named
+  "not supported by the server", a dangling ";" is gone, the price-change cell uses an arrow without
+  a sign, and the phone address is not duplicated.
+
+### Prices are read again
+
+The price page address now ends with a slash — without it the site answers 200 and serves the root
+page "Your First API Call", which has no table. The parser understands the new table: two models and
+off-peak/peak price pairs. The model comes from the agent profile (`deepseek-flash`,
+`deepseek-v4-pro`), foreign prices are not substituted; the currency follows the panel language
+(`$` or `¥`). If the site ever serves the shell instead of the real page again, the window will say
+honestly that the price table was not found.
+
+### Words
+
+The program speaks about itself **impersonally and in the third person** in all three languages:
+**40 first-person lines** were removed (ru 27, en 11, zh 2) and **16 journal lines**. The journal
+jargon was left as it was.
+
+### Under the hood
+
+Checks are now **2245** (was 2190), dictionaries — **1343 keys × 3 languages** (was 1333). The engine
+and its set are untouched: the verified default version is still `0.2.1-rc.2`. Build — 0 warnings /
+0 errors; the personal-data, encoding and dictionary guards — 0.
+
+### What this release does not include
+
+* **The phone has no new capabilities** — the gate surface did not grow: no new addresses, names or
+  calls; HTTPS and SSE are not included.
+* **Installing the update is by button only**; there is no auto-restart: background preparation
+  prepares the file but does not install it itself.
+
 ## 2.3.2 - 2026-10-22
 
 **A security patch for the phone gate: a foreign door and a foreign page are refused, a question

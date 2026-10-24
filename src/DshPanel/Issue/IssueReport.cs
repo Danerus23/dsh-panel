@@ -18,7 +18,7 @@ namespace DshPanel.Issue;
 /// (в ней токен), содержимого <c>~/.dsh</c>, настроек человека, имён его копий. Это не «мы
 /// постарались не включить» — их здесь НЕТ, и потому они не могут просочиться в текст.
 /// </summary>
-/// <param name="PanelVersion">Версия панели (<see cref="Views.AboutWindow.PanelVersion"/>).</param>
+/// <param name="PanelVersion">Версия панели (<see cref="Shell.AboutInfo.PanelVersion"/>).</param>
 /// <param name="Revision">Ревизия сборки — хеш коммита из <c>ProductVersion</c>, если он есть.</param>
 /// <param name="System">Версия Windows словами.</param>
 /// <param name="EngineVersion">Версия движка DSH; пусто — не узнали.</param>
@@ -76,6 +76,17 @@ public static class IssueReport
     /// поэтому здесь запас: 7000.
     /// </summary>
     public const int MaxUrlLength = 7000;
+
+    /// <summary>
+    /// ОГРАДА БЛОКА ЖУРНАЛА В ОТЧЁТЕ — ТРИ ОБРАТНЫЕ КАВЫЧКИ (DEF-051).
+    ///
+    /// **От какого случая.** До 2.4.0 здесь стояла ОДНА кавычка, и кадр `issue` показал её
+    /// человеку одинокой строкой «`» в превью «ровно тот текст, который уйдёт». В Markdown одна
+    /// кавычка открывает ВСТРОЕННЫЙ код: он не переносит строки, поэтому на GitHub сорок строк
+    /// журнала склеивались в один абзац. Три кавычки — блок кода: и строки сохраняются, и в отчёте
+    /// стоит то же, что видно в превью.
+    /// </summary>
+    public const string LogFence = "```";
 
     /// <summary>
     /// ТЕЛО ОТЧЁТА — И ОНО ЖЕ ТО, ЧТО УХОДИТ В ССЫЛКУ. Поэтому текст сам подбирает, сколько строк
@@ -161,11 +172,22 @@ public static class IssueReport
         var said = (message ?? string.Empty).Trim();
         text.AppendLine("### " + S(language, nameof(PanelStrings.IssueReportHeadingWhat)));
         text.AppendLine();
-        text.AppendLine(said.Length > 0 ? said : S(language, nameof(PanelStrings.IssueReportMessageHint)));
 
-        if (messageCut) text.AppendLine(S(language, nameof(PanelStrings.IssueMessageTrimmed)));
+        // ⚠️ ПУСТОЕ ПОЛЕ — ПУСТОЙ РАЗДЕЛ, А НЕ СЛУЖЕБНАЯ ВСТАВКА (DEF-051, кадр `issue`).
+        // Прежде сюда подставлялся скрытый комментарий Markdown (`<!-- напишите здесь, что
+        // произошло -->`), и он стоял В ТОМ САМОМ тексте, который уходит на GitHub: человек видел
+        // «ровно то, что уйдёт» — и это было правдой, только уходил служебный шаблон. Что писать
+        // в поле, говорит подсказка самого поля; отчёт не выдумывает за человека ни строки.
+        // Раздел при пустом поле остаётся пустым — и это тоже правда о том, что уйдёт.
+        if (said.Length > 0)
+        {
+            text.AppendLine(said);
 
-        text.AppendLine();
+            if (messageCut) text.AppendLine(S(language, nameof(PanelStrings.IssueMessageTrimmed)));
+
+            text.AppendLine();
+        }
+
         text.AppendLine("### " + S(language, nameof(PanelStrings.IssueReportHeadingPanel)));
         text.AppendLine();
         Line(text, language, S(language, nameof(PanelStrings.IssueReportVersion)), Version(language, facts));
@@ -184,7 +206,12 @@ public static class IssueReport
         text.AppendLine();
         text.AppendLine("### " + S(language, nameof(PanelStrings.IssueReportHeadingLog)));
         text.AppendLine();
-        text.AppendLine("`");
+
+        // ⚠️ ОГРАДА — ТРИ ОБРАТНЫЕ КАВЫЧКИ, А НЕ ОДНА (DEF-051, кадр `issue`). Прежде здесь стояла
+        // одна, и в превью человек видел одинокую строку «`» — она же уезжала в отчёт. Одна кавычка
+        // в Markdown открывает ВСТРОЕННЫЙ код: он не переносит строки, и журнал на GitHub
+        // склеивался в один абзац. Три — это настоящий блок кода, и он же ровно то, что уходит.
+        text.AppendLine(LogFence);
 
         var shown = facts.LogTail.Skip(Math.Max(0, facts.LogTail.Count - take)).ToList();
 
@@ -208,7 +235,7 @@ public static class IssueReport
                 facts.LogTail.Count));
         }
 
-        text.AppendLine("`");
+        text.AppendLine(LogFence);
 
         text.AppendLine();
         text.AppendLine("---");

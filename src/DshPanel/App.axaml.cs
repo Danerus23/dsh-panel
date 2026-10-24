@@ -58,6 +58,14 @@ public partial class App : Application
 
     private BackupController? _backups;
     private TrayIconHost? _tray;
+
+    /// <summary>
+    /// ДВЕРЬ ЩЕЛЧКА ПО ШАРИКУ (DEF-046, 2.4.0). Живёт рядом со значком и помнит, о чём было
+    /// ПОКАЗАННОЕ сообщение: щелчок открывает то окно, где этот факт виден человеку. Подписка
+    /// одна на процесс — второго пути к шарику в панели нет (общая дверь <see cref="Notify"/>).
+    /// </summary>
+    private NoticeClickDoor? _noticeClicks;
+
     private InstanceSignal? _signal;
 
     /// <summary>
@@ -125,8 +133,11 @@ public partial class App : Application
             if (ProgramOptions.SkipDefaultUi)
             {
                 // Режим проверки строит значок и окно сам (`--tray-selftest`), и второй
-                // значок ему мешал бы.
+                // значок ему мешал бы. Живая проба владения (`--windows-selftest`) строит
+                // СВОИ настоящие окна здесь же: до подъёма платформы окно не создаётся.
                 desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+                ProgramOptions.WindowsSelfTest?.Run(desktop);
             }
             else
             {
@@ -442,6 +453,15 @@ public partial class App : Application
         window.Attach(_server);
         window.SettingsRequested += () => _shell?.OpenSettings();
 
+        // СВОЙ СЕРВЕР УПАЛ САМ — ТРИ КАНАЛА (DEF-052/053, 2.4.0): журнал пишет контроллер
+        // (`EngineExitReport`), событие — `Crashed`, а шарик показывает этот подписчик.
+        // ⚠️ НИ КНОПКИ, НИ АВТО-ПОДЪЁМА: панель сообщает о падении и ждёт человека (решение
+        // владельца). Второй канал из этого подписчика не делается — здесь только показ.
+        _server.Crashed += crash => Notify(
+            NoticeKind.ServerCrashed,
+            PanelStrings.NotifyServerCrashedTitle,
+            ServerCrashDecisions.NoticeText(crash));
+
         // ДВЕРЬ БРАНДМАУЭРА (F4). Заводится ПЕРВОЙ, и это не порядок ради порядка: узкое правило
         // решает, МОЖНО ли поднимать калитку (уточнение владельца 11.10.2026 — «правило ДО двери»:
         // без него Windows задаёт свой вопрос и открывает ШИРОКИЕ правила, что владелец и увидел
@@ -658,7 +678,7 @@ public partial class App : Application
             new HttpUpdateClient(),
             () => _settings!.Settings,
             () => Loc.Language,
-            () => Views.AboutWindow.PanelVersion,
+            () => AboutInfo.PanelVersion,
             allowed: RunRights.LocalData(RunContext.Current, human),
             clock: () => DateTimeOffset.Now,
             dispatch: action => UiThread.Post(action),
@@ -684,12 +704,21 @@ public partial class App : Application
         // однажды нашёл бы не ту папку, а заменять чужие файлы панель не имеет права.
         _updateInstall = new UpdateInstallController(
             paths,
-            () => Views.AboutWindow.PanelVersion,
+            () => AboutInfo.PanelVersion,
             target: System.IO.Path.GetDirectoryName(AutostartStores.SelfExe()) ?? string.Empty,
             allowed: UpdateInstall.For(RunContext.Current, human),
             startArgument: string.Empty,
             mutexName: InstanceSignal.DefaultMutexName,
             log: log);
+
+        // ОДИН ШАРИК НА ПОПЫТКУ ОБНОВЛЕНИЯ (решение капитана 24.10.2026 по u2, DEF-046):
+        // «идёт скачивание», без чисел и полосы — они живут в разделе «Обновление», и щелчок
+        // по шарику ведёт туда (карта видов — `NoticeTargets`). Шарик идёт общей дверью
+        // (`Notify`) и потому молчит в прогоне по изоляции.
+        _updateInstall.Preparing += () => Notify(
+            NoticeKind.UpdatePreparing,
+            PanelStrings.NotifyUpdatePreparingTitle,
+            PanelStrings.NotifyUpdatePreparingText);
 
         // ИТОГ ПРОШЛОГО ОБНОВЛЕНИЯ — ПРИ СТАРТЕ. Сценарий замены оставляет в состоянии панели
         // журнал и папку сборки, а сам ничего не рассказывает; в панели 1.x этот журнал однажды
@@ -783,11 +812,10 @@ public partial class App : Application
         // (`IUpdateSectionWindow`). Поэтому второго окна с ответом об обновлении в панели нет
         // ни одного, и построителя такого окна здесь тоже нет.
 
-        // «О программе» — дверь ПЕРЕЕХАЛА в настройки (решение владельца 27.09.2026: «„о программе“
-        // не туда воткнул. Предлагаю перенести вообще в настройки»). Окну для неё не нужно ничего:
-        // ни контроллеров, ни настроек, ни данных человека, — поэтому оно строится позже всех
-        // и ни от чего не зависит (см. CreateAboutWindow), а дверь открывает связка: у окна
-        // «О программе» от этого по-прежнему ОДИН слот, и второго такого окна не бывает.
+        // «О ПРОГРАММЕ» — РАЗДЕЛ НАСТРОЕК, А НЕ ОКНО (u14, 2.4.0). Решение владельца 27.09.2026
+        // («„о программе“ не туда воткнул. Предлагаю перенести вообще в настройки») исполнено
+        // до конца: отдельного окна нет, построителя у связки нет, а пункт меню значка открывает
+        // настройки на седьмом разделе (`PanelShell.OpenAboutSection`).
 
         // Главным окном приложения окно НЕ объявляем — и это не мелочь. Каркас показывает своё
         // главное окно сам, когда запускает цикл, ещё до всякого щелчка: панель вылезала бы
@@ -835,6 +863,8 @@ public partial class App : Application
             _backups?.Dispose();
             _backups = null;
             _settings = null;
+            _noticeClicks?.Dispose();
+            _noticeClicks = null;
             _shell?.Dispose();
             _shell = null;
             _tray = null;
@@ -846,6 +876,12 @@ public partial class App : Application
         // а это последнее мгновение, когда окно стоит там, где его оставил человек.
         panelWindow.BeforeClosing = () => SavePlacement(window);
         _tray = new TrayIconHost(PanelStrings.TrayToolTip);
+
+        // ШАРИК — ДВЕРЬ, А НЕ КАРТИНКА (DEF-046, банк `60-states.md` §5а). Подписка стоит здесь,
+        // рядом со значком: второго пути к шарику в панели нет, а «клик ничего не делает» жил
+        // ровно потому, что этого места не было вовсе. Цель выбирается картой видов
+        // (`NoticeTargets`), а открывает окна связка — у неё слоты и права прогона.
+        _noticeClicks = new NoticeClickDoor(_tray, OpenNoticeTarget, log);
 
         // Изоляцию связка получает ОТКРЫТО и без умолчания: это она решает, показывать ли окно
         // «О программе» (в прогоне проверки — никогда, красная линия 8).
@@ -864,7 +900,6 @@ public partial class App : Application
             entryLink: () => _server?.EntryLink ?? string.Empty,
             trayStatus: TrayStatusNow,
             notify: Notify,
-            createAbout: CreateAboutWindow,
             createIssue: CreateIssueWindow,
 
             // Пункт меню «Проверить обновления» — тот же путь, что кнопка «Проверить сейчас»
@@ -917,7 +952,7 @@ public partial class App : Application
         // АВТОПОДЪЁМ СЕРВЕРА — решение владельца 26.09.2026: 2.0 поднимает свой сервер сама, без
         // кнопки, иначе переезд с 1.x не имеет смысла. Идёт ПОСЛЕДНИМ и в ФОНЕ: `Start` ждёт ответа
         // сервера до 240 секунд, и на нитке интерфейса панель всё это время не отвечала бы.
-        AutoStartServer(window, log, isolated, human);
+        var autoStart = AutoStartServer(window, log, isolated, human);
 
         // Второй запуск ярлыка стучится в окно-приёмник — показываем окно тем же путём,
         // что и по щелчку по значку. Подписка снимается при выходе: замок общий на процесс,
@@ -931,7 +966,13 @@ public partial class App : Application
         // человек увидел окно, шарик о том же запуске молчит (два сообщения об одном — шум).
         // Решение «показывать ли» — чистая функция (`FirstRunDecisions.ShouldShow`), поэтому
         // проверка перебирает его без окна, а не смотрит глазами.
+        //
+        // ⚠️ ИДЁТ СТАРТ — ОКНО ЖДЁТ (DEF-054, 2.4.0): проверка не говорит «не поднялся» о том,
+        // что поднимается. Реальную неудачу назовёт повторная проверка после попытки —
+        // `ShowFirstRunAfterStart`.
         var firstRunShown = ShowFirstRunOnce(paths, log, human, isolated);
+
+        ShowFirstRunAfterStart(autoStart, paths, log, human, isolated);
 
         // ПАРОВОЗ ПОСЛЕДНИМ: «панель запущена — я в трее». Требование владельца 29.09.2026:
         // обычный запуск окна не показывает, и человек не понимает, работает панель или нет.
@@ -1004,12 +1045,30 @@ public partial class App : Application
     private FirstRunFacts FirstRunFactsNow(AppPaths paths)
     {
         var enginePresent = OwnEngine.Locate(paths) is not null;
-        var state = _server?.Refresh() ?? ServerState.Stopped(0);
+
+        // ИДЁТ ПОПЫТКА СТАРТА — ОТДЕЛЬНЫЙ ФАКТ (DEF-054, 2.4.0). Спрашивается ПЕРВЫМ и без замка
+        // контроллера: замок держит сам старт (до 240 с), и `Refresh` на нитке интерфейса замер бы
+        // её на всё время подъёма. Пока попытка идёт, причина не называется: «не поднялся» —
+        // неверное слово для «поднимается» (журнал 23.10.2026 10:07:42: обе строки в одну секунду).
+        var starting = _server?.Starting == true;
+
+        // Состояние читается БЕЗ ОЖИДАНИЯ ЗАМКА: занят — значит прямо сейчас идёт работа
+        // (старт, гашение), и это тот же факт «в движении», а не «не поднялся».
+        var state = ServerState.Stopped(0);
+
+        if (_server is not null && _server.TryRefresh(out var fresh))
+        {
+            state = fresh;
+        }
+        else if (_server is not null)
+        {
+            starting = true;
+        }
 
         // Причина считается ЧИСТЫМ решением: «не отвечает прямо сейчас» причиной не является,
         // и окно не имеет права выдать одно за другое.
         var problem = FirstRunDecisions.Reason(
-            enginePresent, state.IsRunning, state.Presence, _server?.Owner ?? ServerOwner.None, state.Detail);
+            enginePresent, state.IsRunning, starting, state.Presence, _server?.Owner ?? ServerOwner.None, state.Detail);
 
         var agent = Agents.AgentCatalog.Find(_settings?.Settings.ActiveAgent ?? string.Empty);
 
@@ -1076,8 +1135,11 @@ public partial class App : Application
     /// а первый запуск в чистом профиле достраивается около минуты — без этого человек минуту
     /// смотрел бы на «Сервер не запущен» и решил бы, что панель сломалась. Окно показывает то же,
     /// что при нажатии «Запустить», и снимает занятость в <c>finally</c> — чем бы подъём ни кончился.
+    /// ⚠️ **Возвращает задачу попытки** (DEF-054, 2.4.0): проверка первого запуска ждёт её конца
+    /// и только потом говорит «не поднялся». <c>null</c> — попытки не будет вовсе (нет права или
+    /// контроллера), и ждать нечего.
     /// </summary>
-    private void AutoStartServer(MainWindow window, Action<string> log, bool isolated, bool human)
+    private Task? AutoStartServer(MainWindow window, Action<string> log, bool isolated, bool human)
     {
         ArgumentNullException.ThrowIfNull(window);
 
@@ -1090,15 +1152,15 @@ public partial class App : Application
                 PanelStrings.AutoStartRefusedLogFormat,
                 isolated ? PanelStrings.AutoStartRefusedIsolatedLog : PanelStrings.AutoStartRefusedCheckRun));
 
-            return;
+            return null;
         }
 
         // Контроллера может не быть вовсе — панель уже завершается: поднимать тогда нечего
         // и незачем. Ссылка берётся ЗДЕСЬ и больше не спрашивается: `Exit` обнуляет поле,
         // а фоновая задача живёт дольше.
-        if (_server is not { } server) return;
+        if (_server is not { } server) return null;
 
-        Task.Run(() =>
+        return Task.Run(() =>
         {
             log(PanelStrings.AutoStartEnabledLog);
 
@@ -1135,6 +1197,42 @@ public partial class App : Application
                 window.PostToOwnUi(window.EndServerStart);
             }
         });
+    }
+
+    /// <summary>
+    /// ПОВТОРНАЯ ПРОВЕРКА ПЕРВОГО ЗАПУСКА — ПОСЛЕ ПОПЫТКИ СТАРТА (DEF-054, 2.4.0).
+    ///
+    /// **От какого случая.** При старте ПК панель поднимает сервер в фоне, и проверка первого
+    /// запуска работала в тот же миг: в журнале 23.10.2026 10:07:42 рядом стоят «Сервер DSH
+    /// запущен: node PID 27040» и «окно первого запуска показано: Сервер DSH не поднялся».
+    /// Первое прочтение уже исправлено (`FirstRunDecisions.Reason` молчит, пока идёт попытка),
+    /// но молчание до конца попытки означало бы, что настоящую неудачу этого запуска человек
+    /// не увидит вовсе: окно показывается один раз, и второго случая не будет.
+    ///
+    /// Поэтому после попытки проверка спрашивает ИСТИНУ заново — тем же путём (`ShowFirstRunOnce`):
+    /// если подъём удался или пропущен, говорить нечего и окна нет; если сорвался — причина уже
+    /// устойчивая, и окно показывается как обычно (с отметкой «показано»).
+    ///
+    /// ⚠️ Попытки нет вовсе (нет права или контроллера) — ждать нечего: <c>null</c> значит
+    /// «повторной проверки не будет», а не «подожди и посмотри».
+    /// </summary>
+    private void ShowFirstRunAfterStart(
+        Task? autoStart, AppPaths paths, Action<string> log, bool human, bool isolated)
+    {
+        if (autoStart is null || !human || isolated) return;
+
+        _ = autoStart.ContinueWith(
+            _ => UiThread.Post(() =>
+            {
+                // Панель могла завершиться, пока шёл подъём: показывать окно некому, а трогать
+                // настройки (отметка «показано») после выхода незачем.
+                if (_settings is null || _server is null) return;
+
+                ShowFirstRunOnce(paths, log, human, isolated);
+            }),
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default);
     }
 
     /// <summary>
@@ -1360,7 +1458,11 @@ public partial class App : Application
         // БЛОК ДВИЖКА: дверь даёт `App` (в прогоне проверки её нет вовсе) — окно только показывает.
         if (_engineUpdate is not null) window.AttachEngineUpdate(_engineUpdate);
 
-        window.AboutRequested += () => _shell?.OpenAbout();
+        // «О ПРОГРАММЕ» — РАЗДЕЛ ЭТОГО ОКНА (u14, 2.4.0). Отдельного окна больше нет: решение
+        // владельца 27.09.2026 (`docs\DECISIONS.md:32`) исполнено до конца. Дверь в отчёт
+        // о проблеме остаётся, и даёт её связка: отчёту нужны журнал панели и состояние сервера,
+        // а разделу они не нужны и знать их он не должен.
+        window.AttachIssueDoor(() => _shell?.OpenIssue());
         return window;
     }
 
@@ -1439,7 +1541,7 @@ public partial class App : Application
     {
         var outcome = UpdateOutcomes.StartupNotice(
             paths,
-            Views.AboutWindow.PanelVersion,
+            AboutInfo.PanelVersion,
             UpdateInstall.For(RunContext.Current, human));
 
         if (outcome is null) return;
@@ -1455,26 +1557,8 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Построить окно «О программе». Единственное окно панели, которому не нужно НИЧЕГО:
-    /// ни контроллеров, ни настроек, ни данных человека — только строки текущего языка и
-    /// ссылки продукта. Поэтому оно не может «не построиться» из-за недоступного домена,
-    /// и поэтому же его построитель обязателен в <see cref="PanelShell"/>.
-    /// </summary>
-    private Window CreateAboutWindow()
-    {
-        var about = new AboutWindow();
-
-        // Дверь в отчёт о проблеме даёт СВЯЗКА: отчёту нужны журнал панели и состояние сервера,
-        // а «О программе» их не знает и знать не должно. Ссылка берётся через поле, а не напрямую:
-        // к этому мгновению связка уже построена, но окно может быть построено и проверкой.
-        about.AttachIssueDoor(() => _shell?.OpenIssue());
-
-        return about;
-    }
-
-    /// <summary>
     /// ОКНО «СООБЩИТЬ О ПРОБЛЕМЕ»: собрать факты и отдать окну. Требование владельца 29.09.2026
-    /// (DESIGN.md п. 38).
+    /// (DESIGN.md п. 38). Дверь в него стоит в разделе «О программе» (u14, 2.4.0).
     ///
     /// ⚠️ **Здесь собирается РОВНО технический минимум, и каждая вещь названа:** версия панели
     /// и ревизия сборки, версия Windows, версии движка и Node, как панель запущена, состояние
@@ -1492,7 +1576,7 @@ public partial class App : Application
         var window = new IssueWindow();
 
         window.Attach(new IssueFacts(
-            PanelVersion: Views.AboutWindow.PanelVersion,
+            PanelVersion: AboutInfo.PanelVersion,
             Revision: Revision(),
             System: System.Runtime.InteropServices.RuntimeInformation.OSDescription,
             EngineVersion: Value(report, "EnvEngine"),
@@ -1509,7 +1593,7 @@ public partial class App : Application
     private static string Revision()
     {
         var informational = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>(
-            typeof(Views.AboutWindow).Assembly)?.InformationalVersion;
+            typeof(AboutInfo).Assembly)?.InformationalVersion;
 
         if (string.IsNullOrWhiteSpace(informational)) return string.Empty;
 
@@ -1711,7 +1795,61 @@ public partial class App : Application
 
         // Дверь сама пишет в журнал, чем кончилось: «показано» — только после успешного показа,
         // иначе — причину отказа. Исключение из показа наверх не уходит (2.2.1).
-        NotificationDoor.Announce(() => tray.ShowNotification(title, text), _log, title);
+        var shown = NotificationDoor.Announce(() => tray.ShowNotification(title, text), _log, title);
+
+        // ⚠️ ЩЕЛЧОК ВЕДЁТ В ЦЕЛЬ ТОЛЬКО У ПОКАЗАННОГО ШАРИКА (DEF-046). Не показали — кликать
+        // не по чему: оставленная цель открыла бы человеку окно «ни с того ни с сего», а в прогоне
+        // проверки ещё и помешала бы ему. Отказ показа уже назван строкой выше (дверь показа).
+        if (_noticeClicks is null) return;
+
+        if (shown) _noticeClicks.Remember(kind);
+        else _noticeClicks.Forget();
+    }
+
+    /// <summary>
+    /// ОТКРЫТЬ ТО, О ЧЁМ БЫЛ ШАРИК (DEF-046). Возвращает <c>false</c>, если открывать нечем —
+    /// связка не построена или у цели нет окна: тогда дверь щелчка пишет строку в журнал и
+    /// молчит. Это и есть «дверь или ничего» (банк `60-states.md` §5а): окно «наугад» хуже,
+    /// чем честное ничего.
+    ///
+    /// ⚠️ Двери связки вызываются прямо, а не через `UiThread.Post`: щелчок по шарику приходит
+    /// в насос сообщений трея, а он живёт на нитке интерфейса (тот же путь, что у щелчка по
+    /// значку — `PanelShell` открывает окна оттуда же).
+    /// </summary>
+    private bool OpenNoticeTarget(NoticeTarget target)
+    {
+        var shell = _shell;
+        if (shell is null) return false;
+
+        switch (target)
+        {
+            case NoticeTarget.Panel:
+                shell.ShowPanel();
+                return true;
+
+            case NoticeTarget.Settings:
+                shell.OpenSettings();
+                return true;
+
+            case NoticeTarget.UpdateSection:
+                shell.OpenUpdateSection();
+                return true;
+
+            case NoticeTarget.Backups:
+                shell.OpenBackups();
+                return true;
+
+            case NoticeTarget.Peaks:
+                shell.OpenPeaks();
+                return true;
+
+            case NoticeTarget.PricingHistory:
+                shell.OpenPricingHistory();
+                return true;
+
+            default:
+                return false;
+        }
     }
 }
 
@@ -1734,6 +1872,13 @@ internal static class ProgramOptions
     /// что видит человек), а проверка подключается к ней и распоряжается ею.
     /// </summary>
     public static PanelShellSelfTest? ShellSelfTest { get; set; }
+
+    /// <summary>
+    /// ЖИВАЯ ПРОБА ВЛАДЕНИЯ ОКНАМИ (<c>--windows-selftest</c>, u14, 2.4.0). Окна строит `App`
+    /// после подъёма платформы — до неё окно падает «Unable to locate IWindowingPlatform»
+    /// (поймано самотестом связки 24.09.2026). Проба короткая и сама убирает за собой.
+    /// </summary>
+    public static WindowsSelfTest? WindowsSelfTest { get; set; }
 
     /// <summary>
     /// Замок единого экземпляра с окном-приёмником. Его ставит только обычный запуск: режимы

@@ -42,11 +42,10 @@ public sealed class PanelShell : IDisposable
     private readonly Func<Window>? _createSettings;
     private readonly Func<Window>? _createBackups;
     private readonly Func<Window>? _createPeaks;
-    private readonly Func<Window> _createAbout;
 
     /// <summary>
     /// Построитель окна «Сообщить о проблеме». Пусто — окна нет: движок может его не иметь
-    /// (кадровая съёмка --shot about), и тогда панель говорит об этом строкой в журнал,
+    /// (кадровая съёмка), и тогда панель говорит об этом строкой в журнал,
     /// а не показывает кнопку в никуда.
     /// </summary>
     private readonly Func<Window>? _createIssue;
@@ -54,21 +53,29 @@ public sealed class PanelShell : IDisposable
     private readonly SingleWindowSlot _settings = new();
     private readonly SingleWindowSlot _backups = new();
     private readonly SingleWindowSlot _peaks = new();
-    private readonly SingleWindowSlot _about = new();
 
-    /// <summary>Пятое вспомогательное окно — «Сообщить о проблеме» (<c>DESIGN.md</c> п. 38).</summary>
+    /// <summary>Четвёртое вспомогательное окно — «Сообщить о проблеме» (<c>DESIGN.md</c> п. 38).</summary>
     private readonly SingleWindowSlot _issue = new();
     private readonly SingleWindowSlot _pricingHistory = new();
+
+    /// <summary>
+    /// СПУТНИКИ ПАНЕЛИ, КОТОРЫЕ ПРЯЧУТСЯ И ВОЗВРАЩАЮТСЯ ВМЕСТЕ С НЕЙ (вариант 2, `95-windows.md`
+    /// §3.2). Одна запись на все ПЯТЬ окон: разойдись «какие окна прятать» по вызовам, одно окно
+    /// однажды осталось бы на экране поверх убранной панели.
+    ///
+    /// ⚠️ ПЯТЬ, А НЕ ШЕСТЬ (u14, 2.4.0): окна «О программе» больше нет — решение владельца
+    /// 27.09.2026 исполнено, ответ стал разделом настроек, и `SingleWindowSlot` освободил
+    /// один слот. Это названная граница, а не молчаливая дыра (`95-windows.md` §3.2).
+    /// </summary>
+    private readonly SatelliteSet _satellites;
 
     private bool _disposed;
 
     /// <param name="isolated">
-    /// Прогон проверки, а не человек за панелью. Нужен здесь ровно для одной двери — окна
-    /// «О программе»: в изолированном прогоне владельцу не показывают ничего (красная линия 8),
-    /// и это единственное окно, которое панель открывает по просьбе меню, а не построением
-    /// главного окна. Параметр обязателен и без умолчания намеренно: забыть его выдать значило бы
-    /// однажды показать окно в прогоне проверки, а это ровно тот случай, ради которого
-    /// предохранитель и заведён.
+    /// Прогон проверки, а не человек за панелью. Нужен здесь для дверей, которые показывают окно
+    /// по просьбе меню: в изолированном прогоне владельцу не показывают ничего (красная линия 8),
+    /// и подавленное решение уходит строкой в журнал. Параметр обязателен и без умолчания
+    /// намеренно: забыть его выдать значило бы однажды показать окно в прогоне проверки.
     /// </param>
     /// <param name="createSettings">
     /// Как построить окно настроек. Функция, а не готовое окно: настройки открывают редко,
@@ -81,10 +88,9 @@ public sealed class PanelShell : IDisposable
     /// их с настройками не надо.
     /// </param>
     /// <param name="createAbout">
-    /// Как построить окно «О программе» — по той же причине, но БЕЗ права быть отсутствующим:
-    /// этому окну не нужен ни домен копий, ни настройки, и повода «панель построена без него»
-    /// у него нет. Обязательный параметр здесь ещё и потому, что строка «окно недоступно»
-    /// под него не заведена, а выдумывать текст вместо перевода нельзя.
+    /// ⚠️ УДАЛЁН В 2.4.0 (u14). «О программе» — больше не окно: ответ стал седьмым разделом
+    /// настроек (решение владельца 27.09.2026, `docs\DECISIONS.md:32`), и дверь меню значка
+    /// открывает настройки на нём (`OpenAboutSection`). Слота и построителя у него нет.
     /// </param>
     /// <param name="createPeaks">
     /// Как построить окно «Пики и тарифы» — по той же причине, что настройки и копии: это окно
@@ -138,12 +144,6 @@ public sealed class PanelShell : IDisposable
         Func<string> entryLink,
         Func<TrayStatusLines> trayStatus,
         Action<NoticeKind, string, string> notify,
-        Func<Window> createAbout,
-
-        /// <summary>
-        /// Построитель окна «Сообщить о проблеме». Необязательный: у кадровой съёмки его нет,
-        /// и тогда панель честно говорит, что окна в этом прогоне нет.
-        /// </summary>
         Func<Window>? createIssue,
         Action checkUpdate,
         Func<Window>? createSettings = null,
@@ -160,13 +160,19 @@ public sealed class PanelShell : IDisposable
         _entryLink = entryLink ?? throw new ArgumentNullException(nameof(entryLink));
         _trayStatus = trayStatus ?? throw new ArgumentNullException(nameof(trayStatus));
         _notify = notify ?? throw new ArgumentNullException(nameof(notify));
-        _createAbout = createAbout ?? throw new ArgumentNullException(nameof(createAbout));
         _createIssue = createIssue;
         _checkUpdate = checkUpdate ?? throw new ArgumentNullException(nameof(checkUpdate));
         _createSettings = createSettings;
         _createBackups = createBackups;
         _createPeaks = createPeaks;
         _createPricingHistory = createPricingHistory;
+
+        // ВАРИАНТ 2 НОРМЫ `95-windows.md` §3.2: владельца (Window.Owner) у спутников НЕТ, поэтому
+        // «спрятались вместе с панелью» и «вернулись вместе с ней» делает связка. Место одно:
+        // уход в трей — `PanelWindow.OnClosing`, показ — `PanelWindow.Show`.
+        _satellites = new SatelliteSet(_settings, _backups, _peaks, _issue, _pricingHistory);
+        _window.Hidden = HideSatellites;
+        _window.Shown = ShowSatellites;
     }
 
     /// <summary>Поставить значок и связать его с окном. Окно при этом НЕ показывается.</summary>
@@ -201,17 +207,18 @@ public sealed class PanelShell : IDisposable
     /// <see cref="PanelMenu.Build"/>; здесь только «кто именно» для каждой двери.
     ///
     /// ⚠️ Отдельным методом, а не строкой внутри <see cref="Start"/>, по той же причине, что
-    /// и <see cref="ShouldShowAbout"/>: связку со значком в проверках не поднять (значок встаёт
-    /// на рабочий стол владельца), а обещание «пункт меню „Обновление панели…“ открывает раздел
-    /// „Обновление“ настроек» обязано проверяться прогоном НАСТОЯЩЕГО пути — через этот же вызов,
-    /// а не через список действий, собранный проверкой заново.
+    /// и <see cref="IAboutSectionWindow"/>: связку со значком в проверках не поднять (значок встаёт
+    /// на рабочий стол владельца), а обещания «пункт меню „Обновление панели…“ открывает раздел
+    /// „Обновление“» и «„О программе…“ открывает раздел „О программе“» обязаны проверяться
+    /// прогоном НАСТОЯЩЕГО пути — через этот же вызов, а не через список действий, собранный
+    /// проверкой заново.
     /// </summary>
     internal TrayMenu BuildMenu() => PanelMenu.Build(
         status: _trayStatus,
         show: ShowPanel,
         openAgent: OpenEntryLink,
         settings: OpenSettings,
-        about: OpenAbout,
+        about: OpenAboutSection,
         checkUpdate: _checkUpdate,
         updateSection: OpenUpdateSection,
         exit: Exit);
@@ -355,29 +362,53 @@ public sealed class PanelShell : IDisposable
     /// <summary>Окно «История цен» сейчас открыто — для проверок без экрана.</summary>
     public bool PricingHistoryOpen => _pricingHistory.IsOpen;
 
-    /// <summary>Окно «О программе» сейчас открыто — для проверок без экрана.</summary>
-    public bool AboutOpen => _about.IsOpen;
-
     /// <summary>
-    /// Показывать ли окно «О программе» в этом прогоне.
+    /// ОТКРЫТЬ НАСТРОЙКИ НА РАЗДЕЛЕ «О ПРОГРАММЕ» — дверь пункта меню значка, который прежде
+    /// открывал отдельное окно (u14, 2.4.0).
     ///
-    /// Правило берётся у ОБЩЕЙ двери изоляции, а не решается здесь: в изолированном прогоне
-    /// владельцу не показывают ничего (красная линия 8) — ни окна панели, ни этого. Отдельным
-    /// ЧИСТЫМ предикатом, а не условием внутри ветки, потому что связку со значком в тестах
-    /// не поднять (значок встаёт на рабочий стол владельца), а решение обязано быть проверяемым
-    /// и ломаться мутацией.
+    /// **Решение владельца 27.09.2026** (`docs\DECISIONS.md:32`: «предлагаю перенести вообще
+    /// в настройки») исполнено до конца: окна «О программе» больше нет, ответ — седьмой раздел.
+    /// Дверь идёт через ТОТ ЖЕ слот настроек, что и «Настройки…»: второго окна настроек не бывает,
+    /// и раздел выбирается и у построенного, и у поднятого окна — иначе человек, у которого
+    /// настройки уже открыты, нажал бы «О программе…» и не увидел бы ответа.
+    ///
+    /// ⚠️ Прогон проверки владельцу не показывает ничего (красная линия 8): подавленное решение
+    /// уходит строкой в журнал. Это проверяется прогоном, а не словом.
+    /// ⚠️ Номера раздела здесь нет: окно само знает, какой раздел у него «О программе»
+    /// (уговор <see cref="IAboutSectionWindow"/>) — связка не знает, какое окно ей вернут.
     /// </summary>
-    public static bool ShouldShowAbout(bool isolatedRun) =>
-        IsolationRules.ShouldShowPanelOnSignal(isolatedRun);
+    public void OpenAboutSection()
+    {
+        if (_disposed) return;
+
+        if (!IsolationRules.ShouldShowPanelOnSignal(_isolated))
+        {
+            _log(PanelStrings.WindowSuppressedLog);
+            return;
+        }
+
+        if (_createSettings is null)
+        {
+            _log(PanelStrings.PanelLogSettingsUnavailable);
+            return;
+        }
+
+        _log(_settings.Open(_createSettings, Place, RevealAboutSection)
+            ? PanelStrings.SettingsOpenedLog
+            : PanelStrings.SettingsRaisedLog);
+    }
 
     /// <summary>
-    /// Открыть окно «О программе». Правило то же, что у настроек и копий: второго окна не бывает,
-    /// повторная просьба (пункт меню, кнопка в главном окне) выводит на передний план уже
-    /// открытое. Второго такого окна быть не должно: в нём одни и те же ссылки, и человек
-    /// не понял бы, какое из двух «настоящее».
+    /// Показать в открытом окне настроек РАЗДЕЛ «О ПРОГРАММЕ». Окно, которое такого раздела
+    /// не знает (подставное в проверке), не ломается: дверь открывает его как есть.
     /// </summary>
+    private static void RevealAboutSection(Window window)
+    {
+        if (window is IAboutSectionWindow sectioned) sectioned.ShowAboutSection();
+    }
+
     /// <summary>
-    /// Открыть окно «Сообщить о проблеме». Правило то же, что у «О программе»: второго окна
+    /// Открыть окно «Сообщить о проблеме». Правило то же, что у остальных окон: второго окна
     /// не бывает, повторная просьба выводит на передний план уже открытое. Отчёт собирается
     /// на каждый показ — он про СЕЙЧАС, а не про то, что было при первом открытии.
     ///
@@ -405,26 +436,9 @@ public sealed class PanelShell : IDisposable
             : PanelStrings.IssueRaisedLog);
     }
 
-    public void OpenAbout()
-    {
-        if (_disposed) return;
-
-        // Прогон проверки владельцу не показывает НИЧЕГО (красная линия 8), и подавленное
-        // решение уходит строкой в журнал: иначе «панель молчала» нечем объяснить.
-        if (!ShouldShowAbout(_isolated))
-        {
-            _log(PanelStrings.WindowSuppressedLog);
-            return;
-        }
-
-        _log(_about.Open(_createAbout, Place)
-            ? PanelStrings.AboutOpenedLog
-            : PanelStrings.AboutRaisedLog);
-    }
-
     /// <summary>
-    /// ПОСТАВИТЬ ВСПОМОГАТЕЛЬНОЕ ОКНО РЯДОМ С ПАНЕЛЬЮ — одна дверь на все четыре окна
-    /// (настройки, копии, «Пики и тарифы», «О программе»).
+    /// ПОСТАВИТЬ ВСПОМОГАТЕЛЬНОЕ ОКНО РЯДОМ С ПАНЕЛЬЮ — одна дверь на все пять окон
+    /// (настройки, копии, «Пики и тарифы», «Сообщить о проблеме», «История цен»).
     ///
     /// Слова владельца 28.09.2026: *«Немного бесящий факт, что когда открываешь окно, оно
     /// открывается далеко от основной панели и приходится тянуться мышью»*. Решение принято
@@ -439,9 +453,7 @@ public sealed class PanelShell : IDisposable
     ///
     /// Размер окна берётся из его же разметки (DIP) и переводится в пиксели масштабом того экрана,
     /// на котором окно окажется: рабочие области приходят в пикселях, и «пиксели = точки» верно
-    /// только при масштабе 100 %. У окна с <c>SizeToContent</c> (это «О программе») высота до показа
-    /// неизвестна, и берётся умолчание — окно ставится ВЕРХНИМ ЛЕВЫМ УГЛОМ, а запас по высоте
-    /// только уводит его от края экрана, то есть ошибается в безопасную сторону.
+    /// только при масштабе 100 %.
     /// </summary>
     private void Place(Window window)
     {
@@ -480,7 +492,37 @@ public sealed class PanelShell : IDisposable
         // у этих окон нет вовсе, и центр вышел бы произвольным.
         window.WindowStartupLocation = WindowStartupLocation.Manual;
         window.Position = new PixelPoint(spot.X, spot.Y);
+
+        // ⚠️ ОДНА КНОПКА НА ПАНЕЛИ ЗАДАЧ (норма `О-7`, решение владельца 22.10.2026): кнопку
+        // убирает `ShowInTaskbar`, а НЕ отсутствие владельца (`О-8`: без владельца Avalonia
+        // прячет кнопку скрытым родителем — это другой механизм). Место одно на все спутники —
+        // здесь: разойдись оно по разметке шести окон, одно из них однажды осталось бы с кнопкой.
+        window.ShowInTaskbar = false;
     }
+
+    /// <summary>
+    /// ПАНЕЛЬ УШЛА В ТРЕЙ — СПРЯТАТЬ СПУТНИКИ, А НЕ ЗАКРЫТЬ ИХ (вариант 2, `95-windows.md` §3.2).
+    ///
+    /// **Почему прятать.** «Закрыть» у панели значит «спрятать»: человек не выходил, он убрал
+    /// панель. Закрыть настройки с несохранённой правкой значило бы задать вопрос или потерять
+    /// правку — без действия человека. Спрятанное окно возвращается вместе с панелью (как
+    /// owned-окна в `О-6`), и введённое в нём остаётся на месте.
+    ///
+    /// ⚠️ Ничего не прячем, если панель закрывается НАСТОЯЩИМ образом (`HideOnClose = false`):
+    /// тогда окно закрывается, а не прячется, и `Hidden` не поднимается вовсе — эту развилку
+    /// держит <see cref="PanelWindow"/>.
+    /// </summary>
+    private void HideSatellites()
+    {
+        var hidden = _satellites.HideAll();
+
+        // Строка журнала по образцу других оконных записей (`PanelLog.Write` в окнах):
+        // журнал технический, и по нему видно, что панель спрятала спутники, а не закрыла.
+        if (hidden > 0) _log("панель ушла в трей: спутников спрятано " + hidden);
+    }
+
+    /// <summary>ПАНЕЛЬ ПОКАЗАЛАСЬ — ВЕРНУТЬ ТЕ СПУТНИКИ, КОТОРЫЕ ОНА СПРЯТАЛА САМА (`О-6`).</summary>
+    private void ShowSatellites() => _satellites.Restore();
 
     /// <summary>
     /// ПОКАЗАТЬ ОКНО ПАНЕЛИ — ОДНА ДВЕРЬ НА ДВА СЛУЧАЯ: щелчок по значку и кнопка окна первого
@@ -581,7 +623,6 @@ public sealed class PanelShell : IDisposable
         _settings.Close();
         _backups.Close();
         _peaks.Close();
-        _about.Close();
         _issue.Close();
         _pricingHistory.Close();
 
@@ -601,7 +642,6 @@ public sealed class PanelShell : IDisposable
         _settings.Close();
         _backups.Close();
         _peaks.Close();
-        _about.Close();
         _issue.Close();
         _pricingHistory.Close();
         _window.Dispose();

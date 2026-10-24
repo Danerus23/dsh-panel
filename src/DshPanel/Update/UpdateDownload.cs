@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Http;
@@ -154,7 +155,15 @@ public sealed record UpdateDownloadPolicy(long ChunkSize, int Attempts, TimeSpan
 ///    контрольных сумм (сумму которого взять неоткуда — это законный случай, а не дыра).
 ///    Такой файл тоже кладётся на рабочий путь только целиком;
 /// 4. временных хвостов (<c>*.part*</c>) рядом с рабочим путём после ответа не остаётся —
-///    ни при удаче, ни при неудаче.
+///    ни при удаче, ни при неудаче. **Одно названное исключение:** когда у загрузчика есть
+///    каталог состояния (<see cref="HttpUpdateDownload"/> получает его в <c>state\update\</c>),
+///    обрыв СВЯЗИ оставляет куски и запись о загрузке — это и есть докачка: следующий заход
+///    продолжит с принятого байта. Отказ HTTP, «длина не названа» и несошедшаяся сумма сносят
+///    всё и в этом случае: продолжать нечем;
+/// 5. состояние незаконченной загрузки (адрес, ожидаемая сумма, длина, размер куска и принятые
+///    байты) живёт ФАЙЛОМ в каталоге состояния и переживает перезапуск панели; попытки
+///    дописываются в журнал рядом. Обе вещи — только у загрузчика с каталогом состояния:
+///    подстановки проверок его не получают и живут прежним правилом.
 /// </summary>
 public interface IUpdateDownload
 {
@@ -202,6 +211,16 @@ public interface IUpdateDownload
 ///
 ///    Отсюда и правило: **число потоков не «настраивается», а закреплено замером** — поток один.
 ///
+/// **5. Продолжение — с БАЙТА, а не с начала куска** (2.4.0, DEF-035). Принятое оборванным
+/// ответом остаётся в куске, повтор спрашивает `Range: bytes=<куда дошло>-`. Раньше повтор шёл
+/// с начала куска: на 8 МиБ это до 8 МиБ заново, и именно так выглядели «3–5 минут на 8 МиБ».
+///
+/// **6. Загрузка переживает перезапуск панели.** Если загрузчику назван каталог состояния
+/// (<c>state\update\</c>), рядом с кусками лежит запись о загрузке — адрес, сумма, длина, размер
+/// куска и принятые байты. Следующий запуск читает её и продолжает, а не начинает сорок
+/// мегабайт заново. Запись сверяется с файлом ЦЕЛИКОМ: не сошлось — куски сносятся, потому что
+/// склейка двух выпусков хуже повторной загрузки.
+///
 /// ⚠️ Отказ HTTP называется технически («HTTP 404»), а не фразой для человека: фразу берёт
 /// на себя строка по ключу отказа (<see cref="UpdateRefusals.Key"/>), и второго набора подписей
 /// здесь быть не должно.
@@ -233,8 +252,20 @@ public sealed class HttpUpdateDownload : IUpdateDownload
 
     private readonly HttpClient _http;
 
-    public HttpUpdateDownload(HttpClient? http = null) =>
+    /// <summary>Каталог состояния (<c>state\update\</c>) или пусто: без него продолжения нет.</summary>
+    private readonly string? _stateDir;
+
+    /// <param name="http">HTTP-клиент: проверки подставляют свой, панель берёт свой с таймаутом на кусок.</param>
+    /// <param name="stateDir">
+    /// Каталог состояния для записи о незаконченной загрузке и журнала попыток. Пусто — загрузка
+    /// без продолжения и без журнала: так ходят подстановки проверок (им файл состояния не нужен)
+    /// и мелкие вложения, которые незачем продолжать.
+    /// </param>
+    public HttpUpdateDownload(HttpClient? http = null, string? stateDir = null)
+    {
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
+        _stateDir = string.IsNullOrWhiteSpace(stateDir) ? null : stateDir;
+    }
 
     public UpdateDownloadResult Save(
         string url,
@@ -249,122 +280,116 @@ public sealed class HttpUpdateDownload : IUpdateDownload
         var plan = policy ?? UpdateDownloadPolicy.Default;
         var wanted = (expectedSum ?? string.Empty).Trim();
 
-        // Следов прошлой попытки быть не должно: иначе «сборка» могла бы склеить кусок от
-        // прошлого запуска панели с куском от нынешнего, и сумма сошлась бы на смеси двух файлов.
-        CleanupParts(path);
+        // --- СОСТОЯНИЕ ПРОШЛОЙ ПОПЫТКИ: ЧИТАЕТСЯ ДО ПЕРВОГО ЗАПРОСА --------------------------
+        //
+        // ⚠️ До первого запроса, и это не порядок ради порядка: адрес, сумма и размер куска —
+        // часть ЛИЧНОСТИ файла. Не сверив их, панель приклеила бы кусок прошлого выпуска к
+        // нынешнему, и сумма сошлась бы на смеси двух файлов — то есть объявила бы удачей то,
+        // чего никто не скачивал.
+        var state = LoadState(url, path, wanted, plan.Size);
+        var resume = state is null ? null : ResumeFrom(path, state, plan.Size);
 
-        // --- ПЕРВЫЙ ЗАПРОС: он же и нулевой кусок ---------------------------------------------
+        if (resume is null)
+        {
+            // Следов прошлой попытки быть не должно: иначе «сборка» могла бы склеить кусок от
+            // прошлого запуска панели с куском от нынешнего.
+            Forget(path);
+        }
+
+        var done = resume?.Done ?? Array.Empty<long>();
+        var resumedFrom = resume?.From ?? 0L;
+        var total = resume?.Total ?? -1L; // -1 — «сколько всего, скажет сервер»
+        var attempts = state?.Attempts ?? 0;
+
+        HttpResponseMessage? first = null;
+        var ranged = true;
+        var firstFrom = 0L;
+
+        // --- ПЕРВЫЙ ЗАПРОС: он же и данные с места продолжения --------------------------------
         //
         // ⚠️ ОДИН ЗАПРОС, А НЕ ДВА, и это не мелочь: запрос «а есть ли куски» отдельным обращением
         // без `Range` отдаёт ЦЕЛЫЙ файл — на нашем выпуске (43 855 793 Б) это 43 МБ трафика,
-        // выброшенных в мусор, то есть загрузка ровно вдвое дольше. Здесь `Range: bytes=0-`
-        // спрашивается сразу, и ЭТОТ ЖЕ ответ уходит в нулевой кусок: ответ 206 и есть «куски есть».
+        // выброшенных в мусор, то есть загрузка ровно вдвое дольше. Здесь `Range: bytes=<откуда>-`
+        // спрашивается сразу, и ЭТОТ ЖЕ ответ уходит в первый нужный кусок: ответ 206 и есть
+        // «куски есть».
         //
-        // ⚠️ ОТВЕТ 200 И ОТВЕТ 206 СЧИТАЮТ ДЛИНУ ПО-РАЗНОМУ, и на этом панель уже спотыкалась
-        // (замерено 10.10.2026 своей петлёй, разбор — в `docs\HISTORY.md`): у 206 в
-        // `Content-Length` лежит длина КУСКА, а у 200 — длина ВСЕГО, ЧТО СЕРВЕР СОБИРАЕТСЯ ОТДАТЬ
-        // (сервер вправе ответить на запрос куска целым файлом и назвать его длину). Принять 200
-        // за 206 значит решить, что файл кончается там, где кончается ответ, — и записать в рабочий
-        // путь обрезок, который сумма потом назовёт «не тем файлом».
-        //
-        // Сервер, ответивший 200, кусков не поддерживает: берём файл одним ответом, без `Range`.
-        // Следующая тонкость ЗАМЕРЕНА: сервер ОБЯЗАН на `bytes=0-` вернуть либо хоть один байт,
-        // либо 416, поэтому «файл пуст» и «сервер не умеет куски» неразличимы — оба кончаются
-        // одним запросом, а сумма всё равно считается с файла на диске.
-
-        long total;
-        var ranged = false;
-        var firstFrom = 0L;
-        HttpResponseMessage? first;
-
-        try
+        // ⚠️ Ответ нужен ТОЛЬКО если качать что-то осталось. Когда все куски уже на диске (панель
+        // закрылась между последним куском и сборкой), сеть не спрашивается вовсе: полноту
+        // докажет сумма, а не сервер.
+        if (resume is null || resumedFrom < total)
         {
-            first = _http.Send(Request(url, 0, range: true), HttpCompletionOption.ResponseHeadersRead);
+            firstFrom = resumedFrom;
 
-            if (!first.IsSuccessStatusCode)
+            var refusal = OpenFirst(url, firstFrom, out first, out total, out ranged);
+
+            if (refusal is not null)
             {
-                var status = Status(first);
-                first.Dispose();
-
-                return new UpdateDownloadResult(UpdateDownloadOutcome.HttpRefused, status);
+                // Отказ HTTP или «длина не названа»: продолжать нечем — куски прошлой попытки
+                // этому файлу больше не принадлежат.
+                Forget(path);
+                return refusal;
             }
 
-            // Длина нужна ОБЯЗАТЕЛЬНО, и это не придирка: без неё неизвестно, сколько кусков
-            // просить (и кончился ли файл вообще), а «прочитали до конца потока» и «файл дошёл
-            // целиком» — не одно и то же. Класть в рабочий путь то, чью полноту нечем доказать,
-            // панель не станет: недокачанный файл никогда не занимает место рабочего.
-            var declared = first.Content.Headers.ContentLength ?? -1;
-
-            if (declared < 0)
+            if (!ranged)
             {
-                var status = Status(first);
-                first.Dispose();
-
-                return new UpdateDownloadResult(UpdateDownloadOutcome.NoLength, status);
+                // Сервер кусков не поддерживает: продолжать нечем, файл берётся одним ответом.
+                Forget(path);
+                done = Array.Empty<long>();
+                resumedFrom = 0;
+                firstFrom = 0;
             }
-
-            if (first.StatusCode == HttpStatusCode.PartialContent)
+            else if (resume is not null && total != resume.Total)
             {
-                // 206: длина ЭТОГО ответа — длина КУСКА, а сколько всего в файле, говорит
-                // `Content-Range`. Нет его — сервер ответил «куском» неизвестно чего.
-                var whole = TotalOf(first);
+                // ⚠️ СЕРВЕР ОТДАЁТ ДРУГОЙ ФАЙЛ (другая длина): продолжать нечем. Прошлое
+                // состояние и куски сносятся, загрузка начинается с нуля — иначе на рабочем
+                // пути оказалась бы склейка двух разных выпусков.
+                first?.Dispose();
+                Forget(path);
+                done = Array.Empty<long>();
+                resumedFrom = 0;
+                firstFrom = 0;
 
-                if (whole < 0)
-                {
-                    var status = Status(first);
-                    first.Dispose();
+                refusal = OpenFirst(url, 0, out first, out total, out ranged);
 
-                    return new UpdateDownloadResult(UpdateDownloadOutcome.NoLength, status);
-                }
-
-                total = whole;
-                ranged = true;
-            }
-            else
-            {
-                // 200: кусков нет, ответ — целый файл, и он уже открыт. Но спрашивать его надо
-                // БЕЗ `Range`: неизвестно, как сервер понимает запрос куска, а «получи ровно
-                // весь файл» — единственное, о чём с таким сервером можно договориться.
-                first.Dispose();
-
-                first = _http.Send(Request(url, 0, range: false), HttpCompletionOption.ResponseHeadersRead);
-
-                if (!first.IsSuccessStatusCode)
-                {
-                    var status = Status(first);
-                    first.Dispose();
-
-                    return new UpdateDownloadResult(UpdateDownloadOutcome.HttpRefused, status);
-                }
-
-                total = first.Content.Headers.ContentLength ?? -1;
-
-                if (total < 0)
-                {
-                    var status = Status(first);
-                    first.Dispose();
-
-                    return new UpdateDownloadResult(UpdateDownloadOutcome.NoLength, status);
-                }
+                if (refusal is not null) return refusal;
+                if (!ranged) Forget(path);
             }
         }
-        catch (Exception error)
-        {
-            return new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error));
-        }
-
-        progress?.Invoke(0, total);
 
         // --- ГРАНИЦЫ КУСКОВ: подряд, без пропусков и наложений --------------------------------
 
         var ranges = new List<(long From, long To)>();
 
-        for (var from = firstFrom; from < total; from += plan.Size)
+        for (var from = 0L; from < total; from += plan.Size)
         {
             ranges.Add((from, Math.Min(from + plan.Size, total) - 1));
         }
 
-        var received = 0L;
+        // Сколько байт каждого куска уже есть. Правда о принятом берётся У ФАЙЛА куска, а не у
+        // записи: панель могла быть закрыта между записью байт и записью состояния, и запись
+        // в этом случае отстаёт на один оборванный ответ.
+        var have = new long[ranges.Count];
+
+        for (var index = 0; index < have.Length; index++)
+        {
+            var length = ranges[index].To - ranges[index].From + 1;
+            var known = index < done.Length ? done[index] : 0L;
+
+            have[index] = Math.Clamp(Math.Min(known, length), 0L, length);
+
+            var onDiskPart = PartLength(PartPath(path, index), length);
+            if (onDiskPart < have[index]) have[index] = onDiskPart;
+        }
+
+        var onDisk = 0L;
+
+        foreach (var bytes in have) onDisk += bytes;
+
+        progress?.Invoke(onDisk, total);
+
+        // Запись состояния кладётся на диск ДО первого байта: тогда панель, убитая посреди
+        // первого куска, оставит после себя не безымянный `part-0`, а названный файл.
+        SaveState();
 
         // --- ЗАГРУЗКА КУСКОВ, У КАЖДОГО СВОЙ СЧЁТЧИК ПОПЫТОК И СВОЯ ПАУЗА ---------------------
 
@@ -374,27 +399,63 @@ public sealed class HttpUpdateDownload : IUpdateDownload
             var want = to - from + 1;
             var part = PartPath(path, index);
 
+            // Кусок уже цел: ни запроса, ни записи в журнал — работы по нему нет.
+            if (have[index] >= want) continue;
+
             var refusal = new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted);
 
             for (var attempt = 1; attempt <= plan.Tries; attempt++)
             {
-                // Первый ответ уже открыт: он и есть первый кусок. Повтор после обрыва и все
-                // следующие куски спрашиваются своими запросами.
-                var ready = index == 0 && attempt == 1 ? first : null;
+                // Первый ответ уже открыт: он начинается ровно там, где кончилась прошлая
+                // попытка, и он же — данные этого куска. Все следующие куски и все повторы
+                // спрашиваются своими запросами.
+                var ready = first is not null && from + have[index] == firstFrom ? first : null;
 
-                refusal = Take(url, from, part, want, received, total, progress, ranged, ready);
+                if (ready is not null) first = null;
+
+                var clock = Stopwatch.StartNew();
+
+                var step = Take(
+                    url,
+                    from + have[index],
+                    part,
+                    want - have[index],
+                    onDisk,
+                    total,
+                    progress,
+                    ranged,
+                    ready,
+                    append: have[index] > 0);
+
+                clock.Stop();
+
+                attempts++;
+
+                Journal(index, attempt, from + have[index], want - have[index], step.Got, step.Result, clock.Elapsed);
+
+                refusal = step.Result;
 
                 if (refusal.Ok)
                 {
-                    received += want;
+                    have[index] = want;
+                    onDisk += step.Got;
+                    SaveState();
                     break;
+                }
+
+                if (step.Got > 0)
+                {
+                    // ⚠️ БАЙТОВОЕ ПРОДОЛЖЕНИЕ: принятое оборванным ответом остаётся В КУСКЕ, и
+                    // повтор спрашивает с него, а не с начала куска. На восьмимегабайтном куске
+                    // это до 8 МиБ, которые иначе качались бы заново (находка P5, 22.10.2026).
+                    have[index] += step.Got;
+                    onDisk += step.Got;
+                    SaveState();
                 }
 
                 // Отказ HTTP повторять нечем: сервер уже ответил, и второй запрос к тому же
                 // адресу даст тот же ответ. Повторы — для ОБРЫВА соединения.
                 if (refusal.Outcome == UpdateDownloadOutcome.HttpRefused) break;
-
-                TryDelete(part);
 
                 if (attempt < plan.Tries) Thread.Sleep(plan.Pause);
             }
@@ -405,7 +466,13 @@ public sealed class HttpUpdateDownload : IUpdateDownload
             // рабочего», и рабочий путь получает файл ТОЛЬКО собранным целиком.
             if (!refusal.Ok)
             {
-                CleanupParts(path);
+                // ⚠️ НЕДОКАЧАННОЕ ОСТАЁТСЯ ТОЛЬКО ТОГДА, КОГДА ЕСТЬ КУДА ЗАПИСАТЬ СОСТОЯНИЕ, и
+                // только при ОБРЫВЕ СВЯЗИ: это и есть докачка — следующий заход (или следующий
+                // запуск панели) продолжит с байта, а не начнёт сорок мегабайт заново.
+                // Отказ HTTP, «длина не названа» и чужая сумма означают, что продолжать нечем.
+                if (_stateDir is null || refusal.Outcome != UpdateDownloadOutcome.Interrupted)
+                    Forget(path);
+
                 return refusal;
             }
         }
@@ -427,7 +494,7 @@ public sealed class HttpUpdateDownload : IUpdateDownload
         }
         catch (Exception error)
         {
-            CleanupParts(path);
+            Forget(path);
             return new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error));
         }
 
@@ -443,7 +510,7 @@ public sealed class HttpUpdateDownload : IUpdateDownload
         if (wanted.Length > 0 && !string.Equals(wanted, actual, StringComparison.OrdinalIgnoreCase))
         {
             // Скачался не тот файл (или обрезок), и рабочего места он НЕ займёт.
-            CleanupParts(path);
+            Forget(path);
             return new UpdateDownloadResult(UpdateDownloadOutcome.SumMismatch, string.Empty, wanted, actual);
         }
 
@@ -455,44 +522,295 @@ public sealed class HttpUpdateDownload : IUpdateDownload
         }
         catch (Exception error)
         {
-            CleanupParts(path);
+            Forget(path);
             return new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error));
         }
 
+        // Загрузки больше нет — записи о ней тоже: иначе следующий запуск искал бы продолжение
+        // у файла, который давно на месте.
+        ClearState();
+
         progress?.Invoke(total, total);
         return UpdateDownloadResult.Done;
+
+        // --- ЗАПИСЬ СОСТОЯНИЯ И ЖУРНАЛА -----------------------------------------------------
+
+        void SaveState()
+        {
+            if (_stateDir is null) return;
+
+            var chunks = new List<UpdateDownloadChunk>(have.Length);
+
+            for (var index = 0; index < have.Length; index++)
+            {
+                chunks.Add(new UpdateDownloadChunk { Index = index, Done = have[index] });
+            }
+
+            UpdateDownloadStateFile.Write(_stateDir, new UpdateDownloadState
+            {
+                Url = url,
+                Path = path,
+                Total = total,
+                Sum = wanted,
+                ChunkSize = plan.Size,
+                Attempts = attempts,
+                Updated = UpdateDownloadState.Stamp(DateTimeOffset.UtcNow),
+                Chunks = chunks,
+            });
+        }
+
+        void Journal(int index, int attempt, long from, long want, long got, UpdateDownloadResult result, TimeSpan elapsed)
+        {
+            if (_stateDir is null) return;
+
+            UpdateDownloadStateFile.Append(
+                _stateDir,
+                UpdateDownloadAttemptLine.Of(DateTimeOffset.UtcNow, index, attempt, from, want, got, result, elapsed));
+
+            // Замер «8 МиБ за 30 с» пишется отдельной строкой — по нему и видно, что кусок
+            // такого размера не пришёл вовремя (DEF-035), а не «канал показался медленным».
+            if (got >= UpdateDownloadMeasure.Bytes)
+            {
+                UpdateDownloadStateFile.Append(_stateDir, UpdateDownloadMeasure.Line(got, elapsed));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Забыть всё, что относится к незаконченной загрузке: куски, сборку и запись состояния.
+    /// Рабочий путь не трогается — он занимается только целым файлом, прошедшим сумму.
+    /// </summary>
+    private void Forget(string path)
+    {
+        CleanupParts(path);
+        ClearState();
+    }
+
+    /// <summary>Забыть запись о незаконченной загрузке (куски убирает <see cref="CleanupParts"/>).</summary>
+    private void ClearState()
+    {
+        if (_stateDir is not null) UpdateDownloadStateFile.Clear(_stateDir);
+    }
+
+    /// <summary>
+    /// ЧТО МОЖНО ПРОДОЛЖИТЬ. Запись принимается, только если она про ЭТОТ файл: адрес, рабочий
+    /// путь, ожидаемая сумма и размер куска. Длину файла здесь сверить нельзя — её называет
+    /// сервер в ответе, поэтому она сверяется сразу после первого запроса. Ответ на «чужое
+    /// состояние» — «нет», а не «попробуем».
+    /// </summary>
+    private UpdateDownloadState? LoadState(string url, string path, string sum, long chunkSize)
+    {
+        if (_stateDir is null) return null;
+
+        var state = UpdateDownloadStateFile.Read(_stateDir);
+
+        return state is not null && state.SameFile(url, path, sum, chunkSize) ? state : null;
+    }
+
+    /// <summary>
+    /// ОТКУДА ПРОДОЛЖАТЬ: смещение и сколько байт каждого куска уже лежит на диске. Считаются
+    /// только куски, идущие ПОДРЯД с начала: дыра в середине означала бы, что файла нет, и
+    /// продолжать с неё нечем.
+    /// </summary>
+    private static ResumePoint ResumeFrom(string path, UpdateDownloadState state, long chunkSize)
+    {
+        var total = state.Total;
+        var count = (int)((total + chunkSize - 1) / chunkSize);
+        var done = new long[count];
+        var from = 0L;
+
+        for (var index = 0; index < count; index++)
+        {
+            var length = Math.Min(chunkSize, total - index * chunkSize);
+            var available = Math.Min(PartLength(PartPath(path, index), length), length);
+
+            done[index] = available;
+            from += available;
+
+            if (available < length) break;
+        }
+
+        return new ResumePoint(from, total, done);
+    }
+
+    /// <summary>
+    /// СКОЛЬКО БАЙТ КУСКА НА ДИСКЕ. Файл длиннее куска — испорченный: он сносится, а не
+    /// принимается «сколько влезет» (лишние байты сдвинули бы весь собранный файл).
+    /// </summary>
+    private static long PartLength(string part, long want)
+    {
+        try
+        {
+            if (!File.Exists(part)) return 0;
+
+            var length = new FileInfo(part).Length;
+
+            if (length > want)
+            {
+                TryDelete(part);
+                return 0;
+            }
+
+            return length;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// ПЕРВЫЙ ОТВЕТ СЕРВЕРА — один запрос вместо двух. Отвечает «отказ» (тогда <paramref name="first"/>
+    /// пуст) либо открытый ответ, общую длину файла и «умеет ли сервер куски».
+    ///
+    /// ⚠️ ОТВЕТ 200 И ОТВЕТ 206 СЧИТАЮТ ДЛИНУ ПО-РАЗНОМУ, и на этом панель уже спотыкалась
+    /// (замерено 10.10.2026 своей петлёй, разбор — в `docs\HISTORY.md`): у 206 в
+    /// `Content-Length` лежит длина КУСКА, а у 200 — длина ВСЕГО, ЧТО СЕРВЕР СОБИРАЕТСЯ ОТДАТЬ.
+    /// Принять 200 за 206 значит решить, что файл кончается там, где кончается ответ, — и записать
+    /// в рабочий путь обрезок, который сумма потом назовёт «не тем файлом».
+    ///
+    /// Сервер, ответивший 200, кусков не поддерживает: файл берётся одним ответом, без `Range`.
+    /// Следующая тонкость ЗАМЕРЕНА: сервер ОБЯЗАН на `bytes=0-` вернуть либо хоть один байт,
+    /// либо 416, поэтому «файл пуст» и «сервер не умеет куски» неразличимы — оба кончаются
+    /// одним запросом, а сумма всё равно считается с файла на диске.
+    /// </summary>
+    private UpdateDownloadResult? OpenFirst(
+        string url,
+        long from,
+        out HttpResponseMessage? first,
+        out long total,
+        out bool ranged)
+    {
+        first = null;
+        total = -1;
+        ranged = true;
+
+        try
+        {
+            var answer = _http.Send(Request(url, from, range: true), HttpCompletionOption.ResponseHeadersRead);
+
+            if (!answer.IsSuccessStatusCode)
+            {
+                var status = Status(answer);
+                answer.Dispose();
+
+                return new UpdateDownloadResult(UpdateDownloadOutcome.HttpRefused, status);
+            }
+
+            // Длина нужна ОБЯЗАТЕЛЬНО, и это не придирка: без неё неизвестно, сколько кусков
+            // просить (и кончился ли файл вообще), а «прочитали до конца потока» и «файл дошёл
+            // целиком» — не одно и то же. Класть в рабочий путь то, чью полноту нечем доказать,
+            // панель не станет: недокачанный файл никогда не занимает место рабочего.
+            var declared = answer.Content.Headers.ContentLength ?? -1;
+
+            if (declared < 0)
+            {
+                var status = Status(answer);
+                answer.Dispose();
+
+                return new UpdateDownloadResult(UpdateDownloadOutcome.NoLength, status);
+            }
+
+            if (answer.StatusCode == HttpStatusCode.PartialContent)
+            {
+                // 206: длина ЭТОГО ответа — длина КУСКА, а сколько всего в файле, говорит
+                // `Content-Range`. Нет его — сервер ответил «куском» неизвестно чего.
+                var whole = TotalOf(answer);
+
+                if (whole < 0)
+                {
+                    var status = Status(answer);
+                    answer.Dispose();
+
+                    return new UpdateDownloadResult(UpdateDownloadOutcome.NoLength, status);
+                }
+
+                first = answer;
+                total = whole;
+                ranged = true;
+
+                return null;
+            }
+
+            // 200: кусков нет, ответ — целый файл. Спрашивать надо БЕЗ `Range`: неизвестно, как
+            // сервер понимает запрос куска, а «получи ровно весь файл» — единственное, о чём
+            // с таким сервером можно договориться.
+            answer.Dispose();
+
+            var wholeFile = _http.Send(Request(url, 0, range: false), HttpCompletionOption.ResponseHeadersRead);
+
+            if (!wholeFile.IsSuccessStatusCode)
+            {
+                var status = Status(wholeFile);
+                wholeFile.Dispose();
+
+                return new UpdateDownloadResult(UpdateDownloadOutcome.HttpRefused, status);
+            }
+
+            var length = wholeFile.Content.Headers.ContentLength ?? -1;
+
+            if (length < 0)
+            {
+                var status = Status(wholeFile);
+                wholeFile.Dispose();
+
+                return new UpdateDownloadResult(UpdateDownloadOutcome.NoLength, status);
+            }
+
+            first = wholeFile;
+            total = length;
+            ranged = false;
+
+            return null;
+        }
+        catch (Exception error)
+        {
+            first?.Dispose();
+            first = null;
+
+            return new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error));
+        }
     }
 
     /// <summary>
     /// ОДИН КУСОК: запрос (или уже открытый ответ первого запроса), чтение потока и запись
-    /// во временный файл этого куска. Возвращает «получилось» либо ПРИЧИНУ; исключение наружу
-    /// не летит — обрыв соединения обязан быть замером (типом ответа), а не исключением,
-    /// которое кто-то не поймал.
+    /// во временный файл этого куска. Возвращает «получилось» либо ПРИЧИНУ и — ВСЕГДА —
+    /// сколько байт принято этой попыткой: по этому числу повтор спрашивает с места обрыва,
+    /// а не с начала куска. Исключение наружу не летит — обрыв соединения обязан быть замером
+    /// (типом ответа), а не исключением, которое кто-то не поймал.
     /// </summary>
-    private UpdateDownloadResult Take(
+    private (UpdateDownloadResult Result, long Got) Take(
         string url,
         long from,
         string part,
         long want,
-        long received,
+        long onDisk,
         long total,
         Action<long, long>? progress,
         bool ranged,
-        HttpResponseMessage? ready = null)
+        HttpResponseMessage? ready,
+        bool append)
     {
+        var got = 0L;
+
         try
         {
             using var answer = ready ?? _http.Send(
                 Request(url, from, ranged), HttpCompletionOption.ResponseHeadersRead);
 
             if (!answer.IsSuccessStatusCode)
-                return new UpdateDownloadResult(UpdateDownloadOutcome.HttpRefused, Status(answer));
+                return (new UpdateDownloadResult(UpdateDownloadOutcome.HttpRefused, Status(answer)), 0);
 
             using var source = answer.Content.ReadAsStream();
-            using var target = File.Create(part);
+
+            // ⚠️ ДОПИСЫВАЕМ, А НЕ ПЕРЕЗАПИСЫВАЕМ: принятое оборванным ответом остаётся в куске.
+            // Иначе каждый повтор снова качал бы кусок с его начала — именно так 8 МиБ
+            // превращались в три минуты (DEF-035).
+            using var target = append
+                ? new FileStream(part, FileMode.Append, FileAccess.Write, FileShare.None)
+                : File.Create(part);
 
             var buffer = new byte[81920];
-            long got = 0;
 
             // ⚠️ ЧИТАЕМ ДО КОНЦА КУСКА, А НЕ «ОДНИМ ЧТЕНИЕМ». `Stream.Read` ВПРАВЕ вернуть
             // меньше запрошенного: так выглядит и оборванное соединение, и медленный канал,
@@ -509,7 +827,7 @@ public sealed class HttpUpdateDownload : IUpdateDownload
                 target.Write(buffer, 0, read);
                 got += read;
 
-                progress?.Invoke(received + got, total);
+                progress?.Invoke(onDisk + got, total);
             }
 
             // НЕДОБОР — ЭТО ОБРЫВ: соединение, оборванное на середине ответа, выглядит именно
@@ -517,18 +835,23 @@ public sealed class HttpUpdateDownload : IUpdateDownload
             // из обрезков файл с чужой суммой.
             if (got != want)
             {
-                return new UpdateDownloadResult(
-                    UpdateDownloadOutcome.Interrupted,
-                    string.Format(CultureInfo.InvariantCulture, "read {0} of {1}", got, want));
+                return (
+                    new UpdateDownloadResult(
+                        UpdateDownloadOutcome.Interrupted,
+                        string.Format(CultureInfo.InvariantCulture, "read {0} of {1}", got, want)),
+                    got);
             }
 
-            return UpdateDownloadResult.Done;
+            return (UpdateDownloadResult.Done, got);
         }
         catch (Exception error)
         {
-            return new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error));
+            return (new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error)), got);
         }
     }
+
+    /// <summary>Докуда дошла прошлая попытка: смещение продолжения, длина файла и куски по номерам.</summary>
+    private sealed record ResumePoint(long From, long Total, long[] Done);
 
     /// <summary>
     /// Запрос файла или куска: <c>Range: bytes=&lt;с&gt;-</c>, когда <paramref name="range"/>.

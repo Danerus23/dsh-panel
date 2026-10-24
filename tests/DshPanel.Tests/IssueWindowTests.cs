@@ -1,6 +1,7 @@
 using System;
 using Avalonia.Headless.XUnit;
 using DshPanel.Issue;
+using DshPanel.Shell;
 using DshPanel.Tests;
 using DshPanel.Views;
 using Xunit;
@@ -124,28 +125,6 @@ public class IssueWindowTests
         var window = new IssueWindow();
 
         Assert.Contains("не удалось узнать", window.PreviewLine, StringComparison.Ordinal);
-        Assert.Contains(AboutWindow.PanelVersion, window.PreviewLine, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// ДВЕРЬ В «О ПРОГРАММЕ» ПОКАЗЫВАЕТСЯ ТОЛЬКО ТОГДА, КОГДА ЕСТЬ КУДА ИДТИ. Кнопка в никуда
-    /// хуже отсутствующей: человек нажал бы и не понял, почему ничего не произошло.
-    /// </summary>
-    [AvaloniaFact]
-    public void Блок_о_проблеме_виден_только_с_дверью()
-    {
-        var window = new AboutWindow();
-
-        // Двери нет — блока нет.
-        window.AttachIssueDoor(null);
-        window.Render();
-        Assert.False(AboutWindow.ShowIssueBlock(false));
-
-        // Дверь есть — блок есть, и нажатие зовёт ровно её.
-        var called = 0;
-        window.AttachIssueDoor(() => called++);
-        window.Render();
-        Assert.True(AboutWindow.ShowIssueBlock(true));
-        Assert.Equal(0, called);
+        Assert.Contains(AboutInfo.PanelVersion, window.PreviewLine, StringComparison.Ordinal);
     }
 }

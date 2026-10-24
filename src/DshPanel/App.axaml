@@ -89,12 +89,31 @@
     </Style>
 
     <!--
-      ВЫБРАННАЯ СТРОКА СПИСКА видна не только подсветкой каркаса: у неё ещё и полужирная подпись.
-      Это нужно списку разделов настроек — по одной подсветке человек понимает, чей содержимое
-      справа, — и работает тем же правилом у любого списка панели.
+      ВЫБРАННАЯ СТРОКА СПИСКА видна ДВУМЯ знаками: подложкой и полужирной подписью.
+      Это нужно списку разделов настроек — по одной подсветке человек понимает, чьё содержимое
+      справа, — и работает тем же правилом у любого списка панели (история цен).
+
+      ⚠️ **Почему здесь теперь ЧЕРНИЛА (DEF-047, 2.4.0).** Подложка выбранной строки была кистью
+      `SystemControlBackgroundChromeMediumLowBrush` — той же, что фон списка: кадр p8 дал
+      контраст **1,00:1**, то есть выбор держался ОДНОЙ полужирной подписью, а это провал
+      WCAG 1.4.11 (состояние органа — 3:1). Новая подложка (`PanelLook.SelectionFill`) набрана
+      тёмнее/светлее ровно настолько, чтобы пройти пол 3:1 в ОБЕИХ темах, и под неё подобраны
+      чернила (`PanelLook.SelectionInk`) — белые на тёмной подложке светлой темы, чёрные на
+      светлой подложке тёмной. Числа и замер — `PanelLookTests`/`SelectionAndTodayTests`.
     -->
     <Style Selector="ListBoxItem:selected">
       <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{DynamicResource PanelSelectionInk}" />
+    </Style>
+
+    <!-- Чернила выбранной строки — и подписи, и значку: в строке раздела значок и текст стоят
+         соседями, и «половина строки белая, половина чёрная» читалась бы как две строки. -->
+    <Style Selector="ListBoxItem:selected TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource PanelSelectionInk}" />
+    </Style>
+
+    <Style Selector="ListBoxItem:selected PathIcon">
+      <Setter Property="Foreground" Value="{DynamicResource PanelSelectionInk}" />
     </Style>
 
     <!--
@@ -117,9 +136,15 @@
 
     <!-- Подложка выбранной строки. Сток стоит ПОСЛЕ FluentTheme (и после его состояния
          `:selected`) — иначе подсветка каркаса перебивала бы её: правила одного свойства
-         применяются по порядку объявления. -->
+         применяются по порядку объявления.
+
+         ⚠️ Кисть — `PanelSelectionFill`, а НЕ каркасная `SystemControlBackgroundChromeMediumLowBrush`
+         (DEF-047): та совпадала с фоном списка (1,00:1). Своё число заведено в `PanelLook`
+         с замером в обеих темах — «кисть из темы» здесь означает «набрана под тему и проверена
+         числами», а не «взята у каркаса любой ценой»: акцентная кисть каркаса `#0078D7` с белыми
+         чернилами даёт 4,499:1 на тексте и пол 4,5 не проходит (замер — `PanelLook.SelectionFill`). -->
     <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}" />
+      <Setter Property="Background" Value="{DynamicResource PanelSelectionFill}" />
       <Setter Property="CornerRadius" Value="4" />
     </Style>
 

@@ -103,10 +103,29 @@ public sealed class PanelWindow : IDisposable
         if (_window.WindowState == WindowState.Minimized) _window.WindowState = WindowState.Normal;
 
         _window.Activate();
+        Shown?.Invoke();
         return true;
     }
 
     public void Hide() => _window.Hide();
+
+    /// <summary>
+    /// ПАНЕЛЬ СПРЯТАЛАСЬ В ТРЕЙ — зовётся ПОСЛЕ <c>Hide()</c> и только в этом случае.
+    ///
+    /// Зачем событие, а не прямой вызов из связки: «уйти в трей» у панели одно место —
+    /// <see cref="OnClosing"/> (крестик, Esc-дверь, щелчок по значку), и второго места, где
+    /// окно исчезает, быть не должно. Связка вешает сюда прятание спутников (вариант 2 нормы
+    /// `95-windows.md` §3.2: владельца нет, и «спрятать вместе» пишем сами).
+    /// </summary>
+    public Action? Hidden { get; set; }
+
+    /// <summary>
+    /// ПАНЕЛЬ ПОКАЗАЛАСЬ (щелчок по значку, кнопка первого запуска) — зовётся ПОСЛЕ <c>Show()</c>.
+    /// Сюда связка вешает возврат спутников, спрятанных вместе с панелью: так ведёт себя система
+    /// с owned-окнами (`О-6`: «when an owner window is restored, the system automatically shows
+    /// the associated owned windows»), и то же поведение человек ждёт от нас.
+    /// </summary>
+    public Action? Shown { get; set; }
 
     /// <summary>
     /// Закрыть окно так, как это делает крестик: событие <c>Closing</c> проходит обычный путь
@@ -140,6 +159,11 @@ public sealed class PanelWindow : IDisposable
         e.Cancel = true;
         _window.Hide();
         _log(PanelStrings.WindowHiddenLog);
+
+        // ⚠️ СПУТНИКИ ПРЯЧУТСЯ ВМЕСТЕ С ПАНЕЛЬЮ — ПОСЛЕ прятания, не до: если спрятать их раньше,
+        // отмена закрытия панели (или отказ в нём) оставила бы человека без окон, которые он
+        // не закрывал. Владельца у них нет (вариант 2), и система этого не сделает сама.
+        Hidden?.Invoke();
     }
 
     public void Dispose() => _window.Closing -= OnClosing;

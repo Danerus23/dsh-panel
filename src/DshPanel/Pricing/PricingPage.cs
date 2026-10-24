@@ -43,6 +43,26 @@ public static class PricingPage
     /// <summary>Подпись строки-единицы: «1M INPUT TOKENS …», «百万tokens输入…». Её и печатает страница.</summary>
     private static readonly Regex TokensLabel = new("tokens", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    /// <summary>
+    /// ЗАГОЛОВОК ДОКУМЕНТА — и только он. По нему отличается страница цен от КОРНЕВОЙ страницы
+    /// сайта («оболочки»): в теле обеих страниц есть одни и те же ссылки навигации, поэтому поиск
+    /// по всему HTML («Your First API Call» встречается и на настоящей странице цен в боковом
+    /// меню) ошибся бы в обе стороны (DEF-056, замер 24.10.2026).
+    /// </summary>
+    private static readonly Regex TitleTag = new(
+        @"<title[^>]*>(?<title>.*?)</title>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Примета КОРНЕВОЙ страницы сайта: её заголовок. Именно её сайт отдаёт на адрес цен БЕЗ
+    /// завершающего слеша — HTTP 200, «Your First API Call», таблицы цен нет (DEF-056).
+    /// </summary>
+    private static readonly Regex ShellTitle = new(
+        @"Your First API Call|你的第一个\s*API\s*调用", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>Заголовки страницы цен — по ним видно, что документ тот самый (EN и ZH).</summary>
+    private static readonly Regex PricingTitle = new(
+        @"Models\s*&amp;\s*Pricing|模型\s*&amp;\s*价格", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     /// <summary>Пара часов «01:00 - 04:00» и родственные тире страницы.</summary>
     private static readonly Regex ClockSpan = new(
         @"(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})", RegexOptions.CultureInvariant);
@@ -58,14 +78,33 @@ public static class PricingPage
     };
 
     /// <summary>
-    /// Разобрать страницу цен. Язык нужен ровно для одного — какой знак валюты поставить перед
-    /// числом; само число берётся СО СТРАНИЦЫ и не пересчитывается.
+    /// Разобрать страницу цен. Язык нужен для одного — какой знак валюты поставить перед числом
+    /// (само число берётся СО СТРАНИЦЫ и не пересчитывается); <paramref name="model"/> — ИМЯ МОДЕЛИ
+    /// ИЗ ПРОФИЛЯ АГЕНТА, чьи цены панель показывает (DEF-056).
+    ///
+    /// **Порядок ответов и почему он такой:**
+    /// 1. пусто — «страница цен пуста»;
+    /// 2. **корневая страница сайта («оболочка»)** — СВОИМИ словами: «сайт отдал общую страницу
+    ///    вместо страницы цен» (`PricePageShell`). Это не «таблицы не нашлось»: таблицы нет потому,
+    ///    что пришёл другой документ, и причину человеку надо назвать именно эту (DEF-056);
+    /// 3. таблицы нет вовсе — «на странице цен не нашлось таблицы с ценами»;
+    /// 4. **модели из профиля на странице нет** — «на странице нет модели X, цены других моделей
+    ///    панель не подставляет». Молча взять первую колонку значило бы показать чужие цены;
+    /// 5. иначе — цены ТОЙ колонки, чья модель названа в профиле.
     /// </summary>
-    public static PricingResult Parse(string html, string language, string url, DateTimeOffset now)
+    public static PricingResult Parse(
+        string html, string language, string url, string model, DateTimeOffset now)
     {
         if (string.IsNullOrWhiteSpace(html))
         {
             return PricingResult.Failed(PanelStrings.PricePageEmpty, url, language, now);
+        }
+
+        // ОБОЛОЧКА — ОТДЕЛЬНЫЙ ОТВЕТ, А НЕ «ТАБЛИЦЫ НЕ НАШЛОСЬ» (DEF-056). Примета — заголовок
+        // документа, а не текст в теле: ссылки навигации одинаковы на обеих страницах.
+        if (IsShellPage(html))
+        {
+            return PricingResult.Failed(PanelStrings.PricePageShell, url, language, now);
         }
 
         var table = Regex.Match(html, @"<table.*?</table>", RegexOptions.Singleline | RegexOptions.IgnoreCase);
@@ -75,7 +114,19 @@ public static class PricingPage
         }
 
         var rows = Rows(table.Value);
-        var prices = PriceRows(rows, language);
+        var models = Models(rows);
+        var column = ModelColumn(models, model);
+
+        if (column < 0)
+        {
+            // ЧУЖИЕ ЦЕНЫ НЕ ПОДСТАВЛЯЮТСЯ: имени модели нет среди колонок страницы — это ответ
+            // словами, а не «возьмём первую».
+            return PricingResult.Failed(
+                string.Format(CultureInfo.CurrentCulture, PanelStrings.PriceModelMissingFormat, model),
+                url, language, now);
+        }
+
+        var prices = PriceRows(rows, language, column);
 
         if (prices.Count == 0)
         {
@@ -87,25 +138,61 @@ public static class PricingPage
             Error: string.Empty,
             SourceUrl: url,
             Language: language,
-            Model: FirstModel(rows),
+            Model: models.Count > column ? models[column] : Clean(model),
             Rows: prices,
             Windows: Windows(html),
             CheckedAt: now);
     }
 
     /// <summary>
-    /// Название модели, для которой напечатаны цены. Страница объявляет НЕСКОЛЬКО моделей, и панель
-    /// не вправе выбирать между ними молча: цены показываются по ПЕРВОЙ колонке (она же первая
-    /// в шапке «MODEL»), а её имя стоит рядом с ценами словами.
+    /// ЭТО КОРНЕВАЯ СТРАНИЦА САЙТА, А НЕ СТРАНИЦА ЦЕН (DEF-056). Смотрим ТОЛЬКО заголовок
+    /// документа: «Your First API Call» / «你的第一个 API 调用» — так называется корень сайта,
+    /// и именно его сайт отдаёт на адрес цен БЕЗ завершающего слеша (замер 24.10.2026: HTTP 200,
+    /// 49 316 байт, таблицы цен нет).
+    ///
+    /// ⚠️ Искать эту фразу по всему HTML нельзя: на настоящей странице цен она стоит в боковом
+    /// меню (2 совпадения на живой странице), и проверка объявила бы оболочкой НАСТОЯЩУЮ страницу.
     /// </summary>
-    public static string FirstModel(IReadOnlyList<List<string>> rows)
+    public static bool IsShellPage(string html)
     {
+        var title = TitleTag.Match(html ?? string.Empty);
+
+        return title.Success && ShellTitle.IsMatch(WebUtility.HtmlDecode(title.Groups["title"].Value));
+    }
+
+    /// <summary>
+    /// ЭТО СТРАНИЦА ЦЕН — по её собственному заголовку (EN «Models &amp; Pricing», ZH «模型 &amp; 价格»).
+    /// Отдельно от <see cref="IsShellPage"/>: проверка «документ тот самый» и проверка «пришла
+    /// оболочка» — разные ответы, и второй обязан быть назван словами.
+    /// </summary>
+    public static bool LooksLikePricingPage(string html)
+    {
+        var title = TitleTag.Match(html ?? string.Empty);
+
+        return title.Success && PricingTitle.IsMatch(title.Groups["title"].Value);
+    }
+
+    /// <summary>
+    /// НАЗВАНИЯ МОДЕЛЕЙ ИЗ ШАПКИ ТАБЛИЦЫ — в порядке колонок. Страница цен объявляет их строкой
+    /// «MODEL · deepseek-flash · deepseek-v4-pro» (в китайской — «模型»), и по этому порядку цены
+    /// в каждой строке идут колонками (DEF-056).
+    ///
+    /// Шапка узнаётся по ПЕРВОЙ ячейке, равной «MODEL»/«模型» ЦЕЛИКОМ: строка «MODEL VERSION»
+    /// («模型版本») содержит то же слово, но моделью не является.
+    /// </summary>
+    public static IReadOnlyList<string> Models(IReadOnlyList<List<string>> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+
         foreach (var row in rows)
         {
-            if (!row.Any(cell => cell.Equals("MODEL", StringComparison.OrdinalIgnoreCase) || cell.Contains("模型")))
-            {
-                continue;
-            }
+            if (row.Count == 0) continue;
+
+            var head = Clean(row[0]);
+
+            if (!head.Equals("MODEL", StringComparison.OrdinalIgnoreCase) && head != "模型") continue;
+
+            var models = new List<string>();
 
             foreach (var cell in row.Skip(1))
             {
@@ -113,11 +200,46 @@ public static class PricingPage
                 if (cleaned.Length == 0) continue;
                 if (cleaned.StartsWith("BASE URL", StringComparison.OrdinalIgnoreCase)) continue;
 
-                return cleaned;
+                models.Add(cleaned);
             }
+
+            return models;
         }
 
-        return string.Empty;
+        return Array.Empty<string>();
+    }
+
+    /// <summary>
+    /// НОМЕР КОЛОНКИ МОДЕЛИ по имени из профиля агента. <c>-1</c> — такой модели на странице нет
+    /// (цены других моделей не подставляются).
+    ///
+    /// Пустое имя допустимо ТОЛЬКО для страницы с одной моделью: тогда колонка одна и гадать не о чем.
+    /// </summary>
+    public static int ModelColumn(IReadOnlyList<string> models, string? model)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+
+        var wanted = Clean(model ?? string.Empty);
+
+        if (wanted.Length == 0) return models.Count == 1 ? 0 : -1;
+
+        for (var index = 0; index < models.Count; index++)
+        {
+            if (string.Equals(models[index], wanted, StringComparison.OrdinalIgnoreCase)) return index;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Название ПЕРВОЙ модели страницы — оставлено как короткий ответ для отчётов.
+    /// Выбор модели для показа делает <see cref="ModelColumn"/> по профилю агента, а не «первая».
+    /// </summary>
+    public static string FirstModel(IReadOnlyList<List<string>> rows)
+    {
+        var models = Models(rows);
+
+        return models.Count > 0 ? models[0] : string.Empty;
     }
 
     /// <summary>
@@ -125,11 +247,16 @@ public static class PricingPage
     ///
     /// Единица «держится» до следующей: страница печатает её один раз на два ряда тарифа
     /// (в разметке это <c>rowspan</c>, а в разобранном виде — пустое место в первой ячейке).
-    /// Берётся ПЕРВАЯ цена строки — то есть цена первой модели, той самой, что названа в
-    /// <see cref="FirstModel"/>.
+    /// <paramref name="modelColumn"/> — номер колонки модели среди цен строки: цены в строке идут
+    /// по колонкам моделей в том же порядке, что и шапка (DEF-056).
+    ///
+    /// ⚠️ **Колонки нет — значит «нет значения», а не «цена соседа».** Строка, в которой цен
+    /// меньше, чем моделей, не даёт права взять чужую цену: в таблицу попадёт «—».
     /// </summary>
-    public static List<PriceRow> PriceRows(IReadOnlyList<List<string>> rows, string language)
+    public static List<PriceRow> PriceRows(IReadOnlyList<List<string>> rows, string language, int modelColumn)
     {
+        ArgumentNullException.ThrowIfNull(rows);
+
         var order = new List<string>();
         var offPeak = new Dictionary<string, string>(StringComparer.Ordinal);
         var peak = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -138,8 +265,8 @@ public static class PricingPage
 
         foreach (var row in rows)
         {
-            var value = row.Select(PriceValue).FirstOrDefault(candidate => candidate is not null);
-            if (value is null) continue;
+            var prices = row.Select(PriceValue).Where(candidate => candidate is not null).Select(candidate => candidate!).ToList();
+            if (prices.Count == 0) continue;
 
             var label = row.FirstOrDefault(cell => TokensLabel.IsMatch(cell));
             if (!string.IsNullOrWhiteSpace(label)) item = Clean(label);
@@ -147,7 +274,9 @@ public static class PricingPage
 
             if (!offPeak.ContainsKey(item) && !peak.ContainsKey(item)) order.Add(item);
 
-            var text = PricingDecisions.Currency(language) + value;
+            var value = modelColumn >= 0 && modelColumn < prices.Count ? prices[modelColumn] : null;
+            var text = value is null ? PanelStrings.PriceValueMissing : PricingDecisions.Currency(language) + value;
+
             var tiers = string.Join(" ", row);
 
             if (OffPeakTier.IsMatch(tiers)) offPeak[item] = text;

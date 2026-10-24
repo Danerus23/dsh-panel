@@ -275,14 +275,16 @@ public class ShotWiringTests
     /// (дата выпуска снова 27.09) · вернуть 28.09.2026 датой проверки в `ShotUpdateControl.For()`.
     /// </summary>
     [AvaloniaFact]
-    public void Кадр_обновления_называет_даты_выпуска_2_1_0()
+    public void Кадр_обновления_называет_даты_выпуска_2_4_0()
     {
-        var text = ShowAndRead(StartModes.ShotSettingsUpdate, "17.10.2026");
+        var text = ShowAndRead(StartModes.ShotSettingsUpdate, "24.10.2026");
 
-        Assert.Contains("17.10.2026", text, StringComparison.Ordinal);
-        Assert.Contains("18.10.2026", text, StringComparison.Ordinal);
+        // U16 (2.4.0): витрина называет СВОЙ выпуск — 2.4.0, дата 24.10.2026, проверка та же.
+        Assert.Contains("24.10.2026", text, StringComparison.Ordinal);
+        Assert.Contains("2.4.0", text, StringComparison.Ordinal);
         Assert.DoesNotContain("27.09.2026", text, StringComparison.Ordinal);
         Assert.DoesNotContain("28.09.2026", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("18.10.2026", text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -302,11 +304,12 @@ public class ShotWiringTests
     [AvaloniaFact]
     public void Кадр_пиков_показывает_цены_а_не_отказ_прогона()
     {
-        var text = ShowAndRead(StartModes.ShotPeaks, "$0.50");
+        var text = ShowAndRead(StartModes.ShotPeaks, "$0.3");
 
-        Assert.Contains("$0.25", text, StringComparison.Ordinal);
-        Assert.Contains("$0.50", text, StringComparison.Ordinal);
-        Assert.Contains("18.10.2026", text, StringComparison.Ordinal);
+        // U16 (2.4.0): числа — со страницы цен 24.10.2026 (deepseek-flash, фикстура pricing-en.html).
+        Assert.Contains("$0.15", text, StringComparison.Ordinal);
+        Assert.Contains("$0.3", text, StringComparison.Ordinal);
+        Assert.Contains("24.10.2026", text, StringComparison.Ordinal);
         Assert.DoesNotContain(PanelStrings.PriceLocked, text, StringComparison.Ordinal);
         Assert.DoesNotContain(PanelStrings.PriceNeverRead, text, StringComparison.Ordinal);
     }
@@ -408,13 +411,13 @@ public class ShotWiringTests
         (StartModes.ShotMainTwoServers, Array.Empty<string>()),
 
         // Кадры без образцовых данных: диалоги и окна, которым двери не нужны вовсе.
-        (StartModes.ShotAbout, Array.Empty<string>()),
         (StartModes.ShotIssue, Array.Empty<string>()),
         (StartModes.ShotPricingHistory, Array.Empty<string>()),
         (StartModes.ShotConfirmStop, Array.Empty<string>()),
         (StartModes.ShotConfirmEngine, Array.Empty<string>()),
         (StartModes.ShotBackupStop, Array.Empty<string>()),
         (StartModes.ShotUnsavedChanges, Array.Empty<string>()),
+        (StartModes.ShotBackupClose, Array.Empty<string>()),
         (StartModes.ShotFirstRun, new[] { "first-run" }),
 
         // Кадры с образцовыми данными (у окна первого запуска своя дверь фактов — это она).
@@ -430,7 +433,7 @@ public class ShotWiringTests
         (StartModes.ShotSettingsBalance, AllSettingsDoors()),
         (StartModes.ShotSettingsUpdate, AllSettingsDoors()),
         (StartModes.ShotSettingsServer, AllSettingsDoors()),
-        (StartModes.ShotSettingsPhone, AllSettingsDoors()),
+        (StartModes.ShotSettingsPhone, AllSettingsDoors()),        (StartModes.ShotSettingsAbout, AllSettingsDoors()),
     };
 
     /// <summary>Двери окна настроек: три довода сборки и две, поставленные после вязки.</summary>

@@ -75,11 +75,15 @@ public class ModeTests
         // 28-й — `--phone-selftest` (этап F1.e): самотест КАЛИТКИ ТЕЛЕФОНА в изоляции — слушатель
         // на своём свободном порту, сопряжение по коду, белый список, рубильник и ЖИВОЕ рукопожатие
         // мультиплексора (кадр `ready` с настоящим `clientId`). Без изоляции отказывается сам.
-        Assert.Equal(28, StartModes.Known.Length);
+        // 29-й — `--windows-selftest` (u14, 2.4.0): ЖИВАЯ проба владения окнами — кнопка панели
+        // задач числом, z-порядок «спутник поверх панели», свернуть/вернуть. Без неё ключ был бы
+        // отвергнут как опечатка, и живую пробу нельзя было бы запустить вовсе.
+        Assert.Equal(29, StartModes.Known.Length);
 
         foreach (var key in new[]
                  {
-                     "--shot", "--tray-selftest", "--shell-selftest", "--instance-selftest",
+                     "--shot", "--tray-selftest", "--shell-selftest", "--windows-selftest",
+                     "--instance-selftest",
                      "--autostart-selftest", "--settings-selftest", "--balance-selftest",
                      "--server-selftest", "--backup-selftest", "--isolation-selftest",
                      "--lang-selftest",
@@ -231,7 +235,7 @@ public class ModeTests
             [StartModes.ShotSettingsServer] = "SettingsWindow.ServerSection",
             [StartModes.ShotSettingsPhone] = "SettingsWindow.PhoneSection",
             [StartModes.ShotBackup] = "new BackupWindow()",
-            [StartModes.ShotAbout] = "new AboutWindow()",
+            [StartModes.ShotSettingsAbout] = "SettingsWindow.AboutSection",
             [StartModes.ShotPeaks] = "new PeakWindow()",
             [StartModes.ShotPricingHistory] = "new PricingHistoryWindow()",
             [StartModes.ShotIssue] = "new IssueWindow()",
@@ -240,6 +244,7 @@ public class ModeTests
             [StartModes.ShotConfirmEngine] = "new ConfirmEngineWindow()",
             [StartModes.ShotBackupStop] = "new BackupStopWindow()",
             [StartModes.ShotUnsavedChanges] = "new UnsavedChangesWindow()",
+            [StartModes.ShotBackupClose] = "new BusyCloseWindow()",
             [StartModes.ShotFirstRun] = "new FirstRunWindow()",
         };
 
@@ -313,7 +318,7 @@ public class ModeTests
         "settings-server" => nameof(StartModes.ShotSettingsServer),
         "settings-phone" => nameof(StartModes.ShotSettingsPhone),
         "backup" => nameof(StartModes.ShotBackup),
-        "about" => nameof(StartModes.ShotAbout),
+        "settings-about" => nameof(StartModes.ShotSettingsAbout),
         "peaks" => nameof(StartModes.ShotPeaks),
         "pricing-history" => nameof(StartModes.ShotPricingHistory),
         "issue" => nameof(StartModes.ShotIssue),
@@ -322,6 +327,7 @@ public class ModeTests
         "confirm-engine" => nameof(StartModes.ShotConfirmEngine),
         "backup-stop" => nameof(StartModes.ShotBackupStop),
         "unsaved-changes" => nameof(StartModes.ShotUnsavedChanges),
+        "backup-close" => nameof(StartModes.ShotBackupClose),
         "first-run" => nameof(StartModes.ShotFirstRun),
         _ => null,
     };

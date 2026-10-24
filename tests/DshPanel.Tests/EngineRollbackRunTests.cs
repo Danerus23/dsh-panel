@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using DshPanel.Server;
+using DshPanel.Shell;
 using Xunit;
 
 namespace DshPanel.Tests;
@@ -143,7 +144,13 @@ public class EngineRollbackRunTests
 
         EngineRollbackRun.Run(Plan(), ownPort: 3081, stand.Doors(), log.Add);
 
-        var probeWord = log.FindIndex(line => line.Contains("проверяю живьём", StringComparison.OrdinalIgnoreCase));
+        // ⚠️ СЛОВА — ИЗ ПРОДУКТА, а не литералами: 2.4.0 переписала голос (DEF-040), и прежнее
+        // «проверяю живьём» стало «проверяет живьём». Литерал перестал быть правдой, ничего не
+        // сказав о том, что именно сломалось; берём устойчивое начало строки шага (до подстановки).
+        var probeStep = PanelStrings.EngineRollbackProbeFormat;
+        var probeHead = probeStep[..probeStep.IndexOf('{')].Trim();
+
+        var probeWord = log.FindIndex(line => line.Contains(probeHead, StringComparison.OrdinalIgnoreCase));
         var stopWord = log.FindIndex(line => line == EngineInstallPhrases.UpdateStopped());
         var recordWord = log.FindIndex(line => line.Contains("переписываю запись", StringComparison.OrdinalIgnoreCase));
         var done = log.Count - 1;

@@ -22,11 +22,25 @@ namespace DshPanel.Pricing;
 /// </summary>
 public static class PricingDecisions
 {
-    /// <summary>Страница цен по-английски — та же, что названа источником у агента.</summary>
-    public const string EnglishUrl = "https://api-docs.deepseek.com/quick_start/pricing";
+    /// <summary>
+    /// Страница цен по-английски — та же, что названа источником у агента.
+    ///
+    /// ⚠️ **ЗАВЕРШАЮЩИЙ СЛЕШ — ЧАСТЬ АДРЕСА, А НЕ ОФОРМЛЕНИЕ (DEF-056, 2.4.0).** Пока его не было,
+    /// сайт отвечал `200` и **корневой страницей** «Your First API Call» — без таблицы цен, и панель
+    /// говорила «цены прочитать не удалось» (журнал 24.10.2026 02:42). Снимается это НЕ редиректом
+    /// (его сайт не делает), а каноническим адресом со слешем + проверкой содержимого страницы
+    /// (`PricingPage.Parse` называет оболочку словами).
+    ///
+    /// Замер 24.10.2026: без слеша — **49 316 байт**, `<h1>Your First API Call</h1>`; со слешем —
+    /// **26 043 байта**, `<h1>Models &amp; Pricing</h1>` и таблица с ценами.
+    /// </summary>
+    public const string EnglishUrl = "https://api-docs.deepseek.com/quick_start/pricing/";
 
-    /// <summary>Страница цен по-китайски. Числа в ней ДРУГИЕ (юани), и это не перевод английских.</summary>
-    public const string ChineseUrl = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing";
+    /// <summary>
+    /// Страница цен по-китайски. Числа в ней ДРУГИЕ (юани), и это не перевод английских.
+    /// Слеш на конце — по той же причине, что у английской (DEF-056).
+    /// </summary>
+    public const string ChineseUrl = "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/";
 
     /// <summary>Язык, которому принадлежит китайская страница.</summary>
     public const string ChineseLanguage = "zh";

@@ -326,9 +326,6 @@ public class PanelRhythmTests
             var backups = new BackupWindow();
             backups.Attach(new BackupWindowStopFlowTests.StubBackups());
             windows.Add((backups, "копии"));
-
-            windows.Add((new AboutWindow(), "о программе"));
-
             var wrong = new List<string>();
             var total = 0;
 

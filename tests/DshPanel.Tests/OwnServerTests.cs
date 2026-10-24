@@ -550,7 +550,13 @@ public class OwnServerTests
         Assert.Equal(string.Empty, files.Entry);
         Assert.Equal(1, files.EntryClears);
 
-        Assert.Contains(log, line => line.Contains("гашу свой сервер по записи", StringComparison.Ordinal));
+        // ⚠️ Строка — ИЗ ПРОДУКТА, а не литералом: u13 переписала журнальный голос («гашу свой
+        // сервер по записи» → «гасится свой сервер по записи»), и прежний литерал перестал быть
+        // правдой, ничего не сказав о том, что именно сломалось. Берём устойчивое начало строки
+        // до подстановки: в журнале она стоит уже с номером и портом.
+        var ownStop = PanelStrings.SrvStoppingOwnByRecordLogFormat;
+        var ownStopHead = ownStop[..ownStop.IndexOf('{')].Trim();
+        Assert.Contains(log, line => line.Contains(ownStopHead, StringComparison.Ordinal));
         Assert.Contains(log, line => line.Contains("ссылка входа забыта", StringComparison.Ordinal));
     }
 

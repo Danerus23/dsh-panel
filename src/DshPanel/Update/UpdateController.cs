@@ -462,7 +462,15 @@ public sealed class UpdateController : IUpdateControl, IDisposable
                 {
                     var answer = task.IsCompletedSuccessfully
                         ? task.Result
-                        : UpdateRelease.Failed($"{task.Exception?.GetType().Name}", now);
+
+                        // Фоновая задача упала целиком (не сеть ответила отказом, а сама работа
+                        // не досчиталась): человеку — те же слова, что и у отказа сети, а след
+                        // исключения — в журнал (DEF-007: техстрока человеку не показывается).
+                        : UpdateRelease.Failed(PanelStrings.UpdateNetworkError, now) with
+                        {
+                            Technical = (task.Exception?.InnerException ?? task.Exception)?.GetType().Name
+                                        ?? nameof(System.Threading.Tasks.Task),
+                        };
 
                     // ПОПЫТКА ЗАПОМИНАЕТСЯ ВСЕГДА — и удачная, и нет: человек обязан видеть,
                     // что панель стучалась и чем это кончилось, а часы — знать про отступ.
@@ -476,7 +484,7 @@ public sealed class UpdateController : IUpdateControl, IDisposable
                     _log(string.Format(
                         CultureInfo.CurrentCulture,
                         PanelStrings.UpdateLogFormat,
-                        answer.Ok ? answer.Latest : answer.Error));
+                        FailureJournal(answer)));
 
                     // ОТКАЗ НЕ УНОСИТ ПРЕЖНИЙ ОТВЕТ: `Result` остаётся последним УДАЧНЫМ.
                     // Иначе отказ сети стирал бы и версию, и заметки, и окно выглядело бы
@@ -516,6 +524,26 @@ public sealed class UpdateController : IUpdateControl, IDisposable
 
     /// <summary>Заметки к выпуску на языке панели — те, что взяты при последней проверке.</summary>
     public string Notes => _checkedNotes;
+
+    /// <summary>
+    /// ЧТО ЖУРНАЛ ГОВОРИТ ОБ ОТКАЗЕ ПРОВЕРКИ: **человеку — слова, журналу — след** (DEF-007).
+    ///
+    /// У сетевого отказа есть техническая подробность (<see cref="UpdateRelease.Technical"/>):
+    /// именно она идёт в журнал отдельной строкой формата — по ней разбирают, что порвалось
+    /// (DNS, TLS, таймаут), тогда как человеку показано «нет связи» словами. У остальных отказов
+    /// (лимит запросов, битый JSON, HTTP-код) следа нет: в журнал идёт та же человеческая причина,
+    /// что и в окно, — другой у них нет.
+    /// </summary>
+    internal static string FailureJournal(UpdateRelease answer)
+    {
+        ArgumentNullException.ThrowIfNull(answer);
+
+        if (answer.Ok) return answer.Latest;
+        if (answer.Technical.Length == 0) return answer.Error;
+
+        return string.Format(
+            CultureInfo.CurrentCulture, PanelStrings.UpdateNetworkErrorLogFormat, answer.Technical);
+    }
 
     /// <summary>Язык панели — тот, чей блок заметок будет выбран.</summary>
     public string Language() => _language() ?? LanguageDecisions.English;

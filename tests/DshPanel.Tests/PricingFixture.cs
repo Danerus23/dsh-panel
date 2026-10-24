@@ -8,6 +8,9 @@
 //
 // ⚠️ Таблица вырезана из записи ЦЕЛИКОМ, без правок: обрезанная руками запись проверяла бы
 // разбор на тексте, которого на странице нет.
+using System;
+using System.IO;
+
 namespace DshPanel.Tests;
 
 internal static class PricingFixture
@@ -32,4 +35,42 @@ internal static class PricingFixture
     /// </summary>
     public const string ChinesePhrase =
         @"北京时间周一至周五（不含中国法定节假日） 9:00 - 12:00、14:00 - 18:00 为高峰时段";
+
+    // --- ЖИВЫЕ СТРАНИЦЫ ЦЕЛИКОМ (DEF-056, 24.10.2026) -------------------------
+    //
+    // ⚠️ **Почему файлами, а не константой в коде.** DEF-056 — про то, что сайт отдаёт РАЗНЫЕ
+    // документы на адрес со слешем и без; доказать это можно только ЦЕЛОЙ записанной страницей,
+    // а не вырезанной таблицей. Файлы лежат в `fixtures\` рядом с этой проверкой, опись —
+    // `fixtures\README.md`: адрес, код, размер, дата съёмки.
+    //
+    // ⚠️ **Сети в проверке нет:** файл читается с диска, а не скачивается.
+
+    /// <summary>Корневая страница сайта («оболочка»), которую отдаёт адрес цен БЕЗ слеша.</summary>
+    public const string ShellPageFile = "pricing-en-shell.html";
+
+    /// <summary>Настоящая английская страница цен (адрес СО слешем), цены в USD.</summary>
+    public const string LiveEnglishPageFile = "pricing-en.html";
+
+    /// <summary>Настоящая китайская страница цен, цены в юанях.</summary>
+    public const string LiveChinesePageFile = "pricing-zh.html";
+
+    /// <summary>Прочитать записанную страницу из `fixtures\` репозитория.</summary>
+    public static string LivePage(string fileName)
+    {
+        var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
+
+        if (string.IsNullOrEmpty(root))
+        {
+            throw new InvalidOperationException("не нашёл корень репозитория — фикстуру читать неоткуда");
+        }
+
+        var path = Path.Combine(root, "tests", "DshPanel.Tests", "fixtures", fileName);
+
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException($"нет записанной страницы цен: {path}", path);
+        }
+
+        return File.ReadAllText(path);
+    }
 }

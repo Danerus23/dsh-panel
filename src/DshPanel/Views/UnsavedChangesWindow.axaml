@@ -13,7 +13,7 @@
     <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
       <Button x:Name="DiscardButton" />
       <Button x:Name="SaveButton" />
-      <Button x:Name="CancelButton" />
+      <Button x:Name="CancelButton" IsCancel="True" />
     </StackPanel>
   </StackPanel>
 </Window>

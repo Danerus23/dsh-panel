@@ -157,11 +157,6 @@ public class ButtonTooltipTests
             AssertTips(backups, "копии", atLeast: 5);
             backups.Close();
 
-            var about = new AboutWindow();
-            about.Show();
-            PanelTestStand.Settle();
-            AssertTips(about, "о программе", atLeast: 3);
-            about.Close();
 
             // Окно «Пики и тарифы»: у него одна кнопка — «Закрыть», и подсказка у неё та же,
             // что у кнопки окна «О программе». Без этой строки подсказку его кнопки не сторожит

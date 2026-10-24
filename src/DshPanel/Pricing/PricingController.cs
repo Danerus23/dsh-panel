@@ -285,12 +285,16 @@ public sealed class PricingController : IPricingControl, IDisposable
         var language = Language();
         var url = PricingDecisions.Url(language);
 
+        // МОДЕЛЬ — ИЗ ПРОФИЛЯ АГЕНТА, а не «первая колонка» страницы (DEF-056): страница объявляет
+        // две модели с разными ценами, и показывать надо ту, которую называет профиль.
+        var model = AgentCatalog.Find(_settings().ActiveAgent).PricingModel;
+
         Busy = true;
         Changed?.Invoke();
 
         var client = _client;
 
-        Task.Run(() => client.Query(language, now))
+        Task.Run(() => client.Query(language, model, now))
             .ContinueWith(task => _dispatch(() =>
             {
                 try

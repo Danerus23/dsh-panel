@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using DshPanel.Localization;
+using DshPanel.Pricing;
+using DshPanel.Server;
 using DshPanel.Shell;
 using Xunit;
 
@@ -299,6 +302,15 @@ public class WordingRulesTests
     private static IEnumerable<(string Key, string Text)> HumanStrings(string language) =>
         Loc.Dictionary(language)
             .Where(pair => !pair.Key.Contains("Log", StringComparison.Ordinal))
+            .Select(pair => (pair.Key, pair.Value ?? string.Empty));
+
+    /// <summary>
+    /// ЖУРНАЛЬНЫЕ СТРОКИ (`*Log`) — их человек читает только в журнале и в отчёте о проблеме.
+    /// Отступление №4 разрешает в них внутренние имена; ГОЛОС им не отменён (`Голос_в_журнале_тоже_безличный`).
+    /// </summary>
+    private static IEnumerable<(string Key, string Text)> JournalStrings(string language) =>
+        Loc.Dictionary(language)
+            .Where(pair => pair.Key.Contains("Log", StringComparison.Ordinal))
             .Select(pair => (pair.Key, pair.Value ?? string.Empty));
 
     /// <summary>
@@ -786,6 +798,537 @@ public class WordingRulesTests
 
         return Regex.IsMatch(key, "(Format|Note|Hint|Warning|Log|Stopped)$", RegexOptions.CultureInvariant)
                && !key.Contains("Button", StringComparison.Ordinal);
+    }
+
+    // ============================================================================================
+    // 2.4.0 · ГОЛОС ПРОГРАММЫ И ПАКЕТ КАДРОВ p8
+    // ============================================================================================
+
+    /// <summary>
+    /// ГЛАГОЛЫ ПЕРВОГО ЛИЦА ПО-РУССКИ — список замера p6 (`p6-words.measure\09-voice-count.txt`).
+    /// Слово целиком (`\b…\b`): без хвостовой границы «снимаются», «кладутся», «могут» дают ложные
+    /// попадания (замер 22.10.2026: 36 вместо 27).
+    /// </summary>
+    private const string FirstPersonVerbsRu =
+        "снимаю|раскладываю|считаю|запускаю|останавливаю|перезапускаю|встраиваюсь|"
+        + "отвязываюсь|спрашиваю|начинаю|гашу|говорю|поднимаю|возьму|проверяю|ставлю|"
+        + "кладу|зову|беру|делаю|хочу|могу|жду|вижу|показываю|меняю|пишу|читаю|понимаю|"
+        + "помню|держу";
+
+    /// <summary>
+    /// ПРАВИЛО ГОЛОСА — ОДНО НА ОБЕ ПРОВЕРКИ (человеческие строки и журнальные). Правило счёта
+    /// то же, что у замера p6: `ru` — глагол в 1-м лице целым словом; `en` — `\b(I|me|my|mine|
+    /// myself)\b`; `zh` — 我, за которым НЕ идёт 们. Двух списков быть не должно: разойдись они —
+    /// журнал и окна однажды проверялись бы по-разному (правило «одно — одно»).
+    /// </summary>
+    private static readonly (string Language, string Pattern, RegexOptions Options)[] VoiceRules =
+    {
+        ("ru", @"\b(" + FirstPersonVerbsRu + @")\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
+        ("en", @"\b(I|me|my|mine|myself)\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase),
+        ("zh", "我(?!们)", RegexOptions.CultureInvariant),
+    };
+
+    /// <summary>Первое лицо в строке: что именно нашлось (пусто — не нашлось).</summary>
+    private static string? FirstPerson(string language, string text)
+    {
+        var rule = VoiceRules.Single(entry => entry.Language == language);
+        var match = Regex.Match(text ?? string.Empty, rule.Pattern, rule.Options);
+
+        return match.Success ? match.Value : null;
+    }
+
+    /// <summary>
+    /// ПРОГРАММА НЕ ГОВОРИТ О СЕБЕ «Я» — НИ В ОДНОМ ИЗ ТРЁХ ЯЗЫКОВ (DEF-040, `70-writing.md` §11).
+    ///
+    /// **От какого случая.** На дереве 2.3.2 о себе «я» говорили **ru 27 / en 11 / zh 2** человеческих
+    /// строки — замер `_team\design-pass\p6-words.measure\09-voice-count.txt` (там же правило счёта).
+    /// Норма Microsoft «Writing style»: «Don't use "I" or "me" to refer to the app's perspective».
+    /// Кадр это подтверждал: «Снимаю копию…» в окне копий.
+    ///
+    /// **Что здесь смотрится:** только строки ДЛЯ ЧЕЛОВЕКА (ключ без `Log`). Журнальные (183) —
+    /// не «исключены отступлением №4»: отступление №4 про ВНУТРЕННИЕ ИМЕНА, а не про голос.
+    /// У журнала своя проверка — `Голос_в_журнале_тоже_безличный` (u13), и она смотрит те же правила.
+    ///
+    /// **Сторож проверяет себя** тремя образцами — теми самыми строками, которые 2.4.0 переписала:
+    /// «Снимаю копию…», «I always ask», 「我将用」. Ослепни любой из трёх образцов — проверка падает
+    /// на этом до всякого словаря.
+    ///
+    /// **Мутации, которые обязаны упасть здесь:** «вернуть „Снимаю копию…“ в `BackupRunning`» ·
+    /// «вернуть `I always ask` в `EngineUpdateAskHuman`» · «вернуть 我 в `PhonePortWrongFormat`».
+    /// </summary>
+    [Fact]
+    public void Программа_не_говорит_о_себе_от_первого_лица()
+    {
+        // СТОРОЖ ПРОВЕРЯЕТ СЕБЯ: каждая форма дефекта, которую 2.4.0 убрала, обязана ловиться.
+        Assert.Equal("Снимаю", FirstPerson("ru", "Снимаю копию…"));
+        Assert.Equal("начинаю", FirstPerson("ru", "обновление сервера DSH не начинаю"));
+        Assert.Equal("I", FirstPerson("en", "before updating DSH I always ask"));
+        Assert.Equal("my", FirstPerson("en", "not starting my own"));
+        Assert.Equal("我", FirstPerson("zh", "我将用 {1} 代替 {0}。"));
+        // И обратное: безличные формы, которыми 2.4.0 заменила «я», НЕ ловятся.
+        Assert.Null(FirstPerson("ru", "Идёт копия…"));
+        Assert.Null(FirstPerson("ru", "панель не начинает обновление сервера DSH"));
+        Assert.Null(FirstPerson("en", "the panel always asks"));
+        Assert.Null(FirstPerson("zh", "面板总会先询问"));
+
+        var scanned = new Dictionary<string, int>(StringComparer.Ordinal);
+        var totals = new Dictionary<string, int>(StringComparer.Ordinal);
+        var broken = new List<string>();
+
+        foreach (var (language, _, _) in VoiceRules)
+        {
+            scanned[language] = 0;
+            totals[language] = Loc.Dictionary(language).Count;
+
+            foreach (var (key, text) in HumanStrings(language))
+            {
+                scanned[language]++;
+                var word = FirstPerson(language, text ?? string.Empty);
+
+                if (word is not null) broken.Add($"{language}/{key}: «{word}» — {text}");
+            }
+        }
+
+        // Сторож обязан смотреть ВЕСЬ набор. Два числа, и оба из замера p6: в каждом словаре
+        // **1333 ключа** (на дереве 2.4.0 их больше — проверка это допускает), из них **1150
+        // строк для человека**. Первое число — про полноту словаря, второе — про охват проверки.
+        foreach (var (language, total) in totals)
+        {
+            Assert.True(total >= 1333, $"{language}: ключей в словаре {total} — словарь не тот, что в замере p6");
+
+            Assert.True(
+                scanned[language] >= 1150,
+                $"{language}: просмотрено строк {scanned[language]} (из {total}) — сторож смотрит не на весь словарь");
+        }
+
+        Assert.True(
+            broken.Count == 0,
+            "программа заговорила о себе «я» (DEF-040; норма — безлично или третьим лицом):"
+            + Environment.NewLine + string.Join(Environment.NewLine, broken));
+    }
+
+    /// <summary>
+    /// ГОЛОС В ЖУРНАЛЕ — ТОЖЕ БЕЗЛИЧНЫЙ (u13, хвост DEF-040).
+    ///
+    /// **От какого случая.** Проверка человеческих строк смотрит 1150 строк и (по отступлению №4)
+    /// не смотрит 183 журнальных. Но отступление №4 — про ВНУТРЕННИЕ ИМЕНА в журнале («калитка»,
+    /// «замок», имена файлов), а НЕ про голос: решение владельца 22.10.2026 называет примером
+    /// «Останавливаю сервер» — и это как раз журнальная строка. Замер 2.3.2 находил в журнале
+    /// **16 строк от первого лица**: ru 9 (`поднимаю`, `останавливаю`, `гашу`, `беру`, `делаю`)
+    /// и en 7 (`my own` × 6, `I`); zh — 0. Все переписаны безлично/третьим лицом.
+    ///
+    /// **Жаргон здесь НЕ запрещается** — это важно, потому что соблазн «раз уж сел за журнал,
+    /// заодно и почищу» велик. Голос и имена — разные правила: `калитка`/`замок` в журнале жили
+    /// и живут по отступлению №4, и проверка на них не смотрит ВООБЩЕ (см. второй самопроверочный
+    /// образец ниже).
+    ///
+    /// **Сторож проверяет себя:** «поднимаю свой сервер» (ru) · «starting my own server» (en) ·
+    /// 「我将用」 (zh) — ловятся; безличные формы — нет; жаргонная строка без «я» — нет.
+    ///
+    /// **Мутации, которые обязаны упасть здесь:** «вернуть „поднимаю свой сервер“ в
+    /// `AutoStartStartingLog`» · «вернуть `starting my own server` в en/`AutoStartStartingLog`» ·
+    /// «вернуть 我 в любую журнальную строку».
+    /// </summary>
+    [Fact]
+    public void Голос_в_журнале_тоже_безличный()
+    {
+        // СТОРОЖ ПРОВЕРЯЕТ СЕБЯ — теми самыми строками, которые u13 переписала.
+        Assert.Equal("поднимаю", FirstPerson("ru", "автоподъём: поднимаю свой сервер"));
+        Assert.Equal("останавливаю", FirstPerson("ru", "останавливаю Сервер DSH: node PID {0}"));
+        Assert.Equal("my", FirstPerson("en", "auto-start: starting my own server"));
+        Assert.Equal("I", FirstPerson("en", "I stop only our DSH"));
+
+        // ⚠️ 我们 правило НЕ ловит — нарочно (Microsoft «we» разрешает; см. правило в `VoiceRules`).
+        // Поэтому прежняя журнальная строка с 「我们自己的」 находкой и не была: журнальных строк
+        // с одиночным 我 в замере 2.3.2 — **0**. Образец ниже проверяет, что одиночное 我 ловится.
+        Assert.Null(FirstPerson("zh", "只停止我们自己的DSH"));
+        Assert.Equal("我", FirstPerson("zh", "我将停止服务器"));
+
+        // Безличные формы, на которые u13 переписала:
+        Assert.Null(FirstPerson("ru", "автоподъём: поднимается свой сервер"));
+        Assert.Null(FirstPerson("ru", "гасится свой сервер по записи: {0} (PID {1}) на порту {2}"));
+        Assert.Null(FirstPerson("en", "auto-start: starting the panel's own server"));
+        Assert.Null(FirstPerson("zh", "只停止面板自己的DSH"));
+
+        // ЖАРГОН — НЕ ГОЛОС: внутренние имена в журнале разрешены отступлением №4, и эта проверка
+        // на них не смотрит. Без этого образца «раз уж сел за журнал» однажды вычистило бы и их.
+        Assert.Null(FirstPerson("ru", "калитка: замок закрыт, сервер поднимается"));
+        Assert.Null(FirstPerson("en", "gate: the lock is closed, the server starts"));
+
+        var scanned = new Dictionary<string, int>(StringComparer.Ordinal);
+        var broken = new List<string>();
+
+        foreach (var (language, _, _) in VoiceRules)
+        {
+            scanned[language] = 0;
+
+            foreach (var (key, text) in JournalStrings(language))
+            {
+                scanned[language]++;
+                var word = FirstPerson(language, text ?? string.Empty);
+
+                if (word is not null) broken.Add($"{language}/{key}: «{word}» — {text}");
+            }
+        }
+
+        // Охват: журнальных строк в каждом словаре не меньше порога, и все они просмотрены —
+        // иначе «нарушений нет» означало бы «смотреть не на что».
+        //
+        // ⚠️ ПОРОГ НЕ 183, И ЭТО НЕ ОСЛАБЛЕНИЕ. На дереве 2.3.2 журнальных строк было 183; в 2.4.0
+        // окно «О программе» стало разделом настроек (u3), и две журнальные строки ушли вместе с ним
+        // (`AboutOpenedLog`, `AboutRaisedLog`), одна прибавилась (`UpdateNetworkErrorLogFormat`) —
+        // в дереве 182. Порог 180 держит смысл «сторож видит весь журнал» и при этом не красит прогон
+        // из-за честного удаления строк: число строк — не норма, а мера охвата.
+        foreach (var (language, count) in scanned)
+            Assert.True(count >= 180, $"{language}: журнальных строк просмотрено {count} — сторож смотрит не на весь журнал");
+
+        Assert.True(
+            broken.Count == 0,
+            "журнал заговорил о себе «я» (u13, хвост DEF-040; норма — безлично или третьим лицом; "
+            + "жаргон при этом разрешён):" + Environment.NewLine + string.Join(Environment.NewLine, broken));
+    }
+
+    /// <summary>
+    /// ШЕСТЬ ПУНКТОВ КАДРОВ p8 ЗАКРЫТЫ (DEF-048) — каждый своей механической проверкой.
+    ///
+    /// **От какого случая.** `_team\design-pass\p8-frames.md` §4 назвал на кадрах шесть мелких
+    /// отклонений вида и слов; у каждого был адрес, норма и цена. 2.4.0 их закрывает, и закрытие
+    /// обязано быть видно прогоном, а не отчётом.
+    ///
+    /// | № | Что было | Чем закрыто | Чем проверяется здесь |
+    /// |---|---|---|---|
+    /// | 1 | «Умолчание — 3080…» стояло под полем РАБОЧЕЙ ПАПКИ (D-2) | объяснение переехало под свою подпись | порядок в разметке: подпись → объяснение → поле |
+    /// | 2 | «Снимите одну из двух галочек», когда вторая недоступна (D-4) | отказ называет ДОСТУПНУЮ галочку | текст отказа содержит подпись галочки ключей и не содержит старой фразы |
+    /// | 3 | метка «не работает» там, где сервер не объявляет вызов (D-9) | слово «не поддерживается сервером» | `SkillPhrases.Word` на вердикте «по объявлению» |
+    /// | 4 | висячая «;» в `EnvSkillsMomentNotAsked` (D-10) | точка с запятой убрана | ни одна строка для человека не кончается «;» |
+    /// | 5 | «↓ -$0.02» — стрелка и знак разом (D-7) | направление говорит стрелка | ячейка изменения без «+»/«-» |
+    /// | 6 | «Адрес для телефона» и сразу «адрес для телефона: …» (D-8) | подпись не повторяется в строке | строка адреса не содержит заголовок |
+    ///
+    /// **Мутации, которые обязаны упасть здесь** (каждая — на свою строку): «вернуть объяснение
+    /// порта над подписью» · «вернуть „одну из двух галочек“» · «вернуть „не работает“» ·
+    /// «вернуть „;“» · «вернуть знак в ячейке» · «вернуть „адрес для телефона:“ в строку».
+    /// </summary>
+    [Fact]
+    public void Шесть_пунктов_кадров_p8_закрыты()
+    {
+        // ---- 1. Объяснение порта стоит ПОД СВОЕЙ подписью, а не под чужим полем -----------------
+        var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
+        // КОРЕНЬ: диагностическая строка провала (печатается только когда проверка уже упала), не показ пути.
+        Assert.False(string.IsNullOrEmpty(root), $"не нашёл корень репозитория вверх от «{AppContext.BaseDirectory}»");
+
+        var markup = File.ReadAllText(Path.Combine(root!, "src", "DshPanel", "Views", "SettingsWindow.axaml"));
+        var label = markup.IndexOf("x:Name=\"PortLabel\"", StringComparison.Ordinal);
+        var explain = markup.IndexOf("x:Name=\"PortExplainText\"", StringComparison.Ordinal);
+        var box = markup.IndexOf("x:Name=\"PortBox\"", StringComparison.Ordinal);
+
+        Assert.True(label >= 0 && explain >= 0 && box >= 0, "в разметке «Общего» не нашлись подпись, объяснение или поле порта");
+        Assert.True(
+            label < explain && explain < box,
+            "объяснение порта стоит не между своей подписью и полем (DEF-048 п. 1, кадр settings-general): "
+            + $"подпись {label}, объяснение {explain}, поле {box}");
+
+        // ---- 2. Отказ называет ДОСТУПНУЮ галочку ----------------------------------------------
+        foreach (var language in new[] { "ru", "en", "zh" })
+        {
+            var refusal = Loc.TIn(language, nameof(PanelStrings.BackupShareableWithKeysRefused));
+            var check = Loc.TIn(language, nameof(PanelStrings.BackupKeysCheck));
+
+            Assert.Contains(check, refusal, StringComparison.Ordinal);
+            Assert.DoesNotContain("одну из двух", refusal, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("one of the two", refusal, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("其中一个勾选", refusal, StringComparison.Ordinal);
+        }
+
+        // ---- 3. Метка «не поддерживается сервером» вместо «не работает» ------------------------
+        var declared = SkillVerdict.No(
+            EngineSkill.TaskPrompt,
+            SkillKeys.Reason(EngineSkill.TaskPrompt),
+            SkillKeys.HowDeclared);
+
+        Assert.Equal(PanelStrings.EnvSkillNotDeclared, SkillPhrases.Word(declared));
+        Assert.NotEqual(PanelStrings.EnvSkillTrouble, SkillPhrases.Word(declared));
+        Assert.NotEqual(PanelStrings.EnvSkillTrouble, PanelStrings.EnvSkillNotDeclared);
+
+        // ЗЕРКАЛО: беда ЖИВОГО вызова остаётся «не работает» — иначе проверка выше зеленела бы
+        // и на словаре, где все беды названы одним словом.
+        var live = SkillVerdict.No(
+            EngineSkill.EntryLink,
+            SkillKeys.Reason(EngineSkill.EntryLink),
+            SkillKeys.HowLive);
+
+        Assert.Equal(PanelStrings.EnvSkillTrouble, SkillPhrases.Word(live));
+
+        // ---- 4. Висячей «;» нет ни в одной строке для человека --------------------------------
+        //
+        // ⚠️ ОДНО НАЗВАННОЕ ИСКЛЮЧЕНИЕ — `EnvSkillsMomentFormat`: там точка с запятой не «висит»,
+        // а СОЕДИНЯЕТ: `SkillPhrases.Summary` клеит этот кусок с итогом («смотрено сейчас: …;
+        // умений подтверждено: 2 из 8»), а отчёт, где он стоит отдельной подробностью, её снимает
+        // (`EnvironmentReport.Build`: `.TrimEnd(';')`). Исключение проверяется ниже — иначе оно
+        // однажды переживёт сам повод и станет дырой.
+        var joiner = nameof(PanelStrings.EnvSkillsMomentFormat);
+        var dangling = new List<string>();
+
+        foreach (var language in new[] { "ru", "en", "zh" })
+        {
+            foreach (var (key, text) in HumanStrings(language))
+            {
+                if (key == joiner) continue;
+
+                var value = (text ?? string.Empty).TrimEnd();
+
+                if (value.EndsWith(';') || value.EndsWith('；')) dangling.Add($"{language}/{key}: «{value}»");
+            }
+        }
+
+        Assert.Empty(dangling);
+
+        // Исключение ещё живо: кусок-соединитель ДОЛЖЕН кончаться «;», иначе его сняли молча.
+        Assert.EndsWith(";", Loc.T(joiner), StringComparison.Ordinal);
+
+        // ---- 5. Направление изменения — стрелкой, а не стрелкой И знаком ----------------------
+        var down = PricingHistoryText.Delta("$0.7", "$0.6");
+        var up = PricingHistoryText.Delta("$0.6", "$0.7");
+
+        Assert.StartsWith(PricingHistoryText.Arrow(PricingChangeDirection.Down), down, StringComparison.Ordinal);
+        Assert.StartsWith(PricingHistoryText.Arrow(PricingChangeDirection.Up), up, StringComparison.Ordinal);
+        Assert.DoesNotContain("-", down, StringComparison.Ordinal);
+        Assert.DoesNotContain("+", up, StringComparison.Ordinal);
+        Assert.Contains("0.1", down, StringComparison.Ordinal);
+
+        // ---- 6. Строка адреса телефона не повторяет свою подпись ------------------------------
+        foreach (var language in new[] { "ru", "en", "zh" })
+        {
+            var title = Loc.TIn(language, nameof(PanelStrings.PhoneAddressTitle));
+            var line = Loc.TIn(language, nameof(PanelStrings.PhoneAddressOneFormat));
+
+            Assert.DoesNotContain(title, line, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("{0}", line, StringComparison.Ordinal);
+            Assert.Contains("{1}", line, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// ПОДПИСЬ ДИАЛОГА НАЗЫВАЕТ СЛЕДСТВИЕ (DEF-044 — строки под u6): «Закрыть без сохранения» ·
+    /// заголовок-вопрос · два ответа на разные дела.
+    ///
+    /// **От какого случая.** Три строки `BackupStop`/`SettingsUnsaved` врали каждая по-своему
+    /// (кадры `backup-stop.png` и `unsaved-changes.png`, `_team\design-pass\p8-frames.md` §4 D-12,
+    /// `p6-words.md` §7):
+    /// * **«Выйти без сохранения»** закрывала ОКНО НАСТРОЕК, а обещала выход из панели (en «Close
+    ///   without saving» и zh 「不保存并关闭」 говорили верно). Microsoft: кнопка называет то, что
+    ///   произойдёт. Норма и цена ошибки названы в `70-writing.md` §2.
+    /// * **Заголовок `BackupStop`** был утверждением («Сервер работает»), хотя тело спрашивало;
+    ///   Microsoft (перепроверено 22.10.2026): кнопки — «clear answers to the question posed by
+    ///   the title». Значит вопрос живёт в заголовке, а тело его НЕ повторяет (`80` `Ш-63`).
+    /// * **Два ответа начинались одним словом** («Погасить и продолжить» / «Продолжить на ходу») —
+    ///   человек читал пару «продолжить / продолжить». Теперь каждый называет своё дело.
+    ///
+    /// **Что проверяется, и почему это проверка, а не вкус.** (1) подпись содержит слово «закрыть»
+    /// и НЕ содержит слова «выйти»; (2) заголовок кончается знаком вопроса, тело — нет; (3) первые
+    /// слова ответов разные и оба ответа называют одно и то же дело («копия»/«back up»/「备份」),
+    /// и подсказки кнопок говорят о том же деле, что подписи.
+    ///
+    /// ⚠️ **«Без сохранения» — правда, и это проверено кодом, а не на слух:** выбор
+    /// `UnsavedChoice.Discard` уходит в `CloseQuietly()` БЕЗ `SavePending()`
+    /// (`Views\SettingsWindow.axaml.cs:760–765`), то есть правка в поля не записывается и пропадает;
+    /// подсказка той же кнопки говорит то же — «Закрыть окно и потерять правку». Поведение стерегут
+    /// `SettingsUnsavedTests` («…закрывает окно и НЕ пишет ничего») и `SettingsLookTests`.
+    /// Найденное при этой задаче расхождение с текстом DEFECTS («потерь нет») — в отчёте задачи:
+    /// потеря ЕСТЬ (несохранённая правка), а ложью было слово «Выйти».
+    ///
+    /// **Мутация, которая обязана упасть здесь:** «вернуть „Выйти без сохранения“» ·
+    /// «вернуть заголовок „Сервер работает“» · «вернуть „Продолжить на ходу“».
+    /// </summary>
+    [Fact]
+    public void Подписи_диалогов_называют_следствие()
+    {
+        // ---- 1. «Закрыть без сохранения»: подпись называет следствие, а не обещает выход ---------
+        var closeWords = new (string Language, string Close, string Exit, string NoSaving)[]
+        {
+            ("ru", "Закрыть", "Выйти", "без сохранения"),
+            ("en", "Close", "Exit", "without saving"),
+            ("zh", "关闭", "退出", "不保存"),
+        };
+
+        foreach (var (language, close, exit, noSaving) in closeWords)
+        {
+            var label = Loc.TIn(language, nameof(PanelStrings.SettingsUnsavedDiscard));
+
+            Assert.Contains(close, label, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(exit, label, StringComparison.OrdinalIgnoreCase);
+
+            // Подпись обещает «без сохранения» — и это то, что код и делает на этом выборе.
+            Assert.Contains(noSaving, label, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // ЗЕРКАЛО: подсказка той же кнопки говорит о ТОМ ЖЕ следствии — иначе подпись и подсказка
+        // разошлись бы, и человек прочитал бы два разных обещания про одно нажатие.
+        Assert.Contains("Закрыть", PanelStrings.TipUnsavedDiscardButton, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("потерять", PanelStrings.TipUnsavedDiscardButton, StringComparison.OrdinalIgnoreCase);
+
+        // ---- 2. Заголовок `BackupStop` — вопрос, тело его не повторяет --------------------------
+        foreach (var language in new[] { "ru", "en", "zh" })
+        {
+            var title = Loc.TIn(language, nameof(PanelStrings.BackupStopTitle)).TrimEnd();
+            var body = Loc.TIn(language, nameof(PanelStrings.BackupStopQuestionFormat));
+
+            Assert.True(
+                title.EndsWith('?') || title.EndsWith('？'),
+                $"{language}: заголовок BackupStop не вопрос — «{title}»");
+
+            Assert.DoesNotContain("?", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("？", body, StringComparison.Ordinal);
+
+            // Вопрос в теле не переписан словами: тело называет обстановку и цену, а не спрашивает.
+            Assert.DoesNotContain(title.TrimEnd('?', '？'), body, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // ---- 3. Два ответа — на РАЗНЫЕ дела ----------------------------------------------------
+        var answers = new (string Language, string Deed)[]
+        {
+            ("ru", "копи"),
+            ("en", "back up"),
+            ("zh", "备份"),
+        };
+
+        foreach (var (language, deed) in answers)
+        {
+            var yes = Loc.TIn(language, nameof(PanelStrings.BackupStopYes));
+            var no = Loc.TIn(language, nameof(PanelStrings.BackupStopNo));
+
+            Assert.Contains(deed, yes, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(deed, no, StringComparison.OrdinalIgnoreCase);
+
+            var firstYes = yes.Split(' ')[0];
+            var firstNo = no.Split(' ')[0];
+
+            Assert.NotEqual(firstYes, firstNo, StringComparer.OrdinalIgnoreCase);
+
+            // «Продолжить» само по себе — не дело: такой подписи быть не должно ни в одном языке.
+            Assert.DoesNotContain("продолж", yes, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("продолж", no, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("continue", yes, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("continue", no, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("继续", yes, StringComparison.Ordinal);
+            Assert.DoesNotContain("继续", no, StringComparison.Ordinal);
+        }
+
+        // ЗЕРКАЛО: подсказки кнопок называют те же дела, что подписи (одно дело — одно слово).
+        Assert.Contains("копию", PanelStrings.TipBackupStopStopButton, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("копию", PanelStrings.TipBackupStopLiveButton, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("погасить", PanelStrings.TipBackupStopStopButton, StringComparison.OrdinalIgnoreCase);
+
+        // ---- 4. Закрытие окна копий НА СЕРЕДИНЕ КОПИИ (DEF-045) — та же пара правил ------------
+        //
+        // ⚠️ Отмены у домена НЕТ: в `IBackupControl` нет `CancellationToken`, и прервать копию
+        // нечем. Поэтому вопрос не «прервать ли», а «закрыть ли окно»; оба ответа обязаны называть
+        // РАЗНОЕ следствие, а тело — назвать и то, ПОЧЕМУ прервать нельзя (строка дизайн-лидера:
+        // «копия доделается» без причины читается как отговорка, а «Остановить» в панели гасит
+        // сервер, а не копию, — человек ищет отмену именно там).
+        var busyClose = new (string Language, string Copy, string Continues, string Window, string LogWord)[]
+        {
+            ("ru", "копи", "продолж", "окн", "журнал"),
+            ("en", "backup", "continue", "window", "log"),
+            ("zh", "备份", "继续", "窗口", "日志"),
+        };
+
+        foreach (var (language, copy, continues, window, logWord) in busyClose)
+        {
+            var title = Loc.TIn(language, nameof(PanelStrings.BackupBusyCloseTitle)).TrimEnd();
+            var body = Loc.TIn(language, nameof(PanelStrings.BackupBusyCloseQuestion));
+            var yes = Loc.TIn(language, nameof(PanelStrings.BackupBusyCloseYes));
+            var no = Loc.TIn(language, nameof(PanelStrings.BackupBusyCloseNo));
+
+            // Заголовок — вопрос, тело — ответ, а не второй вопрос (та же норма, что у BackupStop).
+            Assert.True(
+                title.EndsWith('?') || title.EndsWith('？'),
+                $"{language}: заголовок закрытия окна копий не вопрос — «{title}»");
+            Assert.DoesNotContain("?", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("？", body, StringComparison.Ordinal);
+            Assert.DoesNotContain(title.TrimEnd('?', '？'), body, StringComparison.OrdinalIgnoreCase);
+
+            // Тело называет ТРИ вещи: что произойдёт, почему нельзя прервать, где увидеть итог.
+            Assert.Contains(copy, body, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(continues, body, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(logWord, body, StringComparison.OrdinalIgnoreCase);
+
+            // Ответы: один — «закрыть, копия продолжится», другой — «остаться в окне»; слова разные.
+            Assert.Contains(copy, yes, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(continues, yes, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(window, no, StringComparison.OrdinalIgnoreCase);
+            Assert.NotEqual(yes.Split(' ')[0], no.Split(' ')[0], StringComparer.OrdinalIgnoreCase);
+
+            // НИ ОДИН ответ не обещает прервать копию: такого умения у панели нет.
+            foreach (var label in new[] { yes, no })
+            {
+                Assert.DoesNotContain("прерв", label, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("отмен", label, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("cancel", label, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("interrupt", label, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("取消", label, StringComparison.Ordinal);
+                Assert.DoesNotContain("中止", label, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    /// <summary>
+    /// ШАРИК «СВОЙ СЕРВЕР УПАЛ САМ» НЕ ОБЕЩАЕТ ПОДЪЁМА (DEF-052/053, слово владельца 22.10.2026).
+    ///
+    /// **От какого случая.** Падение своего сервера человек узнавал случайно: связи с событиями нет,
+    /// отличать падение от остановки панелью нечем. Решение владельца: **шарик + строка журнала +
+    /// запись-событие**, и **без кнопки, без авто-подъёма**. Значит слова шарика — часть решения,
+    /// а не украшение: обещание «панель поднимет» или кнопка в тексте были бы нарушением запрета.
+    ///
+    /// **Что проверяется:** (1) заголовок называет признак «сам» — иначе падение читается как
+    /// остановка панелью (в журнале то же слово: `SrvEngineExitItselfLogFormat`); (2) тело называет
+    /// код выхода и время и держит обе подстановки; (3) тело ПРЯМО говорит, что панель не поднимает
+    /// («не поднимает» / "does not" / 「不会」); (4) в тексте нет «автоматически», «кнопки» и
+    /// «перезапуска» — авто-подъём запрещён, кнопки нет; (5) текст влезает в пределы трея
+    /// (`NativeMethods`: `szInfoTitle` 64, `szInfo` 256; `TrayIconHost` режет по 63 и 255) —
+    /// за пределом Windows молча обрежет, и «код выхода» пропадёт первым.
+    ///
+    /// **Мутации, которые обязаны упасть здесь:** «вернуть „Сервер DSH упал“» (без «сам») ·
+    /// «дописать „панель поднимет его сама“» · «убрать время из тела».
+    /// </summary>
+    [Fact]
+    public void Шарик_о_падении_сервера_не_обещает_подъёма()
+    {
+        var rules = new (string Language, string ByItself, string ExitCode, string Time, string NotRaised)[]
+        {
+            ("ru", "сам", "код выхода", "время", "не поднима"),
+            ("en", "by itself", "exit code", "time", "does not"),
+            ("zh", "自行", "退出代码", "时间", "不会"),
+        };
+
+        foreach (var (language, byItself, exitCode, time, notRaised) in rules)
+        {
+            // Loc.T отдаёт строку текущего языка панели — берём её именно этого языка.
+            var title = Loc.TIn(language, nameof(PanelStrings.NotifyServerCrashedTitle));
+            var body = Loc.TIn(language, nameof(PanelStrings.NotifyServerCrashedFormat));
+
+            Assert.Contains(byItself, title, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(exitCode, body, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(time, body, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("{0}", body, StringComparison.Ordinal);
+            Assert.Contains("{1}", body, StringComparison.Ordinal);
+
+            // Панель НЕ поднимает — сказано прямо, а не намёком.
+            Assert.Contains(notRaised, body, StringComparison.OrdinalIgnoreCase);
+
+            // Авто-подъём запрещён, кнопки нет: ни слова о том, чего не будет.
+            foreach (var promise in new[] { "автоматическ", "кнопк", "перезапус" })
+                Assert.DoesNotContain(promise, body, StringComparison.OrdinalIgnoreCase);
+
+            foreach (var promise in new[] { "automatic", "button", "restart" })
+                Assert.DoesNotContain(promise, body, StringComparison.OrdinalIgnoreCase);
+
+            foreach (var promise in new[] { "自动", "按钮", "重启" })
+                Assert.DoesNotContain(promise, body, StringComparison.Ordinal);
+
+            // Пределы трея: заголовок 63, тело 255 (`TrayIconHost.Notify`).
+            Assert.True(title.Length <= 63, $"{language}: заголовок шарика {title.Length} знаков — обрежется");
+            Assert.True(body.Length <= 255, $"{language}: тело шарика {body.Length} знаков — обрежется");
+        }
     }
 
     /// <summary>Имена членов <see cref="PanelStrings"/> — по ним видно КЛАСС ключа.</summary>

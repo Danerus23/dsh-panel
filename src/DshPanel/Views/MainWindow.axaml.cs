@@ -1,5 +1,6 @@
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Layout;
@@ -1019,6 +1020,14 @@ public partial class MainWindow : Window
     ///
     /// ⚠️ Подпись НЕ заменяется значком: значение имеет и слово, значок лишь помогает глазу
     /// найти кнопку. Поэтому кнопка остаётся кнопкой с текстом, а не иконкой-загадкой.
+    ///
+    /// ⚠️ **ДОСТУПНОЕ ИМЯ — ЗДЕСЬ ЖЕ, ГДЕ ПОДПИСЬ (DEF-038, 2.4.0).** `Content` у этих кнопок —
+    /// `StackPanel` (значок + `TextBlock`), и читалка экрана, не найдя у кнопки ни текста, ни
+    /// `AutomationProperties.Name`, объявляет её «кнопкой» без названия: восемь кнопок главного
+    /// окна были безымянными (замер: `AutomationProperties.Name` — 0 применений на панель).
+    /// Имя ставится ТУТ ЖЕ, а не отдельной строкой рядом: `WithIcon` зовут и при смене состояния
+    /// сервера (подпись «Запустить» ↔ «Запускается…»), и второй источник имени разошёлся бы
+    /// с первой же сменой текста.
     /// </summary>
     private static void WithIcon(Button button, Geometry glyph, string text)
     {
@@ -1045,5 +1054,9 @@ public partial class MainWindow : Window
                 },
             },
         };
+
+        // ИМЯ = ПОДПИСЬ. Одно правило на все восемь кнопок с картинкой, и его стережёт
+        // `MainWindowIconTests.Доступное_имя_кнопки_с_картинкой_равно_её_подписи`.
+        AutomationProperties.SetName(button, text ?? string.Empty);
     }
 }

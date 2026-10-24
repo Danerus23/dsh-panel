@@ -65,7 +65,6 @@ public class PanelIconTests
         Assert.Same(expected, new BackupWindow().Icon);
         Assert.Same(expected, new BackupStopWindow().Icon);
         Assert.Same(expected, new ConfirmStopWindow().Icon);
-        Assert.Same(expected, new AboutWindow().Icon);
     }
 
     // -------------------------------------------------------------- значок трея

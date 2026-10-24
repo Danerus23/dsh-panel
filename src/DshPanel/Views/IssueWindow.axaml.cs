@@ -181,7 +181,7 @@ public partial class IssueWindow : Window
     /// Пустая версия не выдумывается: отчёт честно скажет «неизвестна».
     /// </summary>
     private static IssueFacts EmptyFacts() => new(
-        PanelVersion: AboutWindow.PanelVersion,
+        PanelVersion: AboutInfo.PanelVersion,
         Revision: string.Empty,
         System: System.Runtime.InteropServices.RuntimeInformation.OSDescription,
         EngineVersion: string.Empty,

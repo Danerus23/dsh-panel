@@ -34,9 +34,10 @@
     Четыре обещания, за которые отвечает эта разметка:
 
     1. **«Сохранить» видна всегда** — кнопка стоит в НИЖНЕЙ строке сетки, ВНЕ прокрутки
-       раздела: переключение раздела и прокрутка её не двигают. Рядом с ней — дверь
-       «О программе…»: она тоже вне прокрутки и видна при любом разделе (решение владельца
-       27.09.2026: «„о программе“ не туда воткнул. Предлагаю перенести вообще в настройки»).
+       раздела: переключение раздела и прокрутка её не двигают. «О программе…» рядом с ней
+       больше НЕТ (u14, 2.4.0): решение владельца 27.09.2026 («„о программе“ не туда воткнул.
+       Предлагаю перенести вообще в настройки») исполнено до конца — ответ стал СЕДЬМЫМ
+       разделом списка слева, а не дверью в отдельное окно (`docs\DECISIONS.md:32`).
     2. **Полоса прокрутки ВИДНА ВСЕГДА — у содержимого раздела**, а не у всего окна: системная
        полоса появляется только в момент прокрутки, то есть ровно тогда, когда человек уже
        догадался прокрутить. Горизонтальную гасим намеренно: с ней содержимое измерялось бы
@@ -111,13 +112,19 @@
                 <Button x:Name="SuggestWorkDirButton" IsVisible="False" />
               </StackPanel>
 
-              <!-- ДЛИННОЕ ОБЪЯСНЕНИЕ ПОРТА — НАД ПОЛЕМ, обычным текстом; под полем остаётся ОДНА
-                   короткая фраза без точки (норма GOV.UK: «Keep hint text to a single short
-                   sentence, without any full stops»; `40-forms.md` §3 и §11(б) п. 3). Строка
-                   приходит кодом из словаря — текста здесь нет намеренно. -->
+              <!-- ДЛИННОЕ ОБЪЯСНЕНИЕ ПОРТА — ПОД СВОЕЙ ПОДПИСЬЮ, обычным текстом; под полем
+                   остаётся ОДНА короткая фраза без точки (норма GOV.UK: «Keep hint text to a single
+                   short sentence, without any full stops»; `40-forms.md` §3 и §11(б) п. 3). Строка
+                   приходит кодом из словаря — текста здесь нет намеренно.
+
+                   ⚠️ ПОЧЕМУ ОНО СТОИТ ИМЕННО ЗДЕСЬ (DEF-048, кадр `settings-general`). Прежде
+                   объяснение стояло ВЫШЕ подписи «Порт своего сервера» — прямо под полем «Рабочая
+                   папка сервера», и кадр читался так, будто 3080 относится к папке. Норма §3/§11(б):
+                   длинное объяснение — над СВОИМ полем; подпись и объяснение одного поля стоят
+                   вместе, а не через чужое. -->
+              <TextBlock x:Name="PortLabel" Margin="0,4,0,0" />
               <TextBlock x:Name="PortExplainText" TextWrapping="Wrap" />
 
-              <TextBlock x:Name="PortLabel" Margin="0,4,0,0" />
               <NumericUpDown x:Name="PortBox" Width="160" HorizontalAlignment="Left"
                              Minimum="1" Maximum="65535" Increment="1" />
               <TextBlock x:Name="PortHintText" Classes="hint" TextWrapping="Wrap" />
@@ -609,24 +616,86 @@
                 </StackPanel>
               </Border>
             </StackPanel>
-          </Grid>
+
+            <!--
+              РАЗДЕЛ «О ПРОГРАММЕ» — СЕДЬМОЙ И ПОСЛЕДНИЙ (u14, 2.4.0).
+
+              **Решение владельца 27.09.2026** (`docs\DECISIONS.md:32`): «предлагаю перенести
+              вообще в настройки». Исполнено до конца: отдельного окна «О программе» в панели
+              больше НЕТ (окно «О программе» удалён), ответ живёт разделом — и дверью в него стала
+              та же кнопка меню значка, что прежде открывала окно.
+
+              Порядок — НАШЕ решение, нормы в банке нет: «О программе» — справка, а не настройка,
+              поэтому последняя. Это не отступление (строка дизайн-лидера, `_team\240\u14-dizayn.md`).
+
+              ПОЧЕМУ РАЗДЕЛОМ, А НЕ ОКНОМ: дверь в настройках открывала окно, то есть человек,
+              пришедший в настройки, получал ВТОРОЕ окно поверх — ровно то, от чего отказались
+              у обновления 09.10.2026 («Я не хочу отдельно вызываемое окно», `DECISIONS.md:36`).
+
+              ⚠️ НИ ОДНОГО ТЕКСТА В РАЗМЕТКЕ: подписи и содержимое ставит код из `PanelStrings`.
+              ⚠️ ССЫЛКИ — только живые: `ProductLinks.ShouldShow` решает, есть ли строка; пустая
+              ссылка = «возможности нет», кнопки в никуда в продукте не бывает.
+            -->
+            <StackPanel x:Name="AboutSectionPanel" Spacing="12" IsVisible="False">
+              <TextBlock x:Name="AboutSectionTitle" Classes="sectionTitle" />
+
+              <!-- Версия — ЧИСЛОВОЙ частью и крупно: это первый ответ, за которым сюда приходят. -->
+              <TextBlock x:Name="AboutVersionText" FontSize="18" FontWeight="SemiBold"
+                         TextWrapping="Wrap" />
+
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="AboutPurposeHeadingText" FontWeight="SemiBold"
+                             TextWrapping="Wrap" />
+                  <TextBlock x:Name="AboutPurposeText" TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <TextBlock x:Name="AboutLinksHeadingText" FontWeight="SemiBold"
+                             TextWrapping="Wrap" />
+                  <Button x:Name="AboutRepoLinkButton" HorizontalAlignment="Left" />
+                  <Button x:Name="AboutDonateLinkButton" HorizontalAlignment="Left" />
+                  <TextBlock x:Name="AboutDonateNoteText" Classes="hint" TextWrapping="Wrap" />
+                  <TextBlock x:Name="AboutTranslationNoteText" Classes="hint"
+                             TextWrapping="Wrap" />
+                  <!-- Строка отказа при открытии ссылки. Показывается ТОЛЬКО при ошибке —
+                       пустой строкой в раскладке она была бы мёртвым местом. -->
+                  <TextBlock x:Name="AboutLinkStatusText" Classes="hint" TextWrapping="Wrap"
+                             IsVisible="False" />
+                </StackPanel>
+              </Border>
+
+              <Border Classes="card">
+                <StackPanel x:Name="AboutIssuePanel" Spacing="8">
+                  <TextBlock x:Name="AboutIssueHeadingText" FontWeight="SemiBold"
+                             TextWrapping="Wrap" />
+                  <TextBlock x:Name="AboutIssueNoteText" Classes="hint" TextWrapping="Wrap" />
+                  <Button x:Name="AboutIssueButton" HorizontalAlignment="Left" />
+                </StackPanel>
+              </Border>
+
+              <TextBlock x:Name="AboutLicenseText" TextWrapping="Wrap" />
+              <TextBlock x:Name="AboutCopyrightText" Classes="hint" TextWrapping="Wrap" />
+            </StackPanel>
+
+        </Grid>
         </ScrollViewer>
       </Border>
     </Grid>
 
-    <!-- Кнопка сохранения, дверь «О программе» и строка состояния — ВНЕ прокрутки раздела:
-         они видны при любом выбранном разделе и на любой высоте окна (решение владельца
-         27.09.2026). Дверь стоит рядом с «Сохранить» — там же, где была её прежняя дверь
-         в главном окне (нижний левый угол содержимого).
+    <!-- Кнопка сохранения и строка состояния — ВНЕ прокрутки раздела: они видны при любом
+         выбранном разделе и на любой высоте окна (решение владельца 27.09.2026).
 
          ⚠️ ДВЕРИ ОБНОВЛЕНИЯ ЗДЕСЬ БОЛЬШЕ НЕТ — она стала РАЗДЕЛОМ списка слева (решение владельца
          28.09.2026: «это будет просто нормальный пункт меню как и остальные во вкладке настройки»).
-         Кнопка среди дверей читалась как чужой элемент: рядом стоят «Сохранить» и «О программе…»,
-         то есть действия над окном, а обновление — это ответ на вопрос «что у меня стоит». -->
-    <Grid Grid.Row="4" ColumnDefinitions="Auto,12,Auto,16,*">
+         ⚠️ И ДВЕРИ «О ПРОГРАММЕ» ЗДЕСЬ БОЛЬШЕ НЕТ (u14, 2.4.0): она тоже стала РАЗДЕЛОМ списка
+         (седьмым, последним) — решение владельца 27.09.2026 исполнено до конца, отдельного окна
+         «О программе» в панели не осталось. Проверки: `AboutDoorTests`, `AboutSectionTests`. -->
+    <Grid Grid.Row="4" ColumnDefinitions="Auto,16,*">
       <Button x:Name="SaveButton" Grid.Column="0" />
-      <Button x:Name="AboutButton" Grid.Column="2" />
-      <TextBlock x:Name="StatusText" Grid.Column="4" Text="" VerticalAlignment="Center"
+      <TextBlock x:Name="StatusText" Grid.Column="2" Text="" VerticalAlignment="Center"
                  Opacity="0.75" TextWrapping="Wrap" />
     </Grid>
   </Grid>

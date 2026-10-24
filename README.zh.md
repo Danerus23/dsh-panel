@@ -34,7 +34,7 @@
 ![面板，中文](docs/screenshots/zh/panel.png)
 
 **你的 DSH 服务器，尽在掌握**——而且安静地待在托盘里。只有一个文件 `DshPanel.exe`：安装到用户
-配置文件里，不需要管理员权限，也不需要单独安装 .NET——运行时就在程序内部。面板版本 **2.3.0**。
+配置文件里，不需要管理员权限，也不需要单独安装 .NET——运行时就在程序内部。面板版本 **2.4.0**。
 
 启动和停止服务器、按已核验的版本集合安装和更新 DSH、用颜色显示状态的托盘图标、余额、高峰时段
 与价格历史、带恢复的数据备份、用手机回答智能体的提问、面板自我更新——而且**支持三种语言：
@@ -63,7 +63,7 @@
 
 ## 如何更新
 
-打开**「更新」**部分，按「立即检查」。面板会找到 2.3.0，从本次发布下载 `DshPanel.zip`，
+打开**「更新」**部分，按「立即检查」。面板会找到 2.4.0，从本次发布下载 `DshPanel.zip`，
 核对校验和，并**在面板退出后**替换文件；替换前会先保存上一个版本的保护副本。不需要手动解压，
 也不需要卸载任何东西。
 
@@ -185,7 +185,7 @@ DSH 数据的备份是一个 ZIP 压缩包。面板会列出已有的备份；�
 
 ### 报告问题
 
-“关于”窗口里有一个报告按钮。面板会整理一份技术报告，并**把将要发出的文本原样显示给你**。
+“关于”设置部分里有一个报告按钮。面板会整理一份技术报告，并**把将要发出的文本原样显示给你**。
 它不会自己发送任何东西：只有你按下按钮，报告才会走出去——在浏览器中打开新的 issue、复制，
 或保存到文件。模型密钥、余额和登录链接都不会进入报告。
 
@@ -230,7 +230,7 @@ DSH 数据的备份是一个 ZIP 压缩包。面板会列出已有的备份；�
 | 高峰时段与价格 | [peaks](docs/screenshots/en/peaks.png) | [пики](docs/screenshots/ru/peaks.png) | [价格高峰](docs/screenshots/zh/peaks.png) |
 | 价格历史 | [price history](docs/screenshots/en/pricing-history.png) | [история цен](docs/screenshots/ru/pricing-history.png) | [价格历史](docs/screenshots/zh/pricing-history.png) |
 | 设置 | [settings](docs/screenshots/en/settings.png) | [настройки](docs/screenshots/ru/settings.png) | [设置](docs/screenshots/zh/settings.png) |
-| 关于 | [about](docs/screenshots/en/about.png) | [о программе](docs/screenshots/ru/about.png) | [关于](docs/screenshots/zh/about.png) |
+| 关于（设置部分） | [about](docs/screenshots/en/about.png) | [о программе](docs/screenshots/ru/about.png) | [关于](docs/screenshots/zh/about.png) |
 | 面板更新（设置分区） | [update](docs/screenshots/en/update.png) | [обновление](docs/screenshots/ru/update.png) | [更新](docs/screenshots/zh/update.png) |
 | 手机（设置分区） | [phone](docs/screenshots/en/phone.png) | [телефон](docs/screenshots/ru/phone.png) | [手机](docs/screenshots/zh/phone.png) |
 | DSH 服务器（设置分区） | [server](docs/screenshots/en/server.png) | [сервер](docs/screenshots/ru/server.png) | [服务器](docs/screenshots/zh/server.png) |

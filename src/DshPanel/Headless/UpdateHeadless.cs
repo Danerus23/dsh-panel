@@ -67,7 +67,7 @@ public static class UpdateHeadless
         var now = (clock ?? (() => DateTimeOffset.Now))();
         var update = client ?? new HttpUpdateClient();
         var language = Language(paths);
-        var current = Views.AboutWindow.PanelVersion;
+        var current = AboutInfo.PanelVersion;
 
         Console.WriteLine($"ОБНОВЛЕНИЕ: адрес выпусков = {ProductLinks.UpdateApi}");
         Console.WriteLine($"ОБНОВЛЕНИЕ: установлено = {current}");
