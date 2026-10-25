@@ -132,7 +132,11 @@ public sealed class UpdateInstallController : IUpdateInstall
                 At: _clock()),
             download: null,
             versionOf: null,
-            progress: progress);
+            progress: progress,
+
+            // ТЕХНИЧЕСКИЙ СЛЕД НЕУДАЧИ — В ЖУРНАЛ (DEF-059): окно может быть закрыто, пока идёт
+            // подготовка, а след обязан остаться. Замаскированный — маску ставит движок.
+            log: _log);
 
         _log(preparation.Ok
             ? string.Format(

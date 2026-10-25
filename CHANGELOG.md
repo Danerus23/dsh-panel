@@ -2,6 +2,24 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.4.2 - 2026-10-25
+
+**Four live update and window defects — no new capabilities.** The panel no longer loses an
+update preparation when the settings window is closed; there is one preparation per process; the
+update downloads one file instead of two and reports the total size, speed and time left; a
+minimized panel hides its satellite windows and brings the same windows back when restored. The
+version is in "About": it says **2.4.2**.
+
+* **Closed the settings window during preparation — the progress is not lost:** the state lives
+  in the panel, not in the window; reopen it and the same progress and prepared build are there.
+* **A second start over a running preparation is impossible** and is explained in words; the
+  refusal names no exception type and no owner path.
+* **The update downloads one file** — the panel archive that actually replaces the files; progress
+  reads "downloaded X of Y · Z/s · about N left", 16 MiB chunks, resume after a break.
+* **A minimized panel hides its satellites** and restores the same windows; one taskbar button.
+* Internal: the `Avalonia.Controls.DataGrid` package is removed as deprecated; moving to
+  `TableView` is a separate probe after the release.
+
 ## 2.4.1 - 2026-10-24
 
 **Eight accumulated defects — no new capabilities.** What changes is what the panel reports and how

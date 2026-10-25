@@ -48,14 +48,25 @@ public enum UpdateRefusal
     /// <summary>В выпуске нет файла контрольных сумм — без него обновление не готовится.</summary>
     NoSums,
 
-    /// <summary>Файл контрольных сумм скачать не удалось. Значение — причина от загрузчика.</summary>
-    SumsDownloadFailed,
+    /// <summary>
+    /// НЕ УДАЛОСЬ СКАЧАТЬ: связь оборвалась и попытки кончились. Человеку — слова про связь
+    /// (<see cref="PanelStrings.UpdateNetworkError"/>), техническая подробность — в журнал.
+    /// ОДИН ключ на файл сумм, архив и установщик: причина одна, и «какой файл» человек уже
+    /// видел строкой хода, а разными ключами различались бы не причины, а имена.
+    /// </summary>
+    DownloadNetwork,
+
+    /// <summary>Сервер ОТВЕТИЛ отказом (403/404). Значение — код ответа.</summary>
+    DownloadRefused,
+
+    /// <summary>Сервер не назвал размер файла — без размера панель файл не скачивает.</summary>
+    DownloadNoLength,
+
+    /// <summary>Записать скачанное не удалось (диск, права, занятый файл).</summary>
+    DownloadWriteFailed,
 
     /// <summary>Файл сумм пуст или не разобрался ни на одну строку.</summary>
     SumsUnreadable,
-
-    /// <summary>Архив панели скачать не удалось. Значение — причина от загрузчика.</summary>
-    ArchiveDownloadFailed,
 
     /// <summary>Суммы для архива в файле нет. Значение — имя файла. Это ОТКАЗ, а не «пропустим».</summary>
     ArchiveSumMissing,
@@ -84,17 +95,21 @@ public enum UpdateRefusal
     /// <summary>В распакованном архиве нет собранной панели.</summary>
     NoExe,
 
-    /// <summary>Версия внутри архива не совпала с версией выпуска. Значения — внутри и ожидалось.</summary>
+    /// <summary>
+    /// ВЕРСИЯ ВНУТРИ АРХИВА НЕ СОВПАЛА С ВЕРСИЕЙ ВЫПУСКА. Значения — внутри и ожидалось.
+    /// </summary>
     VersionMismatch,
 
-    /// <summary>Установщик выпуска скачать не удалось. Значение — причина от загрузчика.</summary>
-    SetupDownloadFailed,
+    // ⚠️ ОТКАЗА «УСТАНОВЩИК НЕ СКАЧАЛСЯ» ЗДЕСЬ БОЛЬШЕ НЕТ (DEF-059, 2.4.2): причина неудачи
+    // скачивания теперь называется ПРИЧИНОЙ, а не файлом — обрыв связи, ответ сервера, «размер не
+    // назван», «файл пропал», «записать не удалось» (`DownloadNetwork` и соседи). Имя файла
+    // человек видит строкой хода. Ключ `UpdateSetupDownloadFailedFormat` ушёл вместе с отказом;
+    // два оставшихся отказа установщика (суммы и сумма) живут до T2, где уходит сам блок.
 
-    /// <summary>Суммы для установщика в файле нет. Значение — имя файла.</summary>
-    SetupSumMissing,
-
-    /// <summary>Сумма установщика не сошлась. Значения — ожидаемое и полученное.</summary>
-    SetupSumMismatch,
+    // ⚠️ ОТКАЗОВ УСТАНОВЩИКА ЗДЕСЬ БОЛЬШЕ НЕТ (DEF-060, 2.4.2): второго файла выпуска не
+    // качается, а причина неудачи скачивания называется ПРИЧИНОЙ, а не файлом
+    // (`DownloadNetwork` и соседи — DEF-059). Вместе с блоком ушли `SetupDownloadFailed`,
+    // `SetupSumMissing`, `SetupSumMismatch` и ключи `UpdateSetup*`; `UpdateStage.Setup` — тоже.
 
     /// <summary>Страховочную копию прежней панели снять не удалось — откатываться будет некуда.</summary>
     NoBackup,
@@ -149,9 +164,11 @@ public static class UpdateRefusals
         UpdateRefusal.NoTarget => "UpdateRefusedNoTarget",
         UpdateRefusal.NoArchive => "UpdateNoArchive",
         UpdateRefusal.NoSums => "UpdateNoSums",
-        UpdateRefusal.SumsDownloadFailed => "UpdateSumsDownloadFailedFormat",
+        UpdateRefusal.DownloadNetwork => "UpdateNetworkError",
+        UpdateRefusal.DownloadRefused => "UpdateDownloadRefusedFormat",
+        UpdateRefusal.DownloadNoLength => "UpdateDownloadNoLength",
+        UpdateRefusal.DownloadWriteFailed => "UpdateDownloadWriteFailed",
         UpdateRefusal.SumsUnreadable => "UpdateSumsUnreadable",
-        UpdateRefusal.ArchiveDownloadFailed => "UpdateArchiveDownloadFailedFormat",
         UpdateRefusal.ArchiveSumMissing => "UpdateArchiveSumMissingFormat",
         UpdateRefusal.ArchiveSumMismatch => "UpdateArchiveSumMismatchFormat",
         UpdateRefusal.ArchiveMissing => "UpdateArchiveMissing",
@@ -163,9 +180,6 @@ public static class UpdateRefusals
         UpdateRefusal.UnpackFolderOccupied => "UpdateUnpackFolderOccupied",
         UpdateRefusal.NoExe => "UpdateNoExe",
         UpdateRefusal.VersionMismatch => "UpdateVersionMismatchFormat",
-        UpdateRefusal.SetupDownloadFailed => "UpdateSetupDownloadFailedFormat",
-        UpdateRefusal.SetupSumMissing => "UpdateSetupSumMissingFormat",
-        UpdateRefusal.SetupSumMismatch => "UpdateSetupSumMismatchFormat",
         UpdateRefusal.NoBackup => "UpdateNoBackup",
         UpdateRefusal.WriteFailed => "UpdateWriteFailedFormat",
         _ => "UpdateRefusedUnknown",
@@ -318,11 +332,19 @@ public static class UpdateInstall
     /// Отказы, не требующие диска (нет права, нет вложения, выпуск не новее), отвечают, НИЧЕГО
     /// не создав: каталог обновления после них не появляется.
     /// </summary>
+    /// <param name="log">
+    /// СТРОКА В ЖУРНАЛ ПАНЕЛИ (DEF-059). Сюда уходит ТЕХНИЧЕСКИЙ СЛЕД неудавшегося скачивания —
+    /// тип исключения и его сообщение с замаскированными путями (<see cref="DisplayMask.PathsIn"/>).
+    /// Человеку этот след не показывается: он читает причину словами ключа отказа. Может быть
+    /// <c>null</c> (проверки, самотест) — тогда след не пишется, и это названный случай, а не
+    /// забывчивость: у прогона нет журнала панели.
+    /// </param>
     public static UpdatePreparation Prepare(
         UpdateRequest request,
         IUpdateDownload? download = null,
         Func<string, string>? versionOf = null,
-        Action<UpdateProgress>? progress = null)
+        Action<UpdateProgress>? progress = null,
+        Action<string>? log = null)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -414,18 +436,39 @@ public static class UpdateInstall
             catch (Exception error)
             {
                 // Подстановка вправе бросить — живой уговор этого не делает, и причина от неё
-                // всё равно обязана стать ЗНАЧЕНИЕМ отказа, а не исключением наружу.
-                return new UpdateDownloadResult(
-                    UpdateDownloadOutcome.Interrupted, $"{error.GetType().Name}: {error.Message}");
+                // всё равно обязана стать ЗНАЧЕНИЕМ отказа, а не исключением наружу. Исход
+                // считается ТЕМ ЖЕ правилом, что у живого загрузчика (`HttpUpdateDownload.Failure`):
+                // иначе «файл подготовки пропал» из прогона и из жизни звучал бы по-разному.
+                return HttpUpdateDownload.Failure(error, UpdateDownloadOutcome.Interrupted);
             }
         }
 
-        // Отказ загрузки → отказ подготовки: несовпавшая сумма называется СВОИМ ключом (у него
-        // есть ожидаемое и полученное), остальное — ключом отказа скачивания.
-        UpdatePreparation DownloadFailed(UpdateDownloadResult result, UpdateRefusal sumMismatch, UpdateRefusal download)
-            => result.Outcome == UpdateDownloadOutcome.SumMismatch
-                ? Fail(sumMismatch, result.Expected, result.Actual)
-                : Fail(download, DownloadDetail(result));
+        // Отказ загрузки → отказ подготовки ПО ПРИЧИНЕ, А НЕ ПО ТЕКСТУ (DEF-059, 2.4.2).
+        // Несовпавшая сумма называется своим ключом (у него есть ожидаемое и полученное),
+        // остальные случаи — ключами причин: обрыв связи, ответ сервера с кодом, «размер не
+        // назван», «файл подготовки пропал», «записать не удалось». Технический след идёт
+        // ТОЛЬКО в журнал и только под маской: прежде он подставлялся человеку, и владелец
+        // 24.10.2026 прочитал в окне тип исключения и свой путь.
+        UpdatePreparation DownloadFailed(UpdateDownloadResult result, UpdateRefusal sumMismatch = UpdateRefusal.None)
+        {
+            if (result.Outcome == UpdateDownloadOutcome.SumMismatch && sumMismatch != UpdateRefusal.None)
+                return Fail(sumMismatch, result.Expected, result.Actual);
+
+            log?.Invoke(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.UpdateDownloadFailedLogFormat,
+                version,
+                result.Report()));
+
+            return result.Outcome switch
+            {
+                UpdateDownloadOutcome.HttpRefused => Fail(UpdateRefusal.DownloadRefused, result.Detail),
+                UpdateDownloadOutcome.NoLength => Fail(UpdateRefusal.DownloadNoLength, string.Empty),
+                UpdateDownloadOutcome.FileMissing => Fail(UpdateRefusal.ArchiveMissing, string.Empty),
+                UpdateDownloadOutcome.WriteFailed => Fail(UpdateRefusal.DownloadWriteFailed, string.Empty),
+                _ => Fail(UpdateRefusal.DownloadNetwork, string.Empty),
+            };
+        }
 
         try
         {
@@ -440,7 +483,7 @@ public static class UpdateInstall
             var sumsResult = Fetch(
                 request.Assets.SumsUrl, sumsPath, string.Empty, UpdateStage.Sums, UpdateAssets.SumsName);
 
-            if (!sumsResult.Ok) return Fail(UpdateRefusal.SumsDownloadFailed, DownloadDetail(sumsResult));
+            if (!sumsResult.Ok) return DownloadFailed(sumsResult);
 
             var sums = UpdateSums.Parse(File.ReadAllLines(sumsPath));
             if (sums.Count == 0) return Fail(UpdateRefusal.SumsUnreadable, string.Empty);
@@ -457,7 +500,7 @@ public static class UpdateInstall
                 request.Assets.ArchiveUrl, archivePath, archiveSum, UpdateStage.Archive, UpdateAssets.ArchiveName);
 
             if (!archiveResult.Ok)
-                return DownloadFailed(archiveResult, UpdateRefusal.ArchiveSumMismatch, UpdateRefusal.ArchiveDownloadFailed);
+                return DownloadFailed(archiveResult, UpdateRefusal.ArchiveSumMismatch);
 
             progress?.Invoke(new UpdateProgress(UpdateStage.Verify, UpdateAssets.ArchiveName, 0, -1));
 
@@ -487,30 +530,14 @@ public static class UpdateInstall
             if (!UpdateStaging.VersionMatches(inside, version))
                 return Fail(UpdateRefusal.VersionMismatch, inside, version);
 
-            // --- установщик выпуска (если он есть) --------------------------------------------
-
-            if (request.Assets.HasSetup)
-            {
-                if (!sums.TryGetValue(UpdateAssets.SetupName, out var setupSum))
-                    return Fail(UpdateRefusal.SetupSumMissing, UpdateAssets.SetupName);
-
-                var setupPath = Path.Combine(staged, UpdateAssets.SetupName);
-
-                var setupResult = Fetch(
-                    request.Assets.SetupUrl, setupPath, setupSum, UpdateStage.Setup, UpdateAssets.SetupName);
-
-                if (!setupResult.Ok)
-                    return DownloadFailed(setupResult, UpdateRefusal.SetupSumMismatch, UpdateRefusal.SetupDownloadFailed);
-
-                var setup = UpdateSums.Verify(sums, UpdateAssets.SetupName, UpdateSums.Sha256(setupPath));
-
-                if (!setup.Ok)
-                {
-                    return setup.Check == SumCheck.Missing
-                        ? Fail(UpdateRefusal.SetupSumMissing, UpdateAssets.SetupName)
-                        : Fail(UpdateRefusal.SetupSumMismatch, setup.Expected, setup.Actual);
-                }
-            }
+            // ⚠️ УСТАНОВЩИК ВЫПУСКА НЕ КАЧАЕТСЯ (DEF-060, 2.4.2). Прежде здесь стоял блок,
+            // который качал вторым файлом `dsh-panel-setup.exe` (45,1 МБ) и сверял его сумму —
+            // а применялся он НИГДЕ: панель заменяет свои файлы архивом (`UpdateScript.robocopy`),
+            // и потребителя у установщика во всём дереве нет. Владелец 24.10.2026 видел «34 %
+            // второго файла после полного первого» — ~90 МБ вместо ~45. Один файл выпуска —
+            // `DshPanel.zip`; адрес установщика в выпуске разбирается по-прежнему
+            // (`ReleaseAssets.SetupUrl`), но ничего им не делает, и это названный ответ,
+            // а не забывчивость.
 
             // --- страховочная копия -----------------------------------------------------------
 
@@ -575,28 +602,6 @@ public static class UpdateInstall
             // нечем — иначе причина исчезнет вовсе. Решение названо прямо, а не спрятано.
             return Fail(UpdateRefusal.WriteFailed, $"{error.GetType().Name}: {error.Message}");
         }
-    }
-
-    /// <summary>
-    /// ЗНАЧЕНИЕ ПРИЧИНЫ, КОТОРОЕ ЧИТАЕТ ЧЕЛОВЕК, — из ответа ЗАГРУЗКИ. Здесь причина загрузки
-    /// превращается в строку подстановки: <c>sum-mismatch: ожидалось …, получено …</c>,
-    /// <c>interrupted: IOException: …</c>, <c>http-refused: HTTP 404</c>, <c>no-length: HTTP 200</c>.
-    ///
-    /// Случай остаётся РАЗЛИЧИМЫМ (это <see cref="UpdateDownloadResult.Outcome"/>, а не текст),
-    /// а человеческая фраза берётся строкой по ключу отказа: второй набор подписей в движке
-    /// разошёлся бы со словарём на первой же правке перевода.
-    /// </summary>
-    private static string DownloadDetail(UpdateDownloadResult result)
-    {
-        var report = result.Report();
-
-        if (result.Outcome != UpdateDownloadOutcome.SumMismatch) return report;
-
-        // У несовпавшей суммы значения — это ДВА ХЕША, и оба нужны человеку: по ним видно, что
-        // скачался не тот файл, а не что «что-то пошло не так». Имя исключения сюда не попадает.
-        return string.IsNullOrWhiteSpace(result.Expected) || string.IsNullOrWhiteSpace(result.Actual)
-            ? report
-            : string.Format(CultureInfo.InvariantCulture, "{0}: {1} / {2}", report, result.Expected, result.Actual);
     }
 
     /// <summary>

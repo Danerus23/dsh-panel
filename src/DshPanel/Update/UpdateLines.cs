@@ -1,4 +1,5 @@
 using System.Globalization;
+using DshPanel.Backup;
 using DshPanel.Localization;
 using DshPanel.Pricing;
 using DshPanel.Shell;
@@ -173,34 +174,64 @@ public static class UpdateLines
     }
 
     /// <summary>
-    /// Ход подготовки словами — ОДНО правило выбора формулировки, и выбирается оно ПО ШАГУ
-    /// (<see cref="UpdateStageLines.HasPercent"/>):
+    /// ХОД ПОДГОТОВКИ СЛОВАМИ — ОДНО правило выбора формулировки, и выбирается оно ПО ШАГУ
+    /// (<see cref="UpdateStageLines.IsDownload"/>):
     ///
-    /// * у СКАЧИВАНИЯ проценты есть; сервер размер не назвал — говорим «размер файла неизвестен»,
-    ///   потому что дело именно в размере, и «0 %» показало бы, что загрузка встала;
-    /// * у этапов БЕЗ процентов (сверка контрольной суммы, распаковка, страховочная копия,
-    ///   сценарий замены) размер файла ни при чём — говорим «этап: …». Прежде здесь стояло то же
-    ///   «размер файла неизвестен», и это было ложью по смыслу (замечание владельца 20.10.2026,
-    ///   пункт 3 пакета 2.3.1).
+    /// * у СКАЧИВАНИЯ строка называет ОБЪЁМ, СКОРОСТЬ и ОСТАТОК (DEF-060, 2.4.2): «скачано
+    ///   12,4 МБ из 44,7 МБ · 2,1 МБ/с · осталось ~16,3 с». Прежде здесь стояли проценты одного
+    ///   файла, и человек не знал ни общего объёма, ни того, сколько ждать; на двух файлах полоса
+    ///   дважды начиналась с нуля. Сервер размер не назвал — говорим «сколько уже скачано, а
+    ///   остатка не посчитать»: дело именно в размере, и «0 %» показало бы, что загрузка встала;
+    /// * у этапов БЕЗ объёма (сверка контрольной суммы, распаковка, страховочная копия, сценарий
+    ///   замены) размера файла ни при чём — говорим «этап: …».
     ///
     /// Текстов у панели два источника, как и раньше: слова — в словарях трёх языков, выбор — здесь.
+    /// Числа форматирует <see cref="BackupFormat"/> — одно правило размеров на панель (банк §10.3,
+    /// Р-6: числа — культурой языка панели).
     /// </summary>
-    public static string ProgressLine(UpdateProgress progress)
+    public static string ProgressLine(UpdateProgressView view)
     {
-        ArgumentNullException.ThrowIfNull(progress);
+        ArgumentNullException.ThrowIfNull(view);
 
-        var stage = UpdateStageLines.Text(progress.Stage);
+        var stage = UpdateStageLines.Text(view.Stage);
 
-        if (!UpdateStageLines.HasPercent(progress.Stage))
+        if (!UpdateStageLines.IsDownload(view.Stage))
         {
             return string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateProgressStageFormat, stage);
         }
 
-        var percent = progress.Percent;
+        var done = BackupFormat.Size(view.Done);
 
-        return percent < 0
-            ? string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateProgressUnknownFormat, stage)
-            : string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateProgressFormat, stage, percent);
+        if (view.Total <= 0)
+        {
+            return string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateProgressUnknownFormat, done);
+        }
+
+        var total = BackupFormat.Size(view.Total);
+
+        // Скорости ещё нет (ничего не принято) — остаток называется ОБЪЁМОМ: время посчитать
+        // нечем, а «0,0 МБ/с» было бы выдумкой. «~» в словаре остаётся: число честное, но
+        // округлённое.
+        if (view.BytesPerSecond <= 0 || view.Remaining is null)
+        {
+            return string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.UpdateProgressNoSpeedFormat,
+                done,
+                total,
+                BackupFormat.Size(Math.Max(0L, view.Total - view.Done)));
+        }
+
+        return string.Format(
+            CultureInfo.CurrentCulture,
+            PanelStrings.UpdateProgressBytesFormat,
+            done,
+            total,
+            string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.UpdateSpeedFormat,
+                BackupFormat.Size((long)view.BytesPerSecond)),
+            BackupFormat.Duration(view.Remaining.Value));
     }
 
     /// <summary>

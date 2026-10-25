@@ -19,16 +19,21 @@ namespace DshPanel.Tests;
 public class BackupTests
 {
     // --- показ размера и длительности (первый артефакт этапа 4) --------------
+    //
+    // ⚠️ ЧИСЛА — КУЛЬТУРОЙ ЯЗЫКА ПАНЕЛИ (DEF-060, 2.4.2; банк §10.3, Р-6). Прогон идёт на языке
+    // «ru» (это закреплено `TestLocale`), поэтому разделитель — запятая: «1,0 МБ». До правки здесь
+    // стояла инвариантная культура, и русское окно писало «44.7 МБ» с точкой. Мутация «вернуть
+    // инвариантную культуру в `BackupFormat`» падает на этих же строках.
 
     [Theory]
     [InlineData(0, "0 Б")]
     [InlineData(1023, "1023 Б")]
-    [InlineData(1024, "1.0 КБ")]
-    [InlineData(1048575, "1024.0 КБ")]
-    [InlineData(1048576, "1.0 МБ")]
-    [InlineData(1073741823, "1024.0 МБ")]
-    [InlineData(1073741824, "1.00 ГБ")]
-    [InlineData(5915586560, "5.51 ГБ")]
+    [InlineData(1024, "1,0 КБ")]
+    [InlineData(1048575, "1024,0 КБ")]
+    [InlineData(1048576, "1,0 МБ")]
+    [InlineData(1073741823, "1024,0 МБ")]
+    [InlineData(1073741824, "1,00 ГБ")]
+    [InlineData(5915586560, "5,51 ГБ")]
     public void Размер_показывается_по_порогам_как_в_v1(long bytes, string expected) =>
         Assert.Equal(expected, BackupFormat.Size(bytes));
 
@@ -36,12 +41,29 @@ public class BackupTests
     [InlineData(0, "0 мс")]
     [InlineData(500, "500 мс")]
     [InlineData(999, "999 мс")]
-    [InlineData(1000, "1.0 с")]
-    [InlineData(59_900, "59.9 с")]
-    [InlineData(60_000, "1.0 мин")]
-    [InlineData(150_000, "2.5 мин")]
+    [InlineData(1000, "1,0 с")]
+    [InlineData(59_900, "59,9 с")]
+    [InlineData(60_000, "1,0 мин")]
+    [InlineData(150_000, "2,5 мин")]
     public void Длительность_показывается_по_порогам_как_в_v1(int milliseconds, string expected) =>
         Assert.Equal(expected, BackupFormat.Duration(TimeSpan.FromMilliseconds(milliseconds)));
+
+    /// <summary>
+    /// ПРАВИЛО ЧИСЕЛ — КУЛЬТУРА ЯЗЫКА, А НЕ МАШИНЫ (банк §10.3, Р-6; DEF-060). Проверяется карта
+    /// культур: у каждого языка своя, и прогон не зависит от локали сборочной машины.
+    ///
+    /// ⚠️ Мутация «взять культуру машины» падает здесь на любом языке, кроме совпавшего с машиной.
+    /// </summary>
+    [Fact]
+    public void Числа_форматируются_культурой_языка_панели()
+    {
+        Assert.Equal(",", DshPanel.Localization.DateText.Culture("ru").NumberFormat.NumberDecimalSeparator);
+        Assert.Equal(".", DshPanel.Localization.DateText.Culture("en").NumberFormat.NumberDecimalSeparator);
+        Assert.Equal(".", DshPanel.Localization.DateText.Culture("zh").NumberFormat.NumberDecimalSeparator);
+
+        // Язык прогона закреплён `TestLocale` как «ru» — этим и объясняются запятые выше.
+        Assert.Equal(",", DshPanel.Localization.DateText.Culture().NumberFormat.NumberDecimalSeparator);
+    }
 
     // --- правила раскладки архива -------------------------------------------
 

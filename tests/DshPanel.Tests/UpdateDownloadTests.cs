@@ -888,11 +888,11 @@ public class UpdateDownloadTests
     // ------------------------------------------------------------------ замер, на котором стоит политика
 
     /// <summary>
-    /// ЧИСЛА ПОЛИТИКИ ЗАКРЕПЛЕНЫ ЗАМЕРОМ, А НЕ «НАСТРОЕНЫ». Кусок — 8 МиБ (на нём накладные
-    /// расходы на запрос уже отыграны: 8 МиБ — 2,28 с, 16 МиБ — 2,15 с, 32 МиБ — 3,57 с),
-    /// поток ОДИН (параллель замерена ХУЖЕ: 16 МиБ одним потоком — 2,15 с, четырьмя кусками
-    /// по 4 МиБ сразу — 3,40 с). Замер снят 10.10.2026 на нашем файле выпуска
-    /// <c>v2.0.3/DshPanel.zip</c> (43 855 793 Б).
+    /// ЧИСЛА ПОЛИТИКИ ЗАКРЕПЛЕНЫ ЗАМЕРОМ, А НЕ «НАСТРОЕНЫ». Кусок — **16 МиБ**: на нём накладные
+    /// расходы на запрос отыграны (8 МиБ — 2,28 с, 16 МиБ — 2,15 с, 32 МиБ — 3,57 с; замер A0,
+    /// 2.4.2), поток ОДИН (параллель замерена ХУЖЕ: 16 МиБ одним потоком — 2,15 с, четырьмя
+    /// кусками по 4 МиБ сразу — 3,40 с). Замер снят 10.10.2026 на нашем файле выпуска
+    /// <c>v2.0.3/DshPanel.zip</c> (43 855 793 Б); выбор 16 МиБ вместо 8 — DEF-060, 2.4.2.
     ///
     /// ⚠️ Утверждение нарочно НЕ сравнивает константу с собою же: политика по умолчанию обязана
     /// нести РОВНО эти числа. Иначе правка «на глаз» (например, кусок в 1 МиБ) прошла бы молча,
@@ -901,8 +901,8 @@ public class UpdateDownloadTests
     [Fact]
     public void Числа_политики_закреплены_замером()
     {
-        Assert.Equal(8388608L, HttpUpdateDownload.ChunkSize);
-        Assert.Equal(8L * 1024 * 1024, HttpUpdateDownload.ChunkSize);
+        Assert.Equal(16777216L, HttpUpdateDownload.ChunkSize);
+        Assert.Equal(16L * 1024 * 1024, HttpUpdateDownload.ChunkSize);
         Assert.Equal(3, HttpUpdateDownload.ChunkAttempts);
         Assert.Equal(TimeSpan.FromSeconds(2), HttpUpdateDownload.ChunkPause);
 
@@ -913,12 +913,12 @@ public class UpdateDownloadTests
         // попытки не загрузка.
         Assert.Equal(1, new UpdateDownloadPolicy(10, 0, TimeSpan.Zero).Tries);
 
-        // Файл выпуска 43 855 793 Б режется на ШЕСТЬ кусков: 5 полных по 8 МиБ и последний
-        // неполный. По этому числу проверяется и то, что кусок не «мельче замеренного».
+        // Файл выпуска 43 855 793 Б режется на ТРИ куска: два полных по 16 МиБ и последний
+        // неполный — вдвое меньше запросов, чем на 8 МиБ (DEF-060).
         const long release = 43_855_793L;
         var chunks = (release + HttpUpdateDownload.ChunkSize - 1) / HttpUpdateDownload.ChunkSize;
 
-        Assert.Equal(6L, chunks);
+        Assert.Equal(3L, chunks);
     }
 
     // ------------------------------------------------------------------ (з) состояние в файле, журнал и замер
@@ -1272,7 +1272,7 @@ public class UpdateDownloadTests
         var preparation = UpdateInstall.Prepare(request);
 
         Assert.False(preparation.Ok, "подготовка объявила удачу при оборванном канале");
-        Assert.Equal(UpdateRefusal.ArchiveDownloadFailed, preparation.Refusal);
+        Assert.Equal(UpdateRefusal.DownloadNetwork, preparation.Refusal);
 
         var root = UpdateInstall.UpdateRoot(paths);
 

@@ -56,6 +56,17 @@ public partial class App : Application
     /// </summary>
     private UpdateInstallController? _updateInstall;
 
+    /// <summary>
+    /// СОСТОЯНИЕ ПОДГОТОВКИ ОБНОВЛЕНИЯ — ОДИН ОБЪЕКТ НА ПРОЦЕСС (DEF-058, 2.4.2).
+    ///
+    /// **Почему здесь, а не в окне.** Подготовка переживает окно: человек запускает её из настроек,
+    /// закрывает их, а загрузка идёт (и шарик о ней говорит). Поля окна умирали вместе с ним, и
+    /// новое окно показывало «ничего не идёт» и разрешало вторую подготовку в те же файлы.
+    /// Время жизни этого объекта — панель, как у движка установки, и создаётся он рядом с ним.
+    /// Окно получает объект ДОВОДОМ (<c>SettingsWindow.Attach</c>) и только показывает.
+    /// </summary>
+    private PanelUpdateState? _updateState;
+
     private BackupController? _backups;
     private TrayIconHost? _tray;
 
@@ -702,6 +713,9 @@ public partial class App : Application
         //
         // Папка панели, которую заменит сценарий, — папка ЭТОГО exe: второй поиск «где лежит панель»
         // однажды нашёл бы не ту папку, а заменять чужие файлы панель не имеет права.
+        // СНАЧАЛА СОСТОЯНИЕ, ПОТОМ ДВИЖОК: движку и окнам нужен ОДИН объект на процесс (DEF-058).
+        _updateState = new PanelUpdateState();
+
         _updateInstall = new UpdateInstallController(
             paths,
             () => AboutInfo.PanelVersion,
@@ -857,6 +871,7 @@ public partial class App : Application
             _update?.Dispose();
             _update = null;
             _updateInstall = null;
+            _updateState = null;
 
             // Часы автокопии гасятся вместе с панелью: таймер, переживший выход, дёргал бы
             // движок копий у завершающегося приложения.
@@ -1438,6 +1453,10 @@ public partial class App : Application
             _pricing,
             _update,
             _updateInstall,
+
+            // СОСТОЯНИЕ ПОДГОТОВКИ — ТО ЖЕ, ЧТО У ПАНЕЛИ (DEF-058): окно его не заводит себе,
+            // а показывает. Закрытие окна состояние не трогает.
+            updateState: _updateState,
             skipUpdate: version => _settings?.SetUpdateSkippedVersion(version) ?? false,
             exitForUpdate: () => _shell?.Exit(),
 

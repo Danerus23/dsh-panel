@@ -79,6 +79,20 @@ public static class DateText
             _ => (CultureInfo.GetCultureInfo("en-US"), "MMM d, yyyy", "MMM d, yyyy, HH:mm"),
         };
 
+    /// <summary>
+    /// КУЛЬТУРА ЧИСЕЛ ЭТОГО ЯЗЫКА (банк §10.3, Р-6: числа — культурой языка панели, как и даты).
+    ///
+    /// **Зачем отдельная дверь.** Числа в панели писались <c>InvariantCulture</c>: на русском
+    /// языке человек читал «44.7 МБ» с точкой — не своим разделителем (владелец видел это в строке
+    /// хода подготовки, DEF-060). Культура берётся у ЯЗЫКА, а не у машины, по той же причине, что
+    /// и у дат: иначе на русской Windows английское окно писало бы «44,7 МБ».
+    ///
+    /// ⚠️ Это культура ПОКАЗА, а не хранения: машинные строки (метки времени, суммы) живут
+    /// по инвариантной культуре и здесь не трогаются.
+    /// </summary>
+    /// <param name="language">Язык панели; <c>null</c> — выбранный сейчас.</param>
+    public static CultureInfo Culture(string? language = null) => Rule(language).Culture;
+
     private static string Render(DateTime at, string? language, bool withTime)
     {
         var rule = Rule(language);

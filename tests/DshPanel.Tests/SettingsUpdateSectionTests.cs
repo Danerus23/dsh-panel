@@ -117,12 +117,14 @@ public class SettingsUpdateSectionTests
         FakeUpdate? update,
         FakeInstall? install = null,
         Func<string, bool>? skipUpdate = null,
-        Action? exitForUpdate = null)
+        Action? exitForUpdate = null,
+        PanelUpdateState? updateState = null)
     {
         var window = PanelTestStand.SettingsStand(
             dir,
             update: update,
             install: install,
+            updateState: updateState,
             skipUpdate: skipUpdate,
             exitForUpdate: exitForUpdate);
 
@@ -253,7 +255,7 @@ public class SettingsUpdateSectionTests
     /// и именно на неё возвращается фокус (DEF-008).
     /// </summary>
     private static UpdatePreparation Refused() =>
-        UpdatePreparation.Refuse(UpdateRefusal.ArchiveDownloadFailed, "timeout");
+        UpdatePreparation.Refuse(UpdateRefusal.DownloadNetwork, "timeout");
 
     /// <summary>
     /// РАЗДЕЛ «ОБНОВЛЕНИЕ» ЕСТЬ В СПИСКЕ — последним, как и остальные разделы настроек.
@@ -741,6 +743,139 @@ public class SettingsUpdateSectionTests
         }
     }
 
+    // ------------------------------------------- ОДНА ПОДГОТОВКА НА ПРОЦЕСС (DEF-058/059)
+    //
+    // ⚠️ Владелец 24.10.2026 на 2.4.1: запустил подготовку, закрыл окно, открыл снова — прогресса
+    // нет, кнопка снова доступна, второе нажатие запустило вторую загрузку в те же файлы и
+    // показало «FileNotFoundException: Could not find file C:\Users\…\…zip.part-0». Две проверки
+    // ниже стерегут обе половины: второй старт невозможен, а ход и готовность переживают окно.
+
+    /// <summary>
+    /// ВТОРОЙ СТАРТ ПОВЕРХ ИДУЩЕГО ОТКАЗЫВАЕТ СЛОВАМИ И РАБОТЫ НЕ ЗАПУСКАЕТ. Идёт ЖИВЫМ путём:
+    /// первый старт — тем же швом, каким идёт нажатие; второй — из середины работы, ровно как
+    /// второй щелчок или второе окно. Дверь одна (`PanelUpdateState.TryBegin`), поэтому второй
+    /// раз движок не зовётся вовсе.
+    ///
+    /// ⚠️ Мутация M3 «пропускать второй старт» (снять сверку занятости) падает здесь: движок
+    /// позвался бы дважды, а строка отказа осталась бы пустой.
+    /// </summary>
+    [AvaloniaFact]
+    public void Второй_старт_поверх_идущей_подготовки_отказывает_словами()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            SettingsWindow? window = null;
+            string? midStatus = null;
+
+            var install = new FakeInstall(answer: Prepared(), afterProgress: () =>
+            {
+                // ВТОРОЙ СТАРТ В ПОЛЁТЕ: ещё одно нажатие, пока первое не ответило.
+                window!.PrepareNow();
+
+                // Что человек прочитал бы сразу после него: отказ, а не пустое место.
+                midStatus = window.UpdateStatusLine;
+            });
+
+            window = Stand(dir, new FakeUpdate(), install);
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            window.PrepareNow();
+
+            // 1. ДВИЖОК ПОЗВАЛСЯ ОДИН РАЗ: второй старт не дошёл до работы.
+            Assert.Equal(1, install.Prepared);
+
+            // 2. ОТКАЗ НАЗВАН СЛОВАМИ и без пути и типа: ни исключения, ни каталога человека.
+            Assert.Equal(PanelStrings.UpdatePreparationBusy, midStatus);
+            Assert.DoesNotContain("C:\\Users", midStatus ?? string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("Exception", midStatus ?? string.Empty, StringComparison.Ordinal);
+
+            // 3. А КОГДА ПОПЫТКА КОНЧИЛАСЬ, строка снова принадлежит её исходу — отказ второго
+            //    старта не заслонил ответ движка.
+            Assert.NotNull(window.UpdatePrepared);
+            Assert.Equal(string.Empty, window.UpdateStatusLine);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ХОД И ГОТОВНОСТЬ ПЕРЕЖИВАЮТ ЗАКРЫТИЕ ОКНА: второе окно на ТОМ ЖЕ состоянии подготовки
+    /// (его даёт `App`, одно на процесс) показывает ход, отказывает второму старту словами и
+    /// показывает готовую сборку, пришедшую уже после закрытия первого окна.
+    ///
+    /// **Мутация M1 «состояние снова в окне»** (окно заводит себе новый объект вместо довода)
+    /// падает ИМЕННО здесь и первой проверкой: во втором окне ход был бы пуст, кнопка доступна,
+    /// а второй старт — разрешён.
+    /// </summary>
+    [AvaloniaFact]
+    public void Два_окна_на_одном_состоянии_видят_ход_и_готовность()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var state = new PanelUpdateState();
+            var install = new FakeInstall(answer: Prepared());
+
+            var first = Stand(dir, new FakeUpdate(), install, updateState: state);
+
+            // Подготовка идёт: ход известен, ответа движка ещё нет.
+            Assert.True(state.TryBegin(), "первый старт не открылся");
+            state.Report(new UpdateProgress(UpdateStage.Archive, "DshPanel.zip", 50, 100));
+            PanelTestStand.Settle();
+
+            // Окно закрыли — состояние панели осталось (в этом и был DEF-058).
+            first.CloseQuietly();
+            PanelTestStand.Settle();
+
+            // Открыли ДРУГОЕ окно на том же состоянии.
+            var second = Stand(dir, new FakeUpdate(), install, updateState: state);
+
+            second.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            // 1. ХОД ВИДЕН: он не умер вместе с закрытым окном.
+            var line = second.FindControl<TextBlock>("UpdateProgressText")!.Text ?? string.Empty;
+            Assert.False(string.IsNullOrEmpty(line), "ход подготовки пропал вместе с закрытым окном (DEF-058)");
+            Assert.True(second.FindControl<ProgressBar>("UpdateProgressBar")!.IsVisible);
+
+            // 2. КНОПКА НАЗЫВАЕТ РАБОТУ И НЕДОСТУПНА — второй старт человеку не предлагается.
+            var prepare = second.FindControl<Button>("UpdatePrepareButton")!;
+            Assert.Equal(PanelStrings.UpdatePreparingButton, prepare.Content);
+            Assert.False(prepare.IsEnabled, "второе окно разрешает второй старт поверх идущей подготовки");
+
+            // 3. ВТОРОЙ СТАРТ ОТКАЗЫВАЕТ СЛОВАМИ и работы не запускает.
+            second.PrepareNow();
+
+            Assert.Equal(0, install.Prepared);
+            Assert.Equal(PanelStrings.UpdatePreparationBusy, second.UpdateStatusLine);
+            Assert.DoesNotContain("C:\\Users", second.UpdateStatusLine, StringComparison.Ordinal);
+            Assert.DoesNotContain("Exception", second.UpdateStatusLine, StringComparison.Ordinal);
+
+            // 4. ГОТОВНОСТЬ, ПРИШЕДШАЯ ПОСЛЕ ЗАКРЫТИЯ ПЕРВОГО ОКНА, ВИДНА ВО ВТОРОМ.
+            state.Finish(Prepared(), string.Empty);
+            PanelTestStand.Settle();
+
+            Assert.NotNull(second.UpdatePrepared);
+            Assert.True(second.FindControl<Button>("UpdateReplaceButton")!.IsVisible);
+            Assert.False(second.FindControl<ProgressBar>("UpdateProgressBar")!.IsVisible);
+
+            second.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
     // ------------------------------------------- ХОД ПОДГОТОВКИ КОНЧАЕТСЯ ЧИСТО
     //
     // ⚠️ Требование владельца 20.10.2026 (пункт 2 пакета 2.3.1): после успеха И отказа строка
@@ -857,8 +992,14 @@ public class SettingsUpdateSectionTests
                 .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
 
             WaitFor(
-                () => window.UpdateStatusLine.Contains("InvalidOperationException", StringComparison.Ordinal),
+                () => window.UpdateStatusLine == PanelStrings.UpdateRefusedUnknown,
                 "исключение фоновой подготовки не дошло до раздела словами");
+
+            // ТИП И СООБЩЕНИЕ ИСКЛЮЧЕНИЯ ЧЕЛОВЕКУ НЕ ПОКАЗЫВАЮТСЯ (DEF-059, 2.4.2): это техслед,
+            // и его место — журнал панели под маской путей. Мутация «вернуть сырое исключение
+            // в строку» падает ровно здесь.
+            Assert.DoesNotContain("InvalidOperationException", window.UpdateStatusLine, StringComparison.Ordinal);
+            Assert.DoesNotContain("сеть оборвалась", window.UpdateStatusLine, StringComparison.Ordinal);
 
             AssertProgressCleared(window, "исключения фоновой задачи");
 
@@ -1310,7 +1451,7 @@ public class SettingsUpdateSectionTests
                 .RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
 
             WaitFor(
-                () => window.UpdateStatusLine.Contains("диск отвалился", StringComparison.Ordinal),
+                () => window.UpdateStatusLine == PanelStrings.UpdateRefusedUnknown,
                 "исключение фоновой подготовки не дошло до раздела словами");
 
             PanelTestStand.Settle();
@@ -1323,7 +1464,11 @@ public class SettingsUpdateSectionTests
             var reason = window.FindControl<TextBlock>("UpdateStatusText")!;
 
             Assert.True(reason.IsVisible, "строка причины исключения не показана");
-            Assert.Contains("диск отвалился", reason.Text ?? string.Empty, StringComparison.Ordinal);
+            Assert.Equal(PanelStrings.UpdateRefusedUnknown, reason.Text);
+
+            // СЫРОЕ ИСКЛЮЧЕНИЕ В СТРОКУ НЕ ПОПАЛО (DEF-059): ни типа, ни сообщения среды.
+            Assert.DoesNotContain("InvalidOperationException", reason.Text ?? string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("диск отвалился", reason.Text ?? string.Empty, StringComparison.Ordinal);
 
             Assert.Same(prepare, window.FocusManager!.GetFocusedElement());
             Assert.Contains(":focus-visible", prepare.Classes);
@@ -1640,5 +1785,112 @@ public class SettingsUpdateSectionTests
         {
             PanelTestStand.RemoveTemp(dir);
         }
+    }
+
+    // ------------------------------------------------- ЖИВАЯ ПРОБА ОКНА: ЕЁ ДВЕРИ (T4, 2.4.2)
+    //
+    // Сама сцена «закрыл на ходу — открыл» проверяется ЖИВЫМ окном на собранном exe
+    // (`--windows-selftest`, шаги 7–13 `Shell\WindowsSelfTest.cs`). Проверки ниже стерегут то,
+    // на чём эта сцена стоит и чего живой прогон не увидит до машины человека: подставные двери
+    // пробы (`Update\UpdateProbeDoors.cs`) — продукт, а не тесты. Пропадёт у них вложение или
+    // шаг хода — живая проба встанет, и это будет поздно (только на живой машине).
+
+    /// <summary>
+    /// ДВЕРИ ЖИВОЙ ПРОБЫ ДАЮТ РАЗДЕЛУ ДОСТУПНУЮ ПОДГОТОВКУ. Без этого сцена «нажал — идёт»
+    /// начаться не может: кнопка была бы погашена, и проба проверяла бы пустое место.
+    ///
+    /// ⚠️ Мутация «убрать вложения из образцового выпуска пробы» (`Assets = ReleaseAssets.None`)
+    /// падает ИМЕННО здесь: раздел сказал бы «сначала проверьте выпуски».
+    /// </summary>
+    [AvaloniaFact]
+    public void Двери_живой_пробы_дают_доступную_подготовку()
+    {
+        var dir = PanelTestStand.TempDir();
+
+        try
+        {
+            var window = PanelTestStand.SettingsStand(
+                dir,
+                update: new ProbeUpdateControl(),
+                install: new ProbeUpdateInstall());
+
+            window.Show();
+            PanelTestStand.Settle();
+
+            window.ShowSection(SettingsWindow.UpdateSection);
+            PanelTestStand.Settle();
+
+            Assert.True(
+                window.FindControl<Button>("UpdatePrepareButton")!.IsEnabled,
+                "кнопка подготовки в живой пробе погашена: сцена «идёт подготовка» не начнётся");
+
+            Assert.Equal(
+                PanelStrings.UpdatePrepareNote,
+                window.FindControl<TextBlock>("UpdateHintText")!.Text);
+
+            window.CloseQuietly();
+        }
+        finally
+        {
+            PanelTestStand.RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ПОДСТАВНОЙ ДВИЖОК НАЗЫВАЕТ ХОД ТРЕМЯ СНИМКАМИ И ОТВЕЧАЕТ ГОТОВНОСТЬЮ — ровно то, на чём
+    /// стоят числа живой пробы («ход до/после закрытия окна»): первый снимок ноль, как у живого
+    /// загрузчика, дальше два шага из <see cref="ProbeUpdateInstall.FirstDone"/> и
+    /// <see cref="ProbeUpdateInstall.SecondDone"/>.
+    ///
+    /// ⚠️ Калитки ОТКРЫТЫ ДО вызова: проверяется ход, а не ожидание (ждать их таймауты значило бы
+    /// держать прогон десять секунд). Закрытые калитки стережёт живая проба — там они и нужны.
+    /// ⚠️ Мутация «убрать первый снимок с нулём» падает здесь: снимков стало бы два, а средняя
+    /// скорость в первом из них считалась бы от нуля прошедшего времени (выдуманные гигабайты).
+    /// </summary>
+    [Fact]
+    public void Подставной_движок_называет_два_шага_и_готовность()
+    {
+        var install = new ProbeUpdateInstall();
+
+        install.NextStep();
+        install.Finish();
+
+        var seen = new List<UpdateProgress>();
+        var answer = install.Prepare("v9.9.9", new ProbeUpdateControl().Result.Assets, seen.Add);
+
+        Assert.True(answer.Ok, "подставной движок не отдал готовность: карточке замены неоткуда взяться");
+        Assert.Equal(1, install.Prepared);
+        Assert.Equal(0, install.Launched);
+
+        Assert.Equal(3, seen.Count);
+        Assert.Equal(0, seen[0].Done);
+        Assert.Equal(ProbeUpdateInstall.FirstDone, seen[1].Done);
+        Assert.Equal(ProbeUpdateInstall.SecondDone, seen[2].Done);
+        Assert.All(seen, step => Assert.Equal(ProbeUpdateInstall.ArchiveTotal, step.Total));
+        Assert.All(seen, step => Assert.Equal(UpdateStage.Archive, step.Stage));
+    }
+
+    /// <summary>
+    /// ОБРАЗЦОВЫЙ ВЫПУСК ПРОБЫ — НОВЕЕ ПАНЕЛИ И С ОБОИМИ ВЛОЖЕНИЯМИ, и ни одного своего решения
+    /// о новизне: она считается тем же правилом ядра, что у настоящего контроллера.
+    ///
+    /// ⚠️ Мутация «версия пробы равна установленной» падает здесь (и в живой пробе кнопка была бы
+    /// погашена словами «обновляться некуда»).
+    /// </summary>
+    [Fact]
+    public void Образцовый_выпуск_пробы_новее_и_с_вложениями()
+    {
+        var probe = new ProbeUpdateControl();
+
+        Assert.True(probe.Result.Ok);
+        Assert.True(probe.Result.Assets.HasArchive, "у выпуска пробы нет архива: готовить нечего");
+        Assert.True(probe.Result.Assets.HasSums, "у выпуска пробы нет файла сумм: готовить нельзя");
+        Assert.True(probe.Newer, "выпуск пробы не новее панели: «обновляться некуда»");
+        Assert.True(probe.Allowed);
+
+        // Проверка выпусков у пробы — счётчик, а не запрос: сети у прогона проверки нет.
+        Assert.Equal(0, probe.Checks);
+        probe.Check();
+        Assert.Equal(1, probe.Checks);
     }
 }

@@ -142,9 +142,26 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
     /// </summary>
     private Action? _exitForUpdate;
 
-    private bool _updateBusy;
-    private UpdatePreparation? _updatePrepared;
-    private string _updateStatus = string.Empty;
+    /// <summary>
+    /// СОСТОЯНИЕ ПОДГОТОВКИ ОБНОВЛЕНИЯ — ОБЪЕКТ УРОВНЯ ПАНЕЛИ, а не поле окна (DEF-058, 2.4.2).
+    /// У человека его создаёт <c>App</c> и передаёт доводом <see cref="Attach"/>: одно состояние
+    /// на процесс, поэтому закрытое окно больше не «забывает», что подготовка идёт.
+    ///
+    /// ⚠️ Здесь заводится СВОЁ только для окна, построенного без панели (проверки вида, съёмка
+    /// кадра): это названный случай, а не второй дом состояния — у человека оно всегда приходит
+    /// доводом. Показывать и менять его окно может только через двери объекта.
+    /// </summary>
+    private PanelUpdateState _updateState = new();
+
+    /// <summary>
+    /// ЧТО РАЗДЕЛ ПОКАЗАЛ В ПРОШЛЫЙ РАЗ. Нужно не для красоты: ход подготовки поднимает
+    /// <see cref="PanelUpdateState.Changed"/> на каждый прочитанный буфер куска (сотни раз за
+    /// загрузку), и перерисовывать весь раздел — с разбором заметок к выпуску — на каждое такое
+    /// сообщение значит делать лишнюю работу. Полоса хода обновляется всегда, а весь раздел —
+    /// только когда сменилось занятость, готовность или строка состояния.
+    /// </summary>
+    private (bool Busy, UpdatePreparation? Prepared, string Status) _shownUpdate;
+
     private IReadOnlyList<WorkDirSuggestion> _suggestions = Array.Empty<WorkDirSuggestion>();
 
     /// <summary>
@@ -1097,6 +1114,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
         IPricingControl? pricing = null,
         IUpdateControl? update = null,
         IUpdateInstall? install = null,
+        PanelUpdateState? updateState = null,
         Func<string, bool>? skipUpdate = null,
         Action? exitForUpdate = null,
         IPhoneSection? phone = null,
@@ -1146,6 +1164,19 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
         _install = install;
         _skipUpdate = skipUpdate;
         _exitForUpdate = exitForUpdate;
+
+        // СОСТОЯНИЕ ПОДГОТОВКИ ПРИХОДИТ ДОВОДОМ (DEF-058, 2.4.2): у человека — один объект на
+        // процесс из `App`, и окно только показывает его. Без довода (проверки вида, съёмка кадра)
+        // окно заводит своё — названный случай, а не второй дом состояния.
+        _updateState.Changed -= OnUpdateStateChanged;
+        _updateState = updateState ?? new PanelUpdateState();
+        _updateState.Changed += OnUpdateStateChanged;
+
+        // ПОДПИСКА СНИМАЕТСЯ ВМЕСТЕ С ОКНОМ, а состояние панели продолжает жить: мёртвый
+        // подписчик держал бы закрытое окно живым и будил бы его на каждый буфер загрузки.
+        // Само закрытие окна состояние НЕ трогает (в этом и был DEF-058).
+        Closed -= OnClosedDetachUpdateState;
+        Closed += OnClosedDetachUpdateState;
 
         // Состояние изменилось (проверка началась, пришёл ответ) — перерисовать ТОЛЬКО раздел,
         // и ни в коем случае не весь Render: он перечитывает поля из настроек, то есть стёр бы
@@ -2153,14 +2184,31 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
         var assets = result?.Assets ?? ReleaseAssets.None;
         var (ready, hint) = UpdateLines.PrepareState(_install, ok, update?.Newer == true, assets);
 
+        // СОСТОЯНИЕ ПОДГОТОВКИ ЧИТАЕТСЯ ОДИН РАЗ: оно живёт в объекте уровня панели (DEF-058),
+        // и его может сменить фоновая нитка между двумя чтениями. Запомненное показанное —
+        // чтобы окно не перерисовывало раздел на каждое сообщение хода.
+        var busy = _updateState.Busy;
+        var preparedAnswer = _updateState.Prepared;
+        var status = _updateState.Status;
+
+        _shownUpdate = (busy, preparedAnswer, status);
+
         UpdateHintText.Text = hint;
-        UpdatePrepareButton.Content = _updateBusy
+        UpdatePrepareButton.Content = busy
             ? PanelStrings.UpdatePreparingButton
             : PanelStrings.UpdatePrepareButton;
 
+        // ПОДСКАЗКА СМЕННОЙ КНОПКИ: пока идёт подготовка, «нажать нельзя» говорит причину —
+        // это КОРОТКАЯ дверь отказа второго старта (W0, 2.4.2). Полная причина
+        // (`UpdatePreparationBusy`) встаёт только по факту отказа, и двух фраз об одном на
+        // экране не бывает.
+        PanelToolTip.Set(
+            UpdatePrepareButton,
+            busy ? PanelStrings.TipUpdatePrepareBusy : PanelStrings.TipUpdatePrepareButton);
+
         // Подготовленная сборка уже лежит на диске: второй раз готовить нечего, и кнопка молчит
         // делом — она недоступна.
-        UpdatePrepareButton.IsEnabled = UpdatePrepareDecisions.ButtonEnabled(ready, _updateBusy, _updatePrepared is not null);
+        UpdatePrepareButton.IsEnabled = UpdatePrepareDecisions.ButtonEnabled(ready, busy, preparedAnswer is not null);
         UpdateCheckButton.IsEnabled = update?.Allowed == true;
         PanelToolTip.Set(
             UpdateCheckButton,
@@ -2171,14 +2219,14 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
         // обещала бы молчание о версии, которая уже стоит.
         var newer = update?.Newer == true;
 
-        UpdateSkipButton.IsEnabled = newer && !_updateBusy;
+        UpdateSkipButton.IsEnabled = newer && !busy;
         PanelToolTip.Set(UpdateSkipButton, UpdateLines.SkipTip(ok, latest, newer));
 
         UpdateGithubButton.IsEnabled = UpdateLines.GithubAddress(result?.PageUrl).Length > 0;
 
-        UpdateStatusText.Text = _updateStatus;
+        UpdateStatusText.Text = status;
 
-        var prepared = _updatePrepared is { Ok: true };
+        var prepared = preparedAnswer is { Ok: true };
 
         // Карточка замены — вокруг «последнего нажатия»: появляется ТОЛЬКО после подготовки
         // (до неё показывать нечего), и панель заменяет файлы ровно по этой кнопке.
@@ -2191,10 +2239,12 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
             UpdatePreparedText.Text = string.Format(
                 System.Globalization.CultureInfo.CurrentCulture,
                 PanelStrings.UpdatePreparedStagedFormat,
-                DisplayMask.Path(_updatePrepared!.StagedFolder));
+                DisplayMask.Path(preparedAnswer!.StagedFolder));
         }
 
         UpdateReplaceButton.IsEnabled = prepared;
+
+        RenderProgress();
     }
 
     /// <summary>
@@ -2302,7 +2352,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
         var address = UpdateLines.GithubAddress(_update?.Result.PageUrl);
         var error = ProductLinks.Open(address);
 
-        if (error.Length > 0) _updateStatus = error;
+        if (error.Length > 0) _updateState.ReportStatus(error);
 
         RenderUpdateSection();
     }
@@ -2319,12 +2369,12 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
 
         var saved = _skipUpdate?.Invoke(version) ?? false;
 
-        _updateStatus = saved
+        _updateState.ReportStatus(saved
             ? string.Format(
                 System.Globalization.CultureInfo.CurrentCulture,
                 PanelStrings.UpdateSkipDoneFormat,
                 version)
-            : PanelStrings.UpdateSkipFailed;
+            : PanelStrings.UpdateSkipFailed);
 
         RenderUpdateSection();
     }
@@ -2338,38 +2388,48 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
     /// заведён потому, что нажатие уходило в фоновую задачу, а дождаться её проверке нечем:
     /// три кнопки раздела остались без прямых проверок. Нажатие и проверка идут ОДНИМ путём —
     /// нажатие дожидается того же шва, а не ходит мимо него.
+    ///
+    /// ⚠️ **ДВЕРЬ СТАРТА ОДНА — <see cref="PanelUpdateState.TryBegin"/>, и она в ОБЪЕКТЕ ПАНЕЛИ**
+    /// (DEF-058/059, 2.4.2), а не в этом окне. Прежний флаг окна разрешал второй старт из нового
+    /// окна, хотя первая загрузка шла: две подготовки писали в одни файлы, и вторая удаляла куски
+    /// первой. Теперь второй старт возвращает <c>false</c> и говорит причину словами — сколько бы
+    /// окон ни было открыто.
     /// </summary>
     public void PrepareUpdate()
     {
         if (_update is null || _install is null) return;
 
-        // ⚠️ ВТОРОЕ НАЖАТИЕ В ПОЛЁТЕ НЕ СТАРТУЕТ ВТОРОЙ ПОДГОТОВКИ (DEF-006, 2.4.0). Кнопка
-        // гаснет, но между щелчком и перерисовкой остаётся мгновение, а щелчок человек делает
-        // и вслепую; решение — в чистой функции, чтобы проверялось прогоном.
-        if (!UpdatePrepareDecisions.MayStart(_updateBusy)) return;
+        // ⚠️ ОТКАЗ ВТОРОГО СТАРТА — СЛОВАМИ, А НЕ ГОНКОЙ. Текст причины уже стоит в состоянии
+        // (его видит ЛЮБОЕ окно на этом состоянии), и здесь остаётся только показать раздел.
+        if (!_updateState.TryBegin())
+        {
+            RenderUpdateSection();
+            return;
+        }
 
-        _updateBusy = true;
-        _updatePrepared = null;
-        _updateStatus = string.Empty;
-
-        // Новая попытка начинается с ПУСТОЙ строки хода: иначе после отказа на экране до первого
-        // сообщения движка висела бы строка прошлой попытки, и человек читал бы её как текущую.
-        ClearProgress();
         RenderUpdateSection();
 
         Task.Run(() =>
         {
             try
             {
-                PrepareNow();
+                PrepareNowCore();
             }
             catch (Exception error)
             {
+                // СЫРОЕ ИСКЛЮЧЕНИЕ ЧЕЛОВЕКУ НЕ ПОКАЗЫВАЕТСЯ (DEF-059, 2.4.2). Человеку — слова
+                // «причина не названа» и что делать; тип и сообщение — техслед, и его место
+                // В ЖУРНАЛЕ, под маской путей (`DisplayMask.PathsIn`), а не в строке окна.
+                // Прежде сюда попадало «InvalidOperationException: …», а в отказе загрузки —
+                // тип исключения вместе с путём владельца.
+                PanelLog.Write(string.Format(
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    PanelStrings.UpdateLogFormat,
+                    DisplayMask.PathsIn(error.GetType().Name + ": " + error.Message)));
+
                 OnUi(() =>
                 {
-                    _updateStatus = $"{error.GetType().Name}: {error.Message}";
-                    _updateBusy = false;
-                    ClearProgress();
+                    _updateState.Finish(null, PanelStrings.UpdateRefusedUnknown);
                     RenderUpdateSection();
 
                     // ИСКЛЮЧЕНИЕ — ТОТ ЖЕ ИСХОД, ЧТО ОТКАЗ, и по тому же правилу «одно на все
@@ -2385,11 +2445,28 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
     /// и написать сценарий замены. Файлы панели не заменяются и здесь: замену запускает человек
     /// отдельной кнопкой.
     ///
-    /// Ход подготовки приходит от движка ЗВОНКАМИ, и каждый возвращается на нитку интерфейса
-    /// (<see cref="OnUi"/>): рисовать из фоновой нитки нельзя. Готовый ответ применяется той же
-    /// дверью — поэтому шов, позванный С нитки интерфейса, отвечает сразу, а не «когда-нибудь».
+    /// ⚠️ Шов проверок: он САМ проходит дверь старта, поэтому «два старта подряд» проверяются
+    /// тем же путём, каким идёт нажатие, а не своей выдумкой проверки.
+    ///
+    /// Ход подготовки приходит от движка ЗВОНКАМИ — и уходит в состояние панели
+    /// (<see cref="PanelUpdateState.Report"/>), а не в органы окна: рисовать из фоновой нитки
+    /// нельзя, и переводит сообщение в свою нитку уже подписчик состояния (`OnUi`).
     /// </summary>
     internal void PrepareNow()
+    {
+        if (_update is null || _install is null) return;
+
+        if (!_updateState.TryBegin()) return;
+
+        PrepareNowCore();
+    }
+
+    /// <summary>
+    /// РАБОТА ПОДГОТОВКИ БЕЗ ДВЕРИ СТАРТА: её зовут после <see cref="PanelUpdateState.TryBegin"/>
+    /// и нажатие, и шов проверок. Отдельной дверью — чтобы дверь старта была ОДНА: две копии
+    /// «начать» разошлись бы ровно так же, как разошлись флаг окна и настоящая занятость.
+    /// </summary>
+    private void PrepareNowCore()
     {
         var update = _update;
         var install = _install;
@@ -2400,29 +2477,22 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
         var preparation = install.Prepare(
             result.Latest,
             result.Assets,
-            progress => OnUi(() => ReportProgress(progress)));
+            progress => _updateState.Report(progress));
 
         OnUi(() =>
         {
-            // ⚠️ Отказ НЕ становится «тем, что подготовлено»: держать в этом поле неготовую сборку
-            // значило бы оставить открытой дверь замены — она спрашивает готовый ответ, а не «то,
-            // что вернул движок». Отказ человек читает словами (<see cref="UpdateRefusalLines"/>),
-            // а подготовленным считается только успех.
-            _updatePrepared = preparation.Ok ? preparation : null;
+            // ⚠️ Отказ НЕ становится «тем, что подготовлено»: это решает сама дверь состояния
+            // (`Finish` берёт только удачный ответ) — держать отказ готовым значило бы оставить
+            // открытой дверь замены файлов. Отказ человек читает словами
+            // (<see cref="UpdateRefusalLines"/>).
+            //
+            // Ход кончился ЛЮБЫМ исходом — успехом и отказом одинаково: `Finish` забывает снимок
+            // хода, и строка с полосой уходят с экрана. Прежде строка оставалась («висит» после
+            // подготовки — замечание владельца 20.10.2026). Вызов ОДИН на оба исхода.
+            _updateState.Finish(
+                preparation,
+                preparation.Ok ? string.Empty : UpdateRefusalLines.Line(preparation));
 
-            if (!preparation.Ok)
-            {
-                _updateStatus = UpdateRefusalLines.Line(preparation);
-            }
-
-            _updateBusy = false;
-
-            // Ход кончился ЛЮБЫМ исходом — успехом и отказом одинаково: строка хода очищается,
-            // полоса прогресса прячется. Прежде строка оставалась на экране («висит» после
-            // подготовки — замечание владельца 20.10.2026), и последнее «50 %» читалось как
-            // продолжающаяся работа. Вызов ОДИН на оба исхода: второй такой строки в разделе
-            // быть не должно — разойдясь, успех и отказ показывали бы разное про одно и то же.
-            ClearProgress();
             RenderUpdateSection();
 
             // Появилось новое действие (карточка замены) — подвести его к глазам и поставить на него
@@ -2436,35 +2506,53 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
         });
     }
 
-    /// <summary>Ход подготовки на экране: этап, имя файла и проценты (минус — «сколько, неизвестно»).</summary>
-    private void ReportProgress(UpdateProgress progress)
-    {
-        UpdateProgressBar.IsVisible = true;
-        UpdateProgressText.Text = UpdateLines.ProgressLine(progress);
-        UpdateProgressBar.IsIndeterminate = progress.Percent < 0;
+    /// <summary>
+    /// СМЕНА СОСТОЯНИЯ ПОДГОТОВКИ: сообщение может прийти с ФОНОВОЙ нитки (ход загрузки), поэтому
+    /// переводим его в свою дверью <see cref="OnUi"/> и только потом трогаем органы.
+    /// </summary>
+    private void OnUpdateStateChanged() => OnUi(RenderUpdateState);
 
-        if (progress.Percent >= 0) UpdateProgressBar.Value = progress.Percent;
+    /// <summary>Окно закрылось — снять подписку. Состояние панели закрытие окна НЕ трогает (DEF-058).</summary>
+    private void OnClosedDetachUpdateState(object? sender, EventArgs e) =>
+        _updateState.Changed -= OnUpdateStateChanged;
+
+    /// <summary>
+    /// ПОКАЗАТЬ СОСТОЯНИЕ ПОДГОТОВКИ: ход — всегда, раздел целиком — только когда сменилось
+    /// НЕ-ХОДОВОЕ (занятость, готовность, строка состояния).
+    ///
+    /// **Зачем развилка.** Ход приходит на каждый прочитанный буфер куска — сотни сообщений за
+    /// одну загрузку. Перерисовывать на каждое весь раздел (с разбором заметок к выпуску) значит
+    /// делать работу, которой человек не видит; при этом полоса и строка хода обязаны обновляться
+    /// на каждое сообщение — иначе «видно, что делается» превратится в застывшее число.
+    /// </summary>
+    private void RenderUpdateState()
+    {
+        RenderProgress();
+
+        var shown = (Busy: _updateState.Busy, Prepared: _updateState.Prepared, Status: _updateState.Status);
+
+        if (shown == _shownUpdate) return;
+
+        RenderUpdateSection();
     }
 
     /// <summary>
-    /// УБРАТЬ ХОД С ЭКРАНА — ОДНО МЕСТО для всех исходов попытки: строка хода пуста, полоса
-    /// прогресса не видна.
-    ///
-    /// **Зачем отдельной дверью.** Требование владельца 20.10.2026: после подготовки строка хода
-    /// «висит» — человек видит последний этап и проценты уже после того, как работа кончилась,
-    /// и читает это как продолжающуюся работу. Правило одно на успех, отказ и исключение фоновой
-    /// задачи: разойдясь по веткам, они однажды показали бы в одном исходе пустую строку, а в
-    /// другом — застывшее «50 %». Никаких новых слов здесь нет: пустая строка и скрытая полоса.
-    ///
-    /// ⚠️ **Только КОНЕЦ попытки, не любая перерисовка.** Ход по-прежнему показывается, пока
-    /// работа идёт (<see cref="ReportProgress"/>): очистка, позванная из
-    /// <see cref="RenderUpdateSection"/>, стирала бы строку на каждом изменении состояния и
-    /// превратила бы «видно, что делается» в молчание.
+    /// ХОД ПОДГОТОВКИ НА ЭКРАНЕ — ИЗ СНИМКА СОСТОЯНИЯ, а не из органов окна: закрыл окно и открыл
+    /// снова — числа на месте, а не с нуля (DEF-058). Пустой снимок — строки нет, полосы нет:
+    /// это и есть «ход кончился», одно правило на успех, отказ и исключение.
     /// </summary>
-    private void ClearProgress()
+    private void RenderProgress()
     {
-        UpdateProgressText.Text = string.Empty;
-        UpdateProgressBar.IsVisible = false;
+        var progress = _updateState.Progress;
+
+        UpdateProgressBar.IsVisible = progress is not null;
+        UpdateProgressText.Text = progress is null ? string.Empty : UpdateLines.ProgressLine(progress);
+
+        if (progress is null) return;
+
+        UpdateProgressBar.IsIndeterminate = progress.Percent < 0;
+
+        if (progress.Percent >= 0) UpdateProgressBar.Value = progress.Percent;
     }
 
     /// <summary>
@@ -2484,7 +2572,7 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
     internal bool ReplaceNow()
     {
         var install = _install;
-        var preparation = _updatePrepared;
+        var preparation = _updateState.Prepared;
 
         if (install is null || preparation is null) return false;
 
@@ -2492,16 +2580,16 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
 
         if (error.Length > 0)
         {
-            _updateStatus = string.Format(
+            _updateState.ReportStatus(string.Format(
                 System.Globalization.CultureInfo.CurrentCulture,
                 PanelStrings.UpdateLaunchFailedFormat,
-                error);
+                error));
 
             RenderUpdateSection();
             return false;
         }
 
-        _updateStatus = string.Empty;
+        _updateState.ReportStatus(string.Empty);
         _exitForUpdate?.Invoke();
 
         return true;
@@ -2529,10 +2617,10 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
     }
 
     /// <summary>Строка состояния раздела — для проверок без экрана.</summary>
-    public string UpdateStatusLine => _updateStatus;
+    public string UpdateStatusLine => _updateState.Status;
 
     /// <summary>Что подготовлено — для проверок без экрана (пусто — не готовили).</summary>
-    public UpdatePreparation? UpdatePrepared => _updatePrepared;
+    public UpdatePreparation? UpdatePrepared => _updateState.Prepared;
 
     /// <summary>
     /// Смена темы в списке применяется СРАЗУ, не дожидаясь «Сохранить»: человек выбирает тему

@@ -22,12 +22,21 @@ public sealed class PanelWindow : IDisposable
 
     private bool _closingForExit;
 
+    /// <summary>
+    /// Состояние окна, о котором связка уже знает: «свернулось» и «развернулось» поднимаются
+    /// на ПЕРЕХОДЕ, а не на каждом изменении свойства. Без этого повторный `Minimized` поднимал
+    /// бы прятание второй раз, а `Normal` после `Maximized` — возврат там, где ничего не прятали.
+    /// </summary>
+    private WindowState _state;
+
     public PanelWindow(Window window, bool isolated, Action<string> log)
     {
         _window = window ?? throw new ArgumentNullException(nameof(window));
         _log = log ?? throw new ArgumentNullException(nameof(log));
         _isolated = isolated;
 
+        _state = _window.WindowState;
+        _window.PropertyChanged += OnWindowPropertyChanged;
         _window.Closing += OnClosing;
     }
 
@@ -136,6 +145,64 @@ public sealed class PanelWindow : IDisposable
     public Action? Shown { get; set; }
 
     /// <summary>
+    /// ПАНЕЛЬ СВЕРНУЛАСЬ (кнопка «свернуть» на заголовке) — зовётся на ПЕРЕХОДЕ в
+    /// <see cref="WindowState.Minimized"/>.
+    ///
+    /// **Зачем отдельная дверь (DEF-061, 2.4.2).** Спутники панели намеренно БЕЗ владельца
+    /// (`Window.Owner`): с владельцем у них появилась бы вторая кнопка на панели задач
+    /// (`О-8` — `ShowInTaskbar` прячет кнопку скрытым родителем, а не владением). Цена названа
+    /// в банке прямо: «скрытие при минимизации панели надо написать самим (система не сделает
+    /// без владельца)» — `_design-library\95-windows.md` §3.2. Норма, из которой это следует, —
+    /// `О-6` (Microsoft: owned-окна прячутся при минимизации владельца), и человек ждёт того же
+    /// от панели.
+    ///
+    /// ⚠️ **Это НЕ уход в трей.** Крестик прячет окно совсем (<see cref="Hidden"/>), а «свернуть»
+    /// оставляет его на панели задач — и кнопка там обязана остаться ОДНА (`О-7`).
+    /// </summary>
+    public Action? Minimized { get; set; }
+
+    /// <summary>
+    /// ПАНЕЛЬ РАЗВЕРНУЛАСЬ ОБРАТНО — зовётся на ПЕРЕХОДЕ ИЗ <see cref="WindowState.Minimized"/>
+    /// в любое другое состояние (кнопка на панели задач, щелчок по значку, «Показать панель»).
+    ///
+    /// ⚠️ **Не второй показ.** `Show()` уже снимает `Minimized` (см. <see cref="Show"/> выше),
+    /// и он же поднимает <see cref="Shown"/>: спутники в этом случае возвращает ЭТА дверь,
+    /// а `Shown` получает пустой список и не делает ничего. Так одно действие человека не
+    /// поднимает окна дважды — проверяет
+    /// `SatelliteMinimizeTests.Возврат_через_показ_панели_не_поднимает_дважды`.
+    /// </summary>
+    public Action? Restored { get; set; }
+
+    /// <summary>
+    /// СМЕНА СОСТОЯНИЯ ОКНА — единственный источник «свернулось»/«развернулось» (DEF-061).
+    ///
+    /// Реакции на `WindowState.Minimized` до 2.4.2 в панели не было вовсе: спутники прятались
+    /// только при уходе в трей, и «свернул панель — настройки висят развёрнутыми» (владелец
+    /// воспроизвёл 24.10.2026 на 2.4.1). Слушается САМО свойство, а не событие платформы: так
+    /// путь один и для кнопки «свернуть», и для кнопки на панели задач, и для `Show()`.
+    /// </summary>
+    private void OnWindowPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property != Window.WindowStateProperty) return;
+
+        var now = _window.WindowState;
+        if (now == _state) return; // не переход, а повторное присваивание того же значения
+
+        var wasMinimized = _state == WindowState.Minimized;
+        _state = now;
+
+        if (now == WindowState.Minimized)
+        {
+            Minimized?.Invoke();
+            return;
+        }
+
+        // Вышли из свёрнутого — вернуть то, что спрятали при сворачивании. Переходы между
+        // Normal/Maximized/FullScreen спутников не касаются вовсе.
+        if (wasMinimized) Restored?.Invoke();
+    }
+
+    /// <summary>
     /// Закрыть окно так, как это делает крестик: событие <c>Closing</c> проходит обычный путь
     /// со всеми решениями. Нужно самотесту связки — человека рядом с ним нет.
     /// </summary>
@@ -174,5 +241,9 @@ public sealed class PanelWindow : IDisposable
         Hidden?.Invoke();
     }
 
-    public void Dispose() => _window.Closing -= OnClosing;
+    public void Dispose()
+    {
+        _window.PropertyChanged -= OnWindowPropertyChanged;
+        _window.Closing -= OnClosing;
+    }
 }

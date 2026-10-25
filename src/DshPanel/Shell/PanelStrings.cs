@@ -3476,6 +3476,15 @@ public static class PanelStrings
     /// <summary>Та же беда — в журнал, с технической подробностью (<c>{0}</c> = тип и сообщение).</summary>
     public static string UpdateNetworkErrorLogFormat => Loc.T(nameof(UpdateNetworkErrorLogFormat));
 
+    /// <summary>
+    /// СТРОКА ЖУРНАЛА О НЕУДАВШЕМСЯ СКАЧИВАНИИ (DEF-059, 2.4.2): <c>{0}</c> — версия выпуска,
+    /// <c>{1}</c> — технический след (тип исключения и сообщение, ПУТИ ЗАМАСКИРОВАНЫ).
+    ///
+    /// Зачем отдельная строка: человеку теперь уходит ключ причины словами, и если бы след не
+    /// писался в журнал вовсе, разбирать неудачу стало бы нечем. Место следа — журнал, и только он.
+    /// </summary>
+    public static string UpdateDownloadFailedLogFormat => Loc.T(nameof(UpdateDownloadFailedLogFormat));
+
     /// <summary>Строка журнала об исходе проверки: какая версия увиделась или почему её нет.</summary>
     public static string UpdateLogFormat => Loc.T(nameof(UpdateLogFormat));
 
@@ -3580,6 +3589,19 @@ public static class PanelStrings
     /// <summary>Кнопка на время подготовки.</summary>
     public static string UpdatePreparingButton => Loc.T(nameof(UpdatePreparingButton));
 
+    /// <summary>
+    /// ОТКАЗ ВТОРОГО СТАРТА ПОДГОТОВКИ СЛОВАМИ (DEF-058/059, 2.4.2). Единственная дверь старта —
+    /// <c>PanelUpdateState.TryBegin</c>: второй вызов возвращает <c>false</c> и говорит эту строку.
+    /// </summary>
+    public static string UpdatePreparationBusy => Loc.T(nameof(UpdatePreparationBusy));
+
+    /// <summary>
+    /// ПОДСКАЗКА КНОПКИ, КОГДА ИДЁТ ПОДГОТОВКА: короткая дверь отказа («нажать нельзя»). Полная
+    /// причина (<see cref="UpdatePreparationBusy"/>) на экран рядом с подписью кнопки не встаёт —
+    /// одна фраза об одном, а не две (W0, 2.4.2).
+    /// </summary>
+    public static string TipUpdatePrepareBusy => Loc.T(nameof(TipUpdatePrepareBusy));
+
     /// <summary>Подсказка кнопки «Скачать и подготовить»: что она делает и чего НЕ делает.</summary>
     public static string TipUpdatePrepareButton => Loc.T(nameof(TipUpdatePrepareButton));
 
@@ -3607,16 +3629,34 @@ public static class PanelStrings
     /// <summary>Система не создала процесс сценария — тоже названная причина.</summary>
     public static string UpdateLaunchNotStarted => Loc.T(nameof(UpdateLaunchNotStarted));
 
-    /// <summary>Ход подготовки: «Архив панели: 42 %».</summary>
-    public static string UpdateProgressFormat => Loc.T(nameof(UpdateProgressFormat));
+    /// <summary>
+    /// ХОД СКАЧИВАНИЯ ОБЪЁМОМ, СКОРОСТЬЮ И ОСТАТКОМ (DEF-060, 2.4.2): «скачано {0} из {1} ·
+    /// {2} · осталось ~{3}». <c>{0}</c>/<c>{1}</c> — размеры (<c>BackupFormat.Size</c>),
+    /// <c>{2}</c> — скорость (<see cref="UpdateSpeedFormat"/>), <c>{3}</c> — длительность
+    /// (<c>BackupFormat.Duration</c>). Процентов одного файла здесь больше нет: они не говорили
+    /// ни общего объёма, ни скорости, ни того, сколько ждать.
+    /// </summary>
+    public static string UpdateProgressBytesFormat => Loc.T(nameof(UpdateProgressBytesFormat));
+
+    /// <summary>Скорость в строке хода: «{0}/с» (единица — из языка панели).</summary>
+    public static string UpdateSpeedFormat => Loc.T(nameof(UpdateSpeedFormat));
 
     /// <summary>
-    /// Ход подготовки у этапа БЕЗ процентов: «этап: Сценарий замены». Размера файла здесь нет —
+    /// Ход скачивания, когда СКОРОСТИ ЕЩЁ НЕТ: «скачано {0} из {1} · осталось ~{2}» (остаток —
+    /// объёмом: время посчитать нечем, и «0,0 МБ/с» было бы выдумкой).
+    /// </summary>
+    public static string UpdateProgressNoSpeedFormat => Loc.T(nameof(UpdateProgressNoSpeedFormat));
+
+    /// <summary>
+    /// Ход подготовки у этапа БЕЗ объёма: «этап: Сценарий замены». Размера файла здесь нет —
     /// у сверки суммы, распаковки, страховочной копии и записи сценария его не бывает.
     /// </summary>
     public static string UpdateProgressStageFormat => Loc.T(nameof(UpdateProgressStageFormat));
 
-    /// <summary>Ход подготовки, когда размер файла неизвестен: процент был бы выдумкой.</summary>
+    /// <summary>
+    /// Ход скачивания, когда размер файла сервер не назвал: «скачано {0} · размер файла сервер
+    /// не назвал, поэтому остатка не посчитать». Процент и остаток были бы выдумкой.
+    /// </summary>
     public static string UpdateProgressUnknownFormat => Loc.T(nameof(UpdateProgressUnknownFormat));
 
     /// <summary>Строка журнала: человек пропустил версию.</summary>
@@ -3668,14 +3708,20 @@ public static class PanelStrings
     /// <summary>Отказ: в выпуске нет файла контрольных сумм.</summary>
     public static string UpdateNoSums => Loc.T(nameof(UpdateNoSums));
 
-    /// <summary>Отказ: файл контрольных сумм скачать не удалось (значение — причина от загрузчика).</summary>
-    public static string UpdateSumsDownloadFailedFormat => Loc.T(nameof(UpdateSumsDownloadFailedFormat));
+    /// <summary>
+    /// Отказ: СЕРВЕР ОТВЕТИЛ ОТКАЗОМ на запрос файла выпуска (значение — код ответа).
+    /// Отдельно от «нет связи»: ответ пришёл, и 403/404 говорят человеку разное (DEF-059).
+    /// </summary>
+    public static string UpdateDownloadRefusedFormat => Loc.T(nameof(UpdateDownloadRefusedFormat));
+
+    /// <summary>Отказ: сервер не назвал размер файла — без размера панель файл не скачивает.</summary>
+    public static string UpdateDownloadNoLength => Loc.T(nameof(UpdateDownloadNoLength));
+
+    /// <summary>Отказ: записать скачанный файл не удалось (диск, права, занятый файл).</summary>
+    public static string UpdateDownloadWriteFailed => Loc.T(nameof(UpdateDownloadWriteFailed));
 
     /// <summary>Отказ: файл сумм пуст или не разобрался ни на одну строку.</summary>
     public static string UpdateSumsUnreadable => Loc.T(nameof(UpdateSumsUnreadable));
-
-    /// <summary>Отказ: архив панели скачать не удалось (значение — причина от загрузчика).</summary>
-    public static string UpdateArchiveDownloadFailedFormat => Loc.T(nameof(UpdateArchiveDownloadFailedFormat));
 
     /// <summary>Отказ: суммы для архива в файле нет (значение — имя файла).</summary>
     public static string UpdateArchiveSumMissingFormat => Loc.T(nameof(UpdateArchiveSumMissingFormat));
@@ -3712,15 +3758,6 @@ public static class PanelStrings
 
     /// <summary>Отказ: версия внутри архива не совпала с версией выпуска (значения — внутри и ожидалось).</summary>
     public static string UpdateVersionMismatchFormat => Loc.T(nameof(UpdateVersionMismatchFormat));
-
-    /// <summary>Отказ: установщик выпуска скачать не удалось (значение — причина от загрузчика).</summary>
-    public static string UpdateSetupDownloadFailedFormat => Loc.T(nameof(UpdateSetupDownloadFailedFormat));
-
-    /// <summary>Отказ: суммы для установщика в файле нет (значение — имя файла).</summary>
-    public static string UpdateSetupSumMissingFormat => Loc.T(nameof(UpdateSetupSumMissingFormat));
-
-    /// <summary>Отказ: сумма установщика не сошлась (значения — ожидаемое и полученное).</summary>
-    public static string UpdateSetupSumMismatchFormat => Loc.T(nameof(UpdateSetupSumMismatchFormat));
 
     /// <summary>Отказ: страховочную копию прежней панели снять не удалось.</summary>
     public static string UpdateNoBackup => Loc.T(nameof(UpdateNoBackup));
@@ -3772,11 +3809,8 @@ public static class PanelStrings
     /// <summary>Этап: скачивается файл контрольных сумм.</summary>
     public static string UpdateStageSums => Loc.T(nameof(UpdateStageSums));
 
-    /// <summary>Этап: скачивается архив панели.</summary>
+    /// <summary>Этап: скачивается архив панели — единственный файл выпуска (DEF-060).</summary>
     public static string UpdateStageArchive => Loc.T(nameof(UpdateStageArchive));
-
-    /// <summary>Этап: скачивается установщик выпуска.</summary>
-    public static string UpdateStageSetup => Loc.T(nameof(UpdateStageSetup));
 
     /// <summary>Этап: сверяется SHA-256 скачанного.</summary>
     public static string UpdateStageVerify => Loc.T(nameof(UpdateStageVerify));

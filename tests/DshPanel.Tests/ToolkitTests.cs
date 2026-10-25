@@ -9,35 +9,67 @@ using Xunit;
 namespace DshPanel.Tests;
 
 /// <summary>
-/// ИНСТРУМЕНТАРИЙ ПАНЕЛИ — ТОЛЬКО ОФИЦИАЛЬНОЕ (задача TT1; слово владельца 24.10.2026).
+/// ИНСТРУМЕНТАРИЙ ПАНЕЛИ — ТОЛЬКО ОФИЦИАЛЬНОЕ И ТОЛЬКО ЖИВОЕ (этап 2.4.2, задача D0).
 ///
-/// **От какого случая.** Панели нужна настоящая виртуализованная таблица (плоские таблицы:
-/// копии, история цен), а разработке — отладчик интерфейса. Владелец решил в тот же день:
-/// берём ТОЛЬКО официальное — сторонние DevTools не берём ни в каком виде. Значит «что стоит
-/// в конфигурации» обязано быть проверяемым фактом, а не обещанием в комментарии: версия,
-/// замок и отсутствие запрещённых пакетов стерегутся прогоном.
+/// **От какого случая.** В TT1 (24.10.2026) в дерево был подключён `Avalonia.Controls.DataGrid`
+/// 12.1.2. Вечером того же дня владелец сказал: DataGrid не используем — продукт объявлен
+/// устаревшим (страница `docs.avaloniaui.net/controls/data-display/structured-data/datagrid`
+/// помечена **Deprecated**, открыта 24.10.2026), и разработчики его больше не поддерживают.
+/// Замена названа и в этот этап НЕ входит: `TableView` — часть ядра `Avalonia.Controls` 12.1.3
+/// (отдельного пакета и отдельной лицензии не требует), применяется этапом 2.4.3.
 ///
-/// **Замер 24.10.2026 (api.nuget.org, списки версий пакетов и nuspec):**
-/// `Avalonia.Controls.DataGrid` — крайняя 12.1.2 (точной 12.1.3 нет), MIT, зависимость
-/// `Avalonia >= 12.1.0`; `Avalonia.Controls.TreeDataGrid` — крайняя 12.3.2, НЕ ВЗЯТ: её nuspec
-/// тянет `AvaloniaUI.Licensing` 3.1.3 и не имеет тега `license` (контрол лицензируемый, не MIT;
-/// блокер лицензионный, а не версионный — с 12.1.3 она совместима);
-/// `Avalonia.Diagnostics` под ветку 12 НЕ выпущен вовсе (крайняя 11.3.22), наш каркас — 12.1.3.
-/// Подробности с адресами — в `Directory.Packages.props`.
+/// **Что стерегут проверки.** «Сняли» — это факт, который обязан быть проверяемым, а не
+/// обещанием в комментарии: пакета нет ни в `Directory.Packages.props`, ни в ссылках проектов,
+/// ни в ОБОИХ замках, ни в раздаче; и в props не появилось НИ ОДНОГО нового пакета взамен.
+/// Запреты TT1 остаются в силе: `TreeDataGrid` (лицензируемый — nuspec тянет
+/// `AvaloniaUI.Licensing` 3.1.3), сторонние DevTools и официальный `Avalonia.Diagnostics`
+/// (под ветку 12 не выпущен вовсе).
 ///
 /// **Мутации, которые обязаны упасть:**
-/// M1 «добавить в props любой сторонний DevTools-пакет» → красная
-/// <see cref="Ни_одного_стороннего_DevTools_в_конфигурации"/>; вторая половина этой же проверки
-/// («только официальные издатели») ловит и любой другой незнакомый пакет.
+/// M1 «вернуть `PackageVersion` в props» → красная <see cref="Таблицы_DataGrid_в_дереве_нет"/>
+/// (если правку не сопровождать замком — ещё и `NU1004` на `restore --force --locked-mode`);
+/// M2 «вернуть `PackageReference` в проект» → красная та же проверка;
+/// M3 «подложить `Avalonia.Controls.DataGrid.dll` в публикацию» → красная
+/// <see cref="Публикация_без_DataGrid_и_без_DevTools"/>.
 /// </summary>
 public class ToolkitTests
 {
-    /// <summary>Официальная виртуализованная таблица — одна, и её версия замером (не «последняя»).</summary>
-    private const string Table = "Avalonia.Controls.DataGrid";
-    private const string TableVersion = "12.1.2";
+    /// <summary>
+    /// СНЯТЫЙ ПАКЕТ: имени не должно быть ни в props, ни в проектах, ни в замках, ни в раздаче.
+    /// Вернуть его можно только новым словом владельца — проверка валит и молчаливый возврат.
+    /// </summary>
+    private const string Removed = "Avalonia.Controls.DataGrid";
 
-    /// <summary>Каркас, с которым таблица обязана сойтись. Версия берётся из props, а не литералом.</summary>
+    /// <summary>Каркас, на котором снят замер. Версия берётся из props, а не литералом.</summary>
     private const string Framework = "Avalonia";
+
+    /// <summary>Проекты, которые читаются сторожем: и ссылки, и замки у каждого свои.</summary>
+    private static readonly string[] Projects = { "src/DshPanel/DshPanel.csproj", "tests/DshPanel.Tests/DshPanel.Tests.csproj" };
+
+    /// <summary>Оба замка репозитория: свой у приложения, свой у проверок.</summary>
+    private static readonly string[] Locks = { "src/DshPanel/packages.lock.json", "tests/DshPanel.Tests/packages.lock.json" };
+
+    /// <summary>
+    /// ПОЛНЫЙ СПИСОК ОБЪЯВЛЕННЫХ ПАКЕТОВ (CPM — версия ровно одно место, `Directory.Packages.props`).
+    /// Перечислен по именам, а не «сколько получится»: этап 2.4.2 не добавляет НИ ОДНОГО пакета,
+    /// поэтому список обязан совпасть целиком (порядок не важен). Новая строка здесь — это новое
+    /// решение владельца, а не рядовая правка; так же ловится и молчаливое снятие чужого пакета.
+    /// </summary>
+    private static readonly string[] Declared =
+    {
+        "Avalonia",
+        "Avalonia.Fonts.Inter",
+        "Avalonia.HarfBuzz",
+        "Avalonia.Headless",
+        "Avalonia.Headless.XUnit",
+        "Avalonia.Skia",
+        "Avalonia.Themes.Fluent",
+        "Avalonia.Win32",
+        "Microsoft.NET.Test.Sdk",
+        "QRCoder",
+        "xunit.runner.visualstudio",
+        "xunit.v3",
+    };
 
     /// <summary>
     /// Пакеты, которые панель вправе держать, кроме официальных AvaloniaUI: каждый выбран замером
@@ -55,7 +87,7 @@ public class ToolkitTests
     /// * `InProcess.DevTools`, `ProDiagnostics`, `AvaloniaSpy`, `Chrome.DevTools.*` — сторонние
     ///   отладчики интерфейса, запрещены поимённо;
     /// * `AvaloniaUI.Licensing` — лицензируемый контрол, а не MIT: именно из-за него отказано
-    ///   `TreeDataGrid` (решение владельца 24.10.2026, подтверждено 24.10.2026 по nuspec 12.1.1).
+    ///   `TreeDataGrid` (решение владельца 24.10.2026, подтверждено 24.10.2026 по nuspec 12.3.2).
     /// </summary>
     private static readonly string[] Forbidden =
     {
@@ -81,6 +113,8 @@ public class ToolkitTests
     }
 
     private static XDocument Xml(string path) => XDocument.Load(path);
+
+    private static string At(string root, string relative) => Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
 
     /// <summary>Версии из `Directory.Packages.props` — ОДНО место, где живут версии (CPM).</summary>
     private static Dictionary<string, string> Versions(string root) =>
@@ -113,61 +147,90 @@ public class ToolkitTests
     }
 
     /// <summary>
-    /// ТАБЛИЦА ПОДКЛЮЧЕНА, ВЕРСИЯ ОДНА, ЗАМОК ЕЁ ДЕРЖИТ, КАРКАС — ТОТ ЖЕ.
+    /// DATAGRID СНЯТ, И ЭТО ВИДНО ВО ВСЕХ ЧЕТЫРЁХ МЕСТАХ: props, проекты, оба замка. Новых
+    /// пакетов взамен не появилось, каркас не поехал, запрещённый `TreeDataGrid` по-прежнему не взят.
     ///
-    /// **Что этим доказывается.** Версия объявлена ровно в `Directory.Packages.props` (а не в
-    /// проекте — там её нет), замок `src\DshPanel\packages.lock.json` разрешил её в 12.1.2, а
-    /// Avalonia в том же замке — та же, что в props: значит `restore` в режиме замка сойдётся,
-    /// и «совместимость с 12.1.3» — не обещание, а разрешённый граф.
+    /// **Почему проверка, а не слово в комментарии.** «Убрать пакет» — это три строки в трёх
+    /// файлах плюс перезапись двух замков, и глазами приёмки разница между «снят» и «снят из
+    /// props, но остался ссылкой» не видна. Слово владельца 24.10.2026 (вечер): DataGrid
+    /// не используем; замена — `TableView` из ЯДРА 12.1.3, этапом 2.4.3, в этот этап ничего
+    /// не добавляется. Потому набор объявленных пакетов сверяется ЦЕЛИКОМ: добавка сюда — это
+    /// новое решение владельца, а не рядовая правка.
     ///
-    /// **Вторая таблица названа, но НЕ подключена — и это отказ, а не «пока»:**
-    /// `TreeDataGrid` 12.3.2 тянет `AvaloniaUI.Licensing` 3.1.3 (лицензируемый контрол, не MIT;
-    /// по версии с нашим каркасом совместим — блокер именно лицензионный). Его подключение —
-    /// отдельное решение владельца, поэтому проверка валит и попытку добавить его молча.
+    /// **Замок ищется по ТЕКСТУ файла, а не по одному разделу:** в замке тестов та же строка
+    /// живёт ещё и в зависимостях проекта `dshpanel`, поэтому разбор одного раздела оставил бы
+    /// половину слепой (замер до снятия: 26 записей в замке приложения и 49 в замке проверок).
+    ///
+    /// **Мутации, которые обязаны упасть:** M1 — вернуть `PackageVersion` в props; M2 — вернуть
+    /// `PackageReference` в проект. Обе валят эту проверку по имени, а не «по количеству».
     /// </summary>
     [Fact]
-    public void Таблица_подключена_в_props_и_в_замке()
+    public void Таблицы_DataGrid_в_дереве_нет()
     {
         var root = Root();
-
         var versions = Versions(root);
 
-        Assert.True(versions.TryGetValue(Table, out var declared), $"в Directory.Packages.props нет {Table}");
-        Assert.Equal(TableVersion, declared);
+        // 1. props: объявления НЕТ.
+        Assert.False(
+            versions.ContainsKey(Removed),
+            $"в Directory.Packages.props снова объявлен {Removed} — он снят словом владельца 24.10.2026 (Deprecated)");
 
+        // 1б. и НИ ОДНОГО нового пакета: набор объявленного совпадает с названным списком.
+        Assert.Equal(
+            Declared.OrderBy(name => name, StringComparer.OrdinalIgnoreCase),
+            versions.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase));
+
+        // 2. Проекты: ссылки НЕТ; и каждая ссылка объявлена в props (иначе центральное управление
+        //    обойдено, а версия в проекте запрещена).
+        foreach (var project in Projects)
+        {
+            var references = References(At(root, project));
+            Assert.False(references.Count == 0, $"в {project} не прочиталось ни одной ссылки — сторож ослеп");
+
+            Assert.DoesNotContain(
+                references,
+                e => string.Equals(e.Attribute("Include")!.Value, Removed, StringComparison.OrdinalIgnoreCase));
+
+            foreach (var reference in references)
+            {
+                var name = reference.Attribute("Include")!.Value;
+                Assert.True(versions.ContainsKey(name), $"пакет «{name}» не объявлен в Directory.Packages.props — версия в проекте не пишется");
+                Assert.Null(reference.Attribute("Version"));
+            }
+        }
+
+        // 3. Замки: записи НЕТ НИ В ОДНОМ разделе.
+        foreach (var lockFile in Locks)
+        {
+            var path = At(root, lockFile);
+            Assert.True(File.Exists(path), $"нет замка {lockFile} — restore --locked-mode доказывать нечем");
+
+            var text = File.ReadAllText(path);
+            Assert.Contains("\"dependencies\"", text); // замок прочитан, а не пуст
+            Assert.DoesNotContain($"\"{Removed}\"", text, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // 4. Каркас не поехал: версия в props и в замке приложения — одна.
         var framework = versions[Framework];
         Assert.Equal("12.1.3", framework); // сторож: замер снят на этой линии
 
-        // Проект: ссылка есть, версии в ней НЕТ (иначе центральное управление обходится).
-        var references = References(Path.Combine(root, "src", "DshPanel", "DshPanel.csproj"));
-        var table = Assert.Single(
-            references,
-            e => string.Equals(e.Attribute("Include")!.Value, Table, StringComparison.OrdinalIgnoreCase));
-        Assert.Null(table.Attribute("Version"));
-
-        // Замок: разрешено ровно 12.1.2, тип — Direct (панель держит его сама).
-        var locked = Locked(Path.Combine(root, "src", "DshPanel", "packages.lock.json"), Table);
-        Assert.True(locked is not null, $"в замке src\\DshPanel нет {Table} — restore --locked-mode не сойдётся");
-        Assert.Equal(TableVersion, locked!.Value.Resolved);
-        Assert.Equal("Direct", locked.Value.Type);
-
-        // Каркас в том же замке — той же версии, что в props: иначе «совместили» не те сборки.
-        var baseline = Locked(Path.Combine(root, "src", "DshPanel", "packages.lock.json"), Framework);
+        var baseline = Locked(At(root, "src/DshPanel/packages.lock.json"), Framework);
         Assert.True(baseline is not null, $"в замке src\\DshPanel нет {Framework}");
         Assert.Equal(framework, baseline!.Value.Resolved);
 
-        // ДЕРЕВО названо запасным и НЕ подключено.
+        // 5. ВТОРАЯ ТАБЛИЦА названа и НЕ подключена — запрет TT1 сохранён (блокер лицензионный:
+        //    nuspec 12.3.2 тянет `AvaloniaUI.Licensing` 3.1.3 и тега `license` не имеет).
         Assert.DoesNotContain(versions.Keys, id => id.Contains("TreeDataGrid", StringComparison.OrdinalIgnoreCase));
-        foreach (var project in new[] { "src/DshPanel/DshPanel.csproj", "tests/DshPanel.Tests/DshPanel.Tests.csproj" })
+        foreach (var project in Projects)
         {
             Assert.DoesNotContain(
-                References(Path.Combine(root, project.Replace('/', Path.DirectorySeparatorChar))),
+                References(At(root, project)),
                 e => e.Attribute("Include")!.Value.Contains("TreeDataGrid", StringComparison.OrdinalIgnoreCase));
         }
     }
 
     /// <summary>
-    /// НИ ОДНОГО СТОРОННЕГО DEVTOOLS И НИ ОДНОГО НЕЗНАКОМОГО ПАКЕТА (DEF-подобный сторож TT1).
+    /// НИ ОДНОГО СТОРОННЕГО DEVTOOLS И НИ ОДНОГО НЕЗНАКОМОГО ПАКЕТА (сторож TT1, сохранён 2.4.2).
     ///
     /// **Почему проверка, а не слово в комментарии.** Решение владельца «только официальное»
     /// живёт в двух местах — в props и в проектах; добавить туда пакет — одна строка, и заметить
@@ -178,10 +241,9 @@ public class ToolkitTests
     ///
     /// ⚠️ **Когда появится официальный `Avalonia.Diagnostics` под 12** — тогда и только тогда
     /// эта проверка меняется: вместо запрета имени появляется правило «ссылка только под Debug»
-    /// и проверка, что в раздаче Release нет ни одного файла DevTools (задача TT1 называет это
-    /// условием, а не сегодняшней работой).
+    /// и проверка, что в раздаче Release нет ни одного файла DevTools.
     ///
-    /// **Мутация, которая обязана упасть:** M1 — добавить в props любой сторонний DevTools-пакет.
+    /// **Мутация, которая обязана упасть:** добавить в props любой сторонний DevTools-пакет.
     /// </summary>
     [Fact]
     public void Ни_одного_стороннего_DevTools_в_конфигурации()
@@ -189,8 +251,8 @@ public class ToolkitTests
         var root = Root();
 
         var declared = Versions(root).Keys.ToList();
-        var referenced = References(Path.Combine(root, "src", "DshPanel", "DshPanel.csproj"))
-            .Concat(References(Path.Combine(root, "tests", "DshPanel.Tests", "DshPanel.Tests.csproj")))
+        var referenced = References(At(root, Projects[0]))
+            .Concat(References(At(root, Projects[1])))
             .Select(e => e.Attribute("Include")!.Value)
             .ToList();
 
@@ -223,37 +285,39 @@ public class ToolkitTests
     }
 
     /// <summary>
-    /// В РАЗДАЧЕ RELEASE НЕТ НИ ОДНОГО ФАЙЛА DEVTOOLS — и таблица там ЕСТЬ (TT1).
+    /// В РАЗДАЧЕ RELEASE НЕТ НИ DATAGRID, НИ ФАЙЛА DEVTOOLS — и это не «на пустом каталоге»:
+    /// рядом обязаны быть сами сборки Avalonia (этап 2.4.2, D0).
     ///
-    /// **На чём.** На настоящих публикациях задачи: `upd-build\241\publish-check` — раздача
-    /// профилем `win-x64` (один самодостаточный exe, как уезжает людям), `upd-build\241\publish-check-flat`
-    /// — та же сборка без склейки в один файл, чтобы ВИДЕТЬ перечень сборок.
+    /// **На чём.** На настоящей публикации задачи: `upd-build\242\publish-check-flat` — та же
+    /// сборка, что уезжает людям, но без склейки в один файл, чтобы ВИДЕТЬ перечень сборок
+    /// (склейка прячет имена, поэтому на одном `DshPanel.exe` «нет DataGrid.dll» не доказывается).
     ///
-    /// ⚠️ **Сборки нет — проверка не выдумывает её наличие:** публикации лежат вне репозитория
-    /// (`upd-build`), и на чистом клоне их нет. Тогда проверяются только факты конфигурации выше,
-    /// а перечень файлов доказывается прогоном публикации и назван в отчёте задачи. Так честнее,
-    /// чем «зелено» на пустом каталоге.
+    /// ⚠️ **Сборки нет — проверка не выдумывает её наличие:** публикация лежит вне репозитория
+    /// (`upd-build`, он в `.gitignore`), и на чистом клоне её нет. Тогда проверяются только факты
+    /// конфигурации выше, а перечень файлов доказывается прогоном публикации и называется
+    /// в отчёте задачи. Так честнее, чем «зелено» на пустом каталоге.
     ///
-    /// **Мутация, которая обязана упасть:** если раздача появится с файлом DevTools — падает здесь.
+    /// **Мутация, которая обязана упасть:** M3 — подложить `Avalonia.Controls.DataGrid.dll`
+    /// в публикацию; так же падает подложенный файл DevTools.
     /// </summary>
     [Fact]
-    public void Публикация_не_содержит_DevTools()
+    public void Публикация_без_DataGrid_и_без_DevTools()
     {
         var root = Root();
 
-        var dist = Path.Combine(root, "upd-build", "241", "publish-check");
-        var flat = Path.Combine(root, "upd-build", "241", "publish-check-flat");
+        var single = Path.Combine(root, "upd-build", "242", "publish-check");
+        var flat = Path.Combine(root, "upd-build", "242", "publish-check-flat");
 
-        if (!Directory.Exists(dist) && !Directory.Exists(flat)) return; // см. комментарий: на чистом клоне доказывать нечего
+        if (!Directory.Exists(single) && !Directory.Exists(flat)) return; // см. комментарий: на чистом клоне доказывать нечего
 
         static string[] Files(string directory) =>
             Directory.GetFiles(directory, "*", SearchOption.AllDirectories)
                 .Select(path => Path.GetFileName(path))
                 .ToArray();
 
-        if (Directory.Exists(dist))
+        if (Directory.Exists(single))
         {
-            var files = Files(dist);
+            var files = Files(single);
 
             // Это ДЕЙСТВИТЕЛЬНО раздача, а не пустой каталог: один exe — так собирает профиль.
             Assert.Contains("DshPanel.exe", files);
@@ -270,8 +334,13 @@ public class ToolkitTests
         {
             var files = Files(flat);
 
-            // Таблица в раздаче ЕСТЬ — значит ссылка не «на бумаге».
-            Assert.Contains("Avalonia.Controls.DataGrid.dll", files);
+            // Раздача на месте И собрана из этого дерева: сборки Avalonia лежат рядом...
+            Assert.Contains("DshPanel.exe", files);
+            Assert.Contains("Avalonia.Controls.dll", files);
+
+            // ...а снятой таблицы среди них НЕТ — ни сборки, ни её ресурсов.
+            Assert.DoesNotContain(files, name => name.Contains("Avalonia.Controls.DataGrid", StringComparison.OrdinalIgnoreCase));
+
             Assert.DoesNotContain(files, name => name.Contains("Avalonia.Diagnostics", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(files, name => name.Contains("DevTools", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(files, name => name.Contains("AvaloniaUI.Licensing", StringComparison.OrdinalIgnoreCase));

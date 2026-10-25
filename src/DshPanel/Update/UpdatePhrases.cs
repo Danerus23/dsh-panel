@@ -99,9 +99,16 @@ public static class UpdateRefusalLines
         "UpdateRefusedNoTarget" => PanelStrings.UpdateRefusedNoTarget,
         "UpdateNoArchive" => PanelStrings.UpdateNoArchive,
         "UpdateNoSums" => PanelStrings.UpdateNoSums,
-        "UpdateSumsDownloadFailedFormat" => PanelStrings.UpdateSumsDownloadFailedFormat,
         "UpdateSumsUnreadable" => PanelStrings.UpdateSumsUnreadable,
-        "UpdateArchiveDownloadFailedFormat" => PanelStrings.UpdateArchiveDownloadFailedFormat,
+
+        // ПРИЧИНЫ НЕУДАЧИ СКАЧИВАНИЯ — по строке на РАЗЛИЧИМЫЙ СЛУЧАЙ (DEF-059, 2.4.2).
+        // Техслед (тип исключения и путь) человеку больше не выносится: он уходит в журнал
+        // под маской (`UpdateDownloadFailedLogFormat`), а здесь — слова причины.
+        "UpdateNetworkError" => PanelStrings.UpdateNetworkError,
+        "UpdateDownloadRefusedFormat" => PanelStrings.UpdateDownloadRefusedFormat,
+        "UpdateDownloadNoLength" => PanelStrings.UpdateDownloadNoLength,
+        "UpdateDownloadWriteFailed" => PanelStrings.UpdateDownloadWriteFailed,
+
         "UpdateArchiveSumMissingFormat" => PanelStrings.UpdateArchiveSumMissingFormat,
         "UpdateArchiveSumMismatchFormat" => PanelStrings.UpdateArchiveSumMismatchFormat,
         "UpdateArchiveMissing" => PanelStrings.UpdateArchiveMissing,
@@ -114,9 +121,6 @@ public static class UpdateRefusalLines
         "UpdateArchiveBrokenFormat" => PanelStrings.UpdateArchiveBrokenFormat,
         "UpdateNoExe" => PanelStrings.UpdateNoExe,
         "UpdateVersionMismatchFormat" => PanelStrings.UpdateVersionMismatchFormat,
-        "UpdateSetupDownloadFailedFormat" => PanelStrings.UpdateSetupDownloadFailedFormat,
-        "UpdateSetupSumMissingFormat" => PanelStrings.UpdateSetupSumMissingFormat,
-        "UpdateSetupSumMismatchFormat" => PanelStrings.UpdateSetupSumMismatchFormat,
         "UpdateNoBackup" => PanelStrings.UpdateNoBackup,
         "UpdateWriteFailedFormat" => PanelStrings.UpdateWriteFailedFormat,
 
@@ -249,19 +253,22 @@ public static class UpdateStageLines
     public static bool Knows(UpdateStage stage) => Text(stage).Length > 0;
 
     /// <summary>
-    /// БЫВАЮТ ЛИ У ЭТАПА ПРОЦЕНТЫ — и это свойство САМОГО ЭТАПА, а не числа, которое пришло
-    /// с ним: иначе правило выбора формулировки пришлось бы выводить из «Total меньше нуля»,
-    /// и один и тот же этап в двух прогонах получал бы разные слова про разное.
+    /// СКАЧИВАЕТСЯ ЛИ НА ЭТОМ ЭТАПЕ ФАЙЛ — и это свойство САМОГО ЭТАПА, а не числа, которое
+    /// пришло с ним: иначе правило выбора формулировки пришлось бы выводить из «Total меньше
+    /// нуля», и один и тот же этап в двух прогонах получал бы разные слова про разное.
     ///
-    /// Проценты есть только у СКАЧИВАНИЯ: сервер называет размер, и «Архив панели: 42 %» честно
-    /// говорит, сколько принято. У сверки контрольной суммы, распаковки, страховочной копии
-    /// и записи сценария размера нет вовсе — и «размер файла неизвестен» там было ложью
-    /// по смыслу (замечание владельца 20.10.2026, пункт 3 пакета 2.3.1). Такой этап называется
-    /// словами «этап: …» — без обещания процентов, которых не будет.
+    /// Объём, скорость и остаток есть только у СКАЧИВАНИЯ: сервер называет размер, и «скачано
+    /// 12,4 МБ из 44,7 МБ» честно говорит, сколько принято (DEF-060). У сверки контрольной суммы,
+    /// распаковки, страховочной копии и записи сценария размера нет вовсе — и «размер файла
+    /// неизвестен» там было ложью по смыслу (замечание владельца 20.10.2026, пункт 3 пакета
+    /// 2.3.1). Такой этап называется словами «этап: …» — без обещания чисел, которых не будет.
+    ///
+    /// ⚠️ После 2.4.2 скачивается ОДИН файл выпуска — архив (`DshPanel.zip`); этапа установщика
+    /// в перечислении больше нет (DEF-060).
     /// </summary>
-    public static bool HasPercent(UpdateStage stage) => stage switch
+    public static bool IsDownload(UpdateStage stage) => stage switch
     {
-        UpdateStage.Sums or UpdateStage.Archive or UpdateStage.Setup => true,
+        UpdateStage.Sums or UpdateStage.Archive => true,
         UpdateStage.Verify or UpdateStage.Unpack or UpdateStage.Backup or UpdateStage.Script => false,
         _ => false,
     };
@@ -271,7 +278,6 @@ public static class UpdateStageLines
     {
         UpdateStage.Sums => PanelStrings.UpdateStageSums,
         UpdateStage.Archive => PanelStrings.UpdateStageArchive,
-        UpdateStage.Setup => PanelStrings.UpdateStageSetup,
         UpdateStage.Verify => PanelStrings.UpdateStageVerify,
         UpdateStage.Unpack => PanelStrings.UpdateStageUnpack,
         UpdateStage.Backup => PanelStrings.UpdateStageBackup,

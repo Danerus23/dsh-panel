@@ -36,7 +36,7 @@
 
 **Your DSH server, under control** — and out of the way in the tray. One file, `DshPanel.exe`:
 installed into your user profile, no administrator rights, no separate .NET install — the runtime is
-inside. This panel version is **2.4.1**.
+inside. This panel version is **2.4.2**.
 
 Start and stop the server, install, update and roll back DSH from a verified set, a tray icon that
 shows its state, your balance, peak windows and price history, copies of your data with restore, the

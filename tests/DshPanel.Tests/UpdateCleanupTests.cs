@@ -204,7 +204,7 @@ public class UpdateCleanupTests
         using var held = busy;
 
         Assert.False(preparation.Ok);
-        Assert.Equal(UpdateRefusal.ArchiveDownloadFailed, preparation.Refusal);
+        Assert.Equal(UpdateRefusal.DownloadNetwork, preparation.Refusal);
 
         // ИТОГ УБОРКИ НЕ ПОТЕРЯН: он доехал от движка до ответа.
         Assert.True(preparation.CleanupFailed, "движок не заметил, что уборка не удалась");

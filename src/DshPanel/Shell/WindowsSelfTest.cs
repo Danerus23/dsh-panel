@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using DshPanel.Server;
+using DshPanel.Update;
 
 namespace DshPanel.Shell;
 
@@ -20,6 +21,23 @@ namespace DshPanel.Shell;
 /// И третье обещание того же решения — **«панель не закрывается»** (DEF-039): его безоконные
 /// проверки видят только косвенно (в двери размещения нет `Hide`/`Close`), а здесь спрашивается
 /// само окно панели ПОСЛЕ открытия спутника — ровно то состояние, в котором человек и находится.
+///
+/// **DEF-061 (2.4.2).** Здесь же проверяется четвёртое обещание, которого до 2.4.2 не было вовсе:
+/// **свернул панель — спутники спрятались, развернул — вернулись те же**, и кнопка на панели задач
+/// ДО и ПОСЛЕ одна. Спрашивается состояние ОС (`WindowState` настоящего окна и число кнопок),
+/// потому что безоконная проверка свойств этого не видит.
+///
+/// **DEF-058/059 (T4, 2.4.2) — ЖИВАЯ СЦЕНА «ЗАКРЫЛ НА ХОДУ — ОТКРЫЛ».** Слово владельца
+/// 25.10.2026: пока живой сценарий не пройден НАСТОЯЩИМ окном, V1 его не подписывает. Поэтому
+/// в конце пробы (шаги 7–13) открывается настоящее окно настроек через ТОТ ЖЕ
+/// <see cref="SingleWindowSlot"/>, запускается подготовка МЕДЛЕННЫМ ПОДСТАВНЫМ движком
+/// (<see cref="ProbeUpdateInstall"/>: ни сети, ни каталогов владельца) на состоянии панели
+/// (<see cref="PanelUpdateState"/>), окно закрывается слотом и открывается снова — и
+/// спрашивается, что видит человек: тот же ход (числа до и после названы в отчёте), отказ
+/// второго старта СЛОВАМИ и готовая сборка. Безоконная проверка того же поведения есть
+/// (<c>SettingsUpdateSectionTests.Два_окна_на_одном_состоянии_видят_ход_и_готовность</c>),
+/// но она не показывает НАСТОЯЩЕГО окна: сцена владельца шла в живом окне, и подписывает
+/// её живое окно.
 ///
 /// Поэтому здесь НАСТОЯЩИЕ `PanelWindow`, `SingleWindowSlot`, `SatelliteSet` и настоящие окна
 /// на рабочем столе — ровно те классы, что работают у человека. Ни значка в трее, ни сервера
@@ -48,6 +66,34 @@ public sealed class WindowsSelfTest
     private SatelliteSet? _satellites;
     private Window? _satelliteWindow;
     private IClassicDesktopStyleApplicationLifetime? _desktop;
+
+    // ---------------------------------------------- живая сцена подготовки обновления (T4, DEF-058/059)
+
+    /// <summary>
+    /// ОДНО СОСТОЯНИЕ ПОДГОТОВКИ НА ПРОБУ — ровно так у человека оно одно на процесс
+    /// (<c>App</c> создаёт и отдаёт окну доводом). Второго объекта у пробы нет намеренно:
+    /// именно этим она и спрашивает «пережило ли состояние закрытие окна».
+    /// </summary>
+    private readonly PanelUpdateState _updateState = new();
+
+    /// <summary>Медленный подставной движок: ничего не качает и ничего не пишет, ход ведёт проба.</summary>
+    private readonly ProbeUpdateInstall _updateInstall = new();
+
+    /// <summary>Вымышленный выпуск: проба доказывает поведение окна, а не работу с GitHub.</summary>
+    private readonly ProbeUpdateControl _updateProbe = new();
+
+    /// <summary>Настоящее окно настроек, открытое слотом на шагах 7–13 (на закрытом — ссылка на закрытое).</summary>
+    private Views.SettingsWindow? _updateWindow;
+
+    /// <summary>Числа хода В МОМЕНТ закрытия окна: с ними сверяется ход в окне, открытом заново.</summary>
+    private long _progressDoneBefore;
+    private long _progressTotalBefore;
+
+    /// <summary>Строка хода, которую человек видел ДО закрытия окна (её же он обязан увидеть после).</summary>
+    private string _progressTextBefore = string.Empty;
+
+    /// <summary>Строка карточки замены во втором окне: её же обязано назвать третье.</summary>
+    private string _preparedTextShown = string.Empty;
 
     private int _hiddenCount;
     private int _restoredCount;
@@ -96,8 +142,8 @@ public sealed class WindowsSelfTest
         _satellites = satellites;
         _satelliteWindow = satelliteWindow;
 
-        // ПОДПИСКИ — те же ДВЕ строки, что у связки (`PanelShell`): больше мест, где окно панели
-        // исчезает или появляется, в панели нет.
+        // ПОДПИСКИ — те же ЧЕТЫРЕ строки, что у связки (`PanelShell`): больше мест, где окно панели
+        // исчезает, появляется, сворачивается или разворачивается, в панели нет.
         panel.Hidden = () =>
         {
             _hiddenCount = satellites.HideAll();
@@ -108,6 +154,20 @@ public sealed class WindowsSelfTest
         {
             _restoredCount = satellites.Restore();
             _log.Add($"панель показалась: возвращено спутников {_restoredCount}");
+        };
+
+        // DEF-061: сворачивание и разворачивание — отдельные двери, и живьём они проверяются
+        // так же, как у человека: меняется `WindowState` настоящего окна.
+        panel.Minimized = () =>
+        {
+            _hiddenCount = satellites.HideAll();
+            _log.Add($"панель свернулась: спрятано спутников {_hiddenCount}");
+        };
+
+        panel.Restored = () =>
+        {
+            _restoredCount = satellites.Restore();
+            _log.Add($"панель развернулась: возвращено спутников {_restoredCount}");
         };
 
         Check("до показа панель не видна", !panel.IsVisible);
@@ -221,6 +281,40 @@ public sealed class WindowsSelfTest
                 break;
 
             case 3:
+                // СВЕРНУТЬ ПАНЕЛЬ (кнопка «свернуть») → СПУТНИКИ ПРЯЧУТСЯ, КНОПКА ЗАДАЧ ОДНА.
+                // Это DEF-061: до 2.4.2 на минимизацию не было реакции вовсе, и спутники висели
+                // развёрнутыми поверх свёрнутой панели (воспроизведено владельцем 24.10.2026).
+                _panelWindow!.WindowState = WindowState.Minimized;
+
+                Check("панель свернулась", _panelWindow.WindowState == WindowState.Minimized);
+                Check($"спрятано спутников при сворачивании = {_hiddenCount} (ожидается 1)", _hiddenCount == 1);
+                Check("спутник скрыт вместе со свёрнутой панелью", !satellite.IsVisible);
+
+                // Слот помнит окно: спрятали, а не закрыли — при развороте вернётся ТО ЖЕ окно.
+                Check("спутник спрятан, а не закрыт (сворачивание)", _slot!.IsOpen);
+
+                // И кнопка на панели задач по-прежнему ОДНА: свёрнутое окно её не теряет,
+                // а спрятанные спутники её и не давали (`О-7`).
+                var minimized = TaskbarWindows();
+                Check($"у свёрнутой панели кнопок на панели задач = {minimized.Count} (ожидается 1)", minimized.Count == 1);
+                Note("окна, дающие кнопку у свёрнутой панели: " + string.Join("; ", minimized));
+                break;
+
+            case 4:
+                // РАЗВЕРНУТЬ ПАНЕЛЬ КНОПКОЙ НА ПАНЕЛИ ЗАДАЧ — это `WindowState`, а НЕ `Show()`:
+                // именно этот путь человек и проходит, и именно его до 2.4.2 не было.
+                _panelWindow!.WindowState = WindowState.Normal;
+
+                Check($"возвращено спутников при развороте = {_restoredCount} (ожидается 1)", _restoredCount == 1);
+                Check("спутник вернулся вместе с панелью", satellite.IsVisible);
+                Check("вернулось то же окно (слот помнит)", _slot!.IsOpen);
+
+                var restoredButtons = TaskbarWindows();
+                Check($"после разворота кнопок на панели задач = {restoredButtons.Count} (ожидается 1)", restoredButtons.Count == 1);
+                Note("окна, дающие кнопку после разворота: " + string.Join("; ", restoredButtons));
+                break;
+
+            case 5:
                 // ЗАКРЫТОЕ ЧЕЛОВЕКОМ НЕ ВСПЛЫВАЕТ. Человек закрывает спутник, пока панель в трее.
                 satellite.Close();
                 Check("спутник закрыт человеком", !_slot!.IsOpen);
@@ -232,17 +326,236 @@ public sealed class WindowsSelfTest
                 Check($"прятать было нечего (спрятано = {_hiddenCount})", _hiddenCount == 0);
                 break;
 
-            case 4:
+            case 6:
                 // Показать панель: закрытое НЕ возвращается.
                 panel.Show();
                 Check($"возвращено = {_restoredCount} (ожидается 0)", _restoredCount == 0);
                 Check("закрытое человеком окно не всплыло", !satellite.IsVisible);
+                break;
+
+            // ------------------------------------------ DEF-058/059: «закрыл на ходу — открыл» (T4)
+
+            case 7:
+                // ОТКРЫТЬ НАСТОЯЩЕЕ ОКНО НАСТРОЕК И НАЧАТЬ ПОДГОТОВКУ. Окно строит ТОТ ЖЕ слот,
+                // каким его открывает человек (`PanelShell`), раздел — «Обновление».
+                OpenUpdateWindow();
+
+                Check("окно настроек открыто слотом (раздел «Обновление»)", _updateWindow!.IsVisible);
+                Check("до нажатия подготовки хода нет", _updateState.Progress is null);
+
+                _updateWindow.PrepareUpdate();
+
+                Check("подготовка идёт: занятость в состоянии панели", _updateState.Busy);
+                Check(
+                    $"кнопка называет работу: «{PrepareButton(_updateWindow).Content}»",
+                    Equals(PrepareButton(_updateWindow).Content, PanelStrings.UpdatePreparingButton));
+                Check("кнопка подготовки недоступна на ходу", !PrepareButton(_updateWindow).IsEnabled);
+                break;
+
+            case 8:
+                // ХОД ПОШЁЛ — И ОКНО ЗАКРЫВАЮТ СЛОТОМ, РОВНО КАК ЧЕЛОВЕК КРЕСТИКОМ.
+                var running = _updateState.Progress;
+
+                Check(
+                    $"ход подготовки пошёл: {running?.Done} из {running?.Total}",
+                    running is not null && running.Done > 0 && running.Total > 0);
+
+                _progressDoneBefore = running?.Done ?? 0;
+                _progressTotalBefore = running?.Total ?? 0;
+                _progressTextBefore = ProgressShown(_updateWindow!);
+
+                Check($"окно показывает ход словами: «{_progressTextBefore}»", _progressTextBefore.Length > 0);
+
+                _slot!.Close();
+
+                Check("окно закрыто слотом", !_slot.IsOpen && !_updateWindow!.IsVisible);
+                Check("закрытие окна не сбросило занятость (DEF-058)", _updateState.Busy);
+                Check(
+                    $"закрытие окна не сбросило ход: {_updateState.Progress?.Done}",
+                    _updateState.Progress?.Done == _progressDoneBefore);
+                break;
+
+            case 9:
+                // ОТКРЫТЬ СНОВА ТЕМ ЖЕ СЛОТОМ: человека встречает ТО ЖЕ состояние, а не пустое место.
+                OpenUpdateWindow();
+
+                Check("окно открыто заново тем же слотом", _updateWindow!.IsVisible);
+
+                var afterReopen = _updateState.Progress;
+
+                Check(
+                    $"ход тот же (до/после закрытия): {_progressDoneBefore} → {afterReopen?.Done}",
+                    afterReopen is not null
+                    && afterReopen.Done == _progressDoneBefore
+                    && afterReopen.Total == _progressTotalBefore);
+
+                var shownAgain = ProgressShown(_updateWindow);
+
+                Check("во втором окне ТА ЖЕ строка хода", shownAgain.Length > 0 && shownAgain == _progressTextBefore);
+                Check("во втором окне видна полоса хода", Find<ProgressBar>(_updateWindow, "UpdateProgressBar")!.IsVisible);
+                Check(
+                    $"во втором окне кнопка называет работу: «{PrepareButton(_updateWindow).Content}»",
+                    Equals(PrepareButton(_updateWindow).Content, PanelStrings.UpdatePreparingButton));
+                Check("во втором окне кнопка подготовки недоступна", !PrepareButton(_updateWindow).IsEnabled);
+                break;
+
+            case 10:
+                // ВТОРОЙ СТАРТ ПОВЕРХ ИДУЩЕЙ ПОДГОТОВКИ: дверь одна — состояние панели (DEF-058),
+                // значит и второе окно её не обходит. Отказ обязан быть СЛОВАМИ на экране.
+                _updateWindow!.PrepareUpdate();
+
+                Check(
+                    $"второй старт отказан словами: «{_updateWindow.UpdateStatusLine}»",
+                    _updateWindow.UpdateStatusLine == PanelStrings.UpdatePreparationBusy);
+                Check(
+                    "отказ виден САМИМ окном, а не только в состоянии",
+                    StatusShown(_updateWindow) == PanelStrings.UpdatePreparationBusy);
+
+                // И РАБОТА НЕ НАЧАЛАСЬ ЗАНОВО. Проверка БЕЗ ГОНКИ: она спрашивает не «успел ли
+                // второй движок войти» (фоновая задача могла ещё не успеть), а «сброшен ли ход
+                // первого» — дверь старта в разрешённом случае очистила бы его, и числа на экране
+                // начались бы с нуля. Гонку поймал прогон мутации M3: счётчик входа отставал.
+                Check(
+                    $"второй старт не сбросил ход: {_updateState.Progress?.Done}",
+                    _updateState.Progress?.Done == _progressDoneBefore);
+
+                // РАЗРЕШИТЬ ВТОРОЙ ШАГ ХОДА: он приходится уже на ВТОРОЕ окно.
+                _updateInstall.NextStep();
+                break;
+
+            case 11:
+                // ХОД ВЫРОС НА ГЛАЗАХ У ВТОРОГО ОКНА: подписка на состояние живая, а не одноразовая.
+                var grown = _updateState.Progress;
+
+                Check(
+                    $"ход вырос в открытом окне: {_progressDoneBefore} → {grown?.Done}",
+                    grown is not null && grown.Done > _progressDoneBefore);
+
+                // ВТОРОЙ СТАРТ ДО ДВИЖКА НЕ ДОШЁЛ: за 350 мс фоновая задача второго нажатия
+                // уже вошла бы в работу, будь дверь открыта.
+                Check(
+                    $"движок вошёл в подготовку {_updateInstall.Prepared} раз (ожидается 1)",
+                    _updateInstall.Prepared == 1);
+
+                var grownText = ProgressShown(_updateWindow!);
+
+                Check("второе окно показало выросший ход", grownText.Length > 0 && grownText != _progressTextBefore);
+
+                Note($"ХОД ДО закрытия = {_progressDoneBefore} из {_progressTotalBefore} · ХОД ПОСЛЕ открытия = {grown?.Done} из {grown?.Total}");
+                Note($"строка хода ДО: «{_progressTextBefore}»");
+                Note($"строка хода ПОСЛЕ: «{grownText}»");
+
+                // РАЗРЕШИТЬ ОТВЕТ ГОТОВНОСТЬЮ: работа кончается уже после закрытия первого окна.
+                _updateInstall.Finish();
+                break;
+
+            case 12:
+                // ГОТОВНОСТЬ, ПРИШЕДШАЯ ВО ВТОРОЕ ОКНО: сборка видна, ход убран, занятость снята.
+                Check("подготовка закончилась", !_updateState.Busy);
+                Check("подготовленность пережила закрытие окна (DEF-058)", _updateState.Prepared is { Ok: true });
+                Check(
+                    "во втором окне видна карточка замены",
+                    Find<Control>(_updateWindow!, "UpdateReplaceCard")!.IsVisible);
+
+                _preparedTextShown = PreparedShown(_updateWindow!);
+
+                Check(
+                    $"во втором окне названа подготовленная сборка: «{_preparedTextShown}»",
+                    _preparedTextShown.Length > 0);
+                Check("строка хода с экрана ушла", Find<ProgressBar>(_updateWindow!, "UpdateProgressBar")!.IsVisible == false);
+
+                _slot!.Close();
+
+                Check("окно закрыто после готовности", !_slot.IsOpen && !_updateWindow!.IsVisible);
+                break;
+
+            case 13:
+                // ТРЕТЬЕ ОКНО: готовность — в состоянии панели, значит видна и в новом окне.
+                OpenUpdateWindow();
+
+                Check("третье окно показывает готовность без подготовки", _updateState.Prepared is { Ok: true });
+                Check(
+                    "третье окно называет ТУ ЖЕ подготовленную сборку",
+                    PreparedShown(_updateWindow!).Length > 0 && PreparedShown(_updateWindow!) == _preparedTextShown);
+                Check("третье окно не показывает ход", ProgressShown(_updateWindow!).Length == 0);
+
+                // КРАСНЫЕ ЛИНИИ САМИ: ни сети, ни замены файлов живая проба не касалась.
+                Check($"проверок выпусков в сети = {_updateProbe.Checks} (ожидается 0)", _updateProbe.Checks == 0);
+                Check($"запусков замены файлов = {_updateInstall.Launched} (ожидается 0)", _updateInstall.Launched == 0);
+
+                _slot!.Close();
 
                 timer.Stop();
                 Cleanup();
                 break;
         }
     }
+
+    /// <summary>
+    /// ОТКРЫТЬ НАСТОЯЩЕЕ ОКНО НАСТРОЕК НА РАЗДЕЛЕ «ОБНОВЛЕНИЕ» — ТОЙ ЖЕ ДВЕРЬЮ, ЧТО У ЧЕЛОВЕКА:
+    /// слот плюс место. Фабрика строит НОВОЕ окно при каждом открытии (закрытое окно показать
+    /// заново нельзя), а состояние подготовки у всех окон ОДНО — оно живёт в панели.
+    /// </summary>
+    private void OpenUpdateWindow()
+    {
+        Views.SettingsWindow? built = null;
+
+        _slot!.Open(
+            () => built = BuildUpdateWindow(),
+            place: window =>
+            {
+                PanelShell.Place(
+                    window,
+                    panel: null,
+                    cursor: null,
+                    screens: Array.Empty<PixelRect>(),
+                    scale: 1);
+
+                // Место — чтобы окно не мигало в углу по умолчанию; проверяем не его.
+                window.Position = new PixelPoint(320, 220);
+            });
+
+        if (built is not null) _updateWindow = built;
+    }
+
+    /// <summary>
+    /// ОКНО НАСТРОЕК ДЛЯ ЖИВОЙ СЦЕНЫ ПОДГОТОВКИ. Настройки — ОБРАЗЦОВЫЕ (<see cref="ShotSettings"/>):
+    /// ни файла владельца, ни пробы машины, ни записи. Двери обновления — подставные
+    /// (<see cref="ProbeUpdateControl"/>, <see cref="ProbeUpdateInstall"/>): сети и диска у пробы нет.
+    /// </summary>
+    private Views.SettingsWindow BuildUpdateWindow()
+    {
+        var window = new Views.SettingsWindow();
+
+        window.Attach(
+            new ShotSettings(),
+            autostart: null,
+            update: _updateProbe,
+            install: _updateInstall,
+            updateState: _updateState);
+
+        window.ShowSection(Views.SettingsWindow.UpdateSection);
+
+        return window;
+    }
+
+    /// <summary>Орган окна по имени — тот же путь, каким его находит человек глазами.</summary>
+    private static T? Find<T>(Window window, string name) where T : Control => window.FindControl<T>(name);
+
+    /// <summary>Строка хода, КОТОРУЮ ВИДИТ ЧЕЛОВЕК в этом окне (а не значение в состоянии).</summary>
+    private static string ProgressShown(Window window) =>
+        Find<TextBlock>(window, "UpdateProgressText")?.Text ?? string.Empty;
+
+    /// <summary>Строка состояния раздела, как она стоит на экране.</summary>
+    private static string StatusShown(Window window) =>
+        Find<TextBlock>(window, "UpdateStatusText")?.Text ?? string.Empty;
+
+    /// <summary>Строка карточки замены: путь подготовленной сборки — на экране.</summary>
+    private static string PreparedShown(Window window) =>
+        Find<TextBlock>(window, "UpdatePreparedText")?.Text ?? string.Empty;
+
+    /// <summary>Кнопка «Скачать и подготовить» — та, которую нажимает человек.</summary>
+    private static Button PrepareButton(Window window) => Find<Button>(window, "UpdatePrepareButton")!;
 
     /// <summary>Убрать за собой ВСЁ: окна, слоты и цикл приложения.</summary>
     private void Cleanup()
@@ -284,10 +597,11 @@ public sealed class WindowsSelfTest
     private void Check(string what, bool ok) => Report($"{what} = {ok}", ok);
 
     /// <summary>
-    /// СТОРОЖ: проба не имеет права длиться дольше 25 с (шагов пять по 350 мс, запас огромный —
-    /// на медленную машину и на ожидание показа окна). Сторож спит в СВОЁМ потоке: таймер живёт
-    /// в том же цикле сообщений, который и может застрять. Код 3 — «проверка не завершилась»,
-    /// и он отличается от 1 («провал») и 2 («неприменимо»).
+    /// СТОРОЖ: проба не имеет права длиться дольше 25 с (шагов четырнадцать по 350 мс плюс пауза
+    /// подставного движка и калитки подготовки — запас всё равно огромный: на медленную машину
+    /// и на ожидание показа окна). Сторож спит в СВОЁМ потоке: таймер живёт в том же цикле
+    /// сообщений, который и может застрять. Код 3 — «проверка не завершилась», и он отличается
+    /// от 1 («провал») и 2 («неприменимо»).
     /// </summary>
     private void StartWatchdog()
     {

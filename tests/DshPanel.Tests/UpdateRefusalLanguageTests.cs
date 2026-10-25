@@ -194,6 +194,57 @@ public class UpdateRefusalLanguageTests
     // ------------------------------------------------------------------ требование 3
 
     /// <summary>
+    /// НЕУДАЧА СКАЧИВАНИЯ НЕ ВЫНОСИТ ЧЕЛОВЕКУ НИ ПУТИ, НИ ТИПА ИСКЛЮЧЕНИЯ — НА ТРЁХ ЯЗЫКАХ
+    /// (DEF-059, 2.4.2). Случай взят из жизни: владелец 24.10.2026 прочитал в окне
+    /// «Скачать архив панели не удалось: interrupted: FileNotFoundException: Could not find file
+    /// C:\Users\…\DshPanel-2.4.1.zip.part-0» — тип исключения и свой путь (красная линия 7).
+    ///
+    /// Проверяется СРАЗУ ДВЕ ДВЕРИ: **человеку** — слова причины без пути и типа, **журналу** —
+    /// технический след, но с замаскированным путём. Мутация «вернуть сырое исключение в строку»
+    /// падает здесь (и в `SettingsUpdateSectionTests`), мутация «не маскировать журнал» — тоже.
+    /// </summary>
+    [Fact]
+    public void Отказ_скачивания_без_пути_и_типа_а_журнал_с_маской()
+    {
+        using var stand = new Stand();
+        var assets = Ready(stand);
+
+        const string missing =
+            @"C:\Users\person\AppData\Local\DshPanel2\state\update\DshPanel-2.1.0.zip.part-0";
+
+        stand.Download.Throw = new FileNotFoundException("Could not find file '" + missing + "'.", missing);
+
+        var log = new List<string>();
+        var preparation = Prepare(stand, assets, log: line => log.Add(line));
+
+        Assert.False(preparation.Ok);
+
+        // СЛУЧАЙ НАЗВАН СВОИМ ОТКАЗОМ, а не «скачать не удалось» с техстрокой в подстановке.
+        Assert.Equal(UpdateRefusal.ArchiveMissing, preparation.Refusal);
+        Assert.Equal("UpdateArchiveMissing", preparation.RefusalKey);
+
+        foreach (var language in Languages)
+        {
+            var line = Line(language, preparation);
+
+            Assert.False(string.IsNullOrWhiteSpace(line), $"{language}: строка отказа пуста");
+
+            Assert.DoesNotContain("C:\\Users", line, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("FileNotFoundException", line, StringComparison.Ordinal);
+            Assert.DoesNotContain(".part-0", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("person", line, StringComparison.Ordinal);
+        }
+
+        // ЖУРНАЛ: след есть и он замаскирован — разбирать есть чем, личных данных нет.
+        var record = Assert.Single(log);
+
+        Assert.Contains("FileNotFoundException", record, StringComparison.Ordinal);
+        Assert.Contains("~", record, StringComparison.Ordinal);
+        Assert.DoesNotContain("C:\\Users", record, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("person", record, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// НА НАСТОЯЩЕМ ПУТИ В ЧУЖОМ ЯЗЫКЕ НЕТ РУССКИХ СЛОВ. Строки берутся не из головы проверки,
     /// а из отказов, добытых подготовкой и распаковкой: имена файлов, хеши, числа, ожидаемое
     /// и полученное. Именно здесь падало бы возвращение русского литерала в Detail.
@@ -403,37 +454,9 @@ public class UpdateRefusalLanguageTests
             found.Add(("версия внутри архива не та", Prepare(stand, Ready(stand), versionOf: _ => "2.0.9")));
         }
 
-        using (var stand = new Stand())
-        {
-            var zip = PanelArchive();
-            var setup = Encoding.UTF8.GetBytes("установщик");
-            stand.Download.Add(SumsUrl, Encoding.UTF8.GetBytes(SumsText((UpdateAssets.ArchiveName, zip), (UpdateAssets.SetupName, setup))));
-            stand.Download.Add(ArchiveUrl, zip);
-            stand.Download.FailUrl = SetupUrl;
-
-            found.Add(("установщик не скачался", Prepare(stand, new ReleaseAssets(ArchiveUrl, SetupUrl, SumsUrl))));
-        }
-
-        using (var stand = new Stand())
-        {
-            var zip = PanelArchive();
-            stand.Download.Add(SumsUrl, Encoding.UTF8.GetBytes(SumsText((UpdateAssets.ArchiveName, zip))));
-            stand.Download.Add(ArchiveUrl, zip);
-            stand.Download.Add(SetupUrl, Encoding.UTF8.GetBytes("установщик"));
-
-            found.Add(("нет строки для установщика", Prepare(stand, new ReleaseAssets(ArchiveUrl, SetupUrl, SumsUrl))));
-        }
-
-        using (var stand = new Stand())
-        {
-            var zip = PanelArchive();
-            var promised = Encoding.UTF8.GetBytes("обещанный установщик");
-            stand.Download.Add(SumsUrl, Encoding.UTF8.GetBytes(SumsText((UpdateAssets.ArchiveName, zip), (UpdateAssets.SetupName, promised))));
-            stand.Download.Add(ArchiveUrl, zip);
-            stand.Download.Add(SetupUrl, Encoding.UTF8.GetBytes("подменённый установщик"));
-
-            found.Add(("сумма установщика не сошлась", Prepare(stand, new ReleaseAssets(ArchiveUrl, SetupUrl, SumsUrl))));
-        }
+        // ⚠️ ОТКАЗОВ УСТАНОВЩИКА ЗДЕСЬ БОЛЬШЕ НЕТ (DEF-060, 2.4.2): второго файла выпуска
+        // не качается вовсе, и отказов «нет строки для установщика» / «сумма установщика
+        // не сошлась» получить неоткуда — их значения убраны вместе с блоком.
 
         using (var stand = new Stand())
         {
@@ -459,6 +482,46 @@ public class UpdateRefusalLanguageTests
             // звался «архив не разобрался» и показывался ключом про разобранный архив с английской
             // фразой внутри русского сообщения — замечание владельца 10.10.2026, заведён свой ключ.
             found.Add(("папку обновления занять не удалось", FromUnpack(UpdateStaging.Unpack(archive, occupied))));
+        }
+
+        // --- DEF-059: ПРИЧИНЫ НЕУДАЧИ СКАЧИВАНИЯ РАЗЛИЧИМЫ И ГОВОРЯТ СВОЁ ---
+        // До 2.4.2 все они выходили одним ключом «скачать архив не удалось: <тип исключения>».
+        // Теперь у каждой свой ключ, и проверять их надо НАСТОЯЩИМ путём подготовки.
+
+        using (var stand = new Stand())
+        {
+            var assets = Ready(stand);
+            stand.Download.Answer = new UpdateDownloadResult(UpdateDownloadOutcome.HttpRefused, "HTTP 404");
+
+            found.Add(("сервер ответил отказом", Prepare(stand, assets)));
+        }
+
+        using (var stand = new Stand())
+        {
+            var assets = Ready(stand);
+            stand.Download.Answer = new UpdateDownloadResult(UpdateDownloadOutcome.NoLength, "HTTP 200");
+
+            found.Add(("сервер не назвал размер файла", Prepare(stand, assets)));
+        }
+
+        using (var stand = new Stand())
+        {
+            var assets = Ready(stand);
+            stand.Download.Answer = new UpdateDownloadResult(
+                UpdateDownloadOutcome.WriteFailed,
+                @"UnauthorizedAccessException: C:\Users\person\state\update\DshPanel-2.1.0.zip.part");
+
+            found.Add(("записать скачанное не удалось", Prepare(stand, assets)));
+        }
+
+        using (var stand = new Stand())
+        {
+            var assets = Ready(stand);
+
+            var missing = @"C:\Users\person\AppData\Local\DshPanel2\state\update\DshPanel-2.1.0.zip.part-0";
+            stand.Download.Throw = new FileNotFoundException("Could not find file '" + missing + "'.", missing);
+
+            found.Add(("файл подготовки пропал", Prepare(stand, assets)));
         }
 
         return found;
@@ -527,6 +590,15 @@ public class UpdateRefusalLanguageTests
         /// <summary>Адрес, на котором подстановка обязана отказать (пусто — не отказывает).</summary>
         public string FailUrl { get; set; } = string.Empty;
 
+        /// <summary>
+        /// ИСКЛЮЧЕНИЕ ВМЕСТО ОТВЕТА (DEF-059): так приходит «файл подготовки пропал» и отказ записи.
+        /// Живой загрузчик ловит их сам и отдаёт исходом, здесь проверяется путь подготовки.
+        /// </summary>
+        public Exception? Throw { get; set; }
+
+        /// <summary>ГОТОВЫЙ ОТВЕТ ЗАГРУЗКИ вместо байтов: отказ сервера, «размер не назван», запись.</summary>
+        public UpdateDownloadResult? Answer { get; set; }
+
         public FakeDownload Add(string url, byte[] bytes)
         {
             _files[url] = bytes;
@@ -544,6 +616,10 @@ public class UpdateRefusalLanguageTests
             {
                 throw new HttpRequestException("HTTP 500");
             }
+
+            if (Throw is not null) throw Throw;
+
+            if (Answer is not null) return Answer;
 
             if (!_files.TryGetValue(url, out var bytes))
             {
@@ -574,7 +650,8 @@ public class UpdateRefusalLanguageTests
         string release = "v2.1.0",
         string current = "2.0.0",
         string? target = null,
-        Func<string, string>? versionOf = null) =>
+        Func<string, string>? versionOf = null,
+        Action<string>? log = null) =>
         UpdateInstall.Prepare(
             new UpdateRequest(
                 stand.Paths,
@@ -588,7 +665,8 @@ public class UpdateRefusalLanguageTests
                 MutexName: string.Empty,
                 At: Now),
             stand.Download,
-            versionOf ?? (_ => "2.1.0"));
+            versionOf ?? (_ => "2.1.0"),
+            log: log);
 
     /// <summary>Скачанные файлы подстановки: суммы со своим счётом, архив и, если нужно, установщик.</summary>
     private static ReleaseAssets Ready(Stand stand, byte[]? archive = null)

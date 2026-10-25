@@ -18,11 +18,8 @@ public enum UpdateStage
     /// <summary>Скачивается файл контрольных сумм.</summary>
     Sums,
 
-    /// <summary>Скачивается архив панели.</summary>
+    /// <summary>Скачивается архив панели — ЕДИНСТВЕННЫЙ файл выпуска (DEF-060, 2.4.2).</summary>
     Archive,
-
-    /// <summary>Скачивается установщик выпуска.</summary>
-    Setup,
 
     /// <summary>Проверяется SHA-256 скачанного.</summary>
     Verify,
@@ -77,6 +74,19 @@ public enum UpdateDownloadOutcome
 
     /// <summary>Сервер не назвал длину содержимого — резать нечего, класть в рабочий путь нечего.</summary>
     NoLength,
+
+    /// <summary>
+    /// ФАЙЛ ПОДГОТОВКИ ПРОПАЛ МЕЖДУ ШАГАМИ (DEF-059): куска, который только что приняли, или
+    /// собранного файла нет на диске — его убрал антивирус, уборка другой попытки или человек.
+    /// Случай отдельный от «сеть оборвалась»: повтор не поможет, начинать надо заново.
+    /// </summary>
+    FileMissing,
+
+    /// <summary>
+    /// ЗАПИСАТЬ СКАЧАННОЕ НЕ УДАЛОСЬ: сборка файла из кусков или занятие рабочего пути упёрлось
+    /// в диск, права или занятый файл. Это тоже не «сеть» — и человеку говорится своё.
+    /// </summary>
+    WriteFailed,
 }
 
 /// <summary>
@@ -112,6 +122,8 @@ public sealed record UpdateDownloadResult(
             UpdateDownloadOutcome.Interrupted => "interrupted",
             UpdateDownloadOutcome.HttpRefused => "http-refused",
             UpdateDownloadOutcome.NoLength => "no-length",
+            UpdateDownloadOutcome.FileMissing => "file-missing",
+            UpdateDownloadOutcome.WriteFailed => "write-failed",
             _ => Outcome.ToString(),
         };
 
@@ -228,12 +240,12 @@ public interface IUpdateDownload
 public sealed class HttpUpdateDownload : IUpdateDownload
 {
     /// <summary>
-    /// РАЗМЕР КУСКА — 8 МиБ, и он взят ИЗ ЗАМЕРА, а не выбран «на глаз»: на этом размере
-    /// накладные расходы на запрос уже отыграны (8 МиБ — 2,28 с против 16 МиБ — 2,15 с
-    /// и 32 МиБ — 3,57 с), а память панели не зависит от размера файла вовсе. Меньший кусок
-    /// множит запросы, больший — ничего не ускоряет. Замер — в описании класса.
+    /// РАЗМЕР КУСКА — 16 МиБ, и он взят ИЗ ЗАМЕРА, а не выбран «на глаз»: 8 МиБ — 2,28 с,
+    /// 16 МиБ — 2,15 с, 32 МиБ — 3,57 с (замер A0, 2.4.2). Восемь мегабайт множат запросы,
+    /// тридцать два — ничего не ускоряют и зря держат память буфера; память панели при 16 МиБ
+    /// по-прежнему не зависит от размера файла. Замер — в описании класса.
     /// </summary>
-    public const long ChunkSize = 8L * 1024 * 1024;
+    public const long ChunkSize = 16L * 1024 * 1024;
 
     /// <summary>
     /// СКОЛЬКО РАЗ ПРОБОВАТЬ ОДИН КУСОК. Обрыв соединения — обычное дело на мобильной сети,
@@ -446,8 +458,8 @@ public sealed class HttpUpdateDownload : IUpdateDownload
                 if (step.Got > 0)
                 {
                     // ⚠️ БАЙТОВОЕ ПРОДОЛЖЕНИЕ: принятое оборванным ответом остаётся В КУСКЕ, и
-                    // повтор спрашивает с него, а не с начала куска. На восьмимегабайтном куске
-                    // это до 8 МиБ, которые иначе качались бы заново (находка P5, 22.10.2026).
+                    // повтор спрашивает с него, а не с начала куска. На шестнадцатимегабайтном
+                    // куске это до 16 МиБ, которые иначе качались бы заново (находка P5, 22.10.2026).
                     have[index] += step.Got;
                     onDisk += step.Got;
                     SaveState();
@@ -457,6 +469,10 @@ public sealed class HttpUpdateDownload : IUpdateDownload
                 // адресу даст тот же ответ. Повторы — для ОБРЫВА соединения.
                 if (refusal.Outcome == UpdateDownloadOutcome.HttpRefused) break;
 
+                // ⚠️ ПАУЗА — ТОЛЬКО ЗДЕСЬ, НА ПОВТОРЕ ПОСЛЕ ОБРЫВА (DEF-060, 2.4.2). В обычном
+                // пути её НЕТ ВОВСЕ: после удачного куска цикл сразу спрашивает следующий, и
+                // «убрать паузу» значило бы убрать её у повтора, где она и нужна (короткий
+                // разрыв канала успевает закрыться за две секунды).
                 if (attempt < plan.Tries) Thread.Sleep(plan.Pause);
             }
 
@@ -495,7 +511,7 @@ public sealed class HttpUpdateDownload : IUpdateDownload
         catch (Exception error)
         {
             Forget(path);
-            return new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error));
+            return Failure(error, UpdateDownloadOutcome.WriteFailed);
         }
 
         // Куски своё дело сделали: сборка больше не нуждается в них, а рядом с рабочим путём
@@ -523,7 +539,7 @@ public sealed class HttpUpdateDownload : IUpdateDownload
         catch (Exception error)
         {
             Forget(path);
-            return new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error));
+            return Failure(error, UpdateDownloadOutcome.WriteFailed);
         }
 
         // Загрузки больше нет — записи о ней тоже: иначе следующий запуск искал бы продолжение
@@ -768,7 +784,7 @@ public sealed class HttpUpdateDownload : IUpdateDownload
             first?.Dispose();
             first = null;
 
-            return new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error));
+            return Failure(error, UpdateDownloadOutcome.Interrupted);
         }
     }
 
@@ -846,7 +862,7 @@ public sealed class HttpUpdateDownload : IUpdateDownload
         }
         catch (Exception error)
         {
-            return (new UpdateDownloadResult(UpdateDownloadOutcome.Interrupted, Describe(error)), got);
+            return (Failure(error, UpdateDownloadOutcome.Interrupted), got);
         }
     }
 
@@ -906,11 +922,32 @@ public sealed class HttpUpdateDownload : IUpdateDownload
         "HTTP " + ((int)answer.StatusCode).ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// Причина отката словами СРЕДЫ (тип и сообщение исключения): заменить её нечем — иначе
-    /// причина исчезнет вовсе. Так же поступает отказ записи файлов замены в <c>UpdateInstall</c>.
+    /// ТЕХНИЧЕСКИЙ СЛЕД ДЛЯ ЖУРНАЛА: тип исключения и его сообщение, ПУТИ ПРОФИЛЯ ЗАМАСКИРОВАНЫ
+    /// (DEF-059, 2.4.2). Человеку этот текст не показывается вовсе: причину он читает словами
+    /// ключа отказа (<see cref="UpdateRefusal.DownloadNetwork"/> и соседи), а сюда след попадает
+    /// строкой журнала подготовки. Прежде (<c>= тип + сообщение</c>) он уходил прямо в строку окна,
+    /// и владелец 24.10.2026 прочитал «FileNotFoundException: Could not find file C:\Users\…».
     /// </summary>
     private static string Describe(Exception error) =>
-        error.GetType().Name + ": " + error.Message;
+        DisplayMask.PathsIn(error.GetType().Name + ": " + error.Message);
+
+    /// <summary>
+    /// ЧЕМ КОНЧИЛАСЬ ПОПЫТКА ЧТЕНИЯ ИЛИ ЗАПИСИ: ТИП ИСКЛЮЧЕНИЯ РЕШАЕТ ПРИЧИНУ, КОТОРУЮ ПРОЧТЁТ
+    /// ЧЕЛОВЕК (DEF-059). Пропавший файл подготовки и отказ записи на диск — РАЗНЫЕ беды, и
+    /// «нет связи с GitHub» про них говорить нельзя; всё остальное (обрыв, отказ диска состояния)
+    /// остаётся обрывом связи или записью — по тому, что делает <paramref name="outcome"/>.
+    ///
+    /// ⚠️ **Правило ОДНО на живой загрузчик и на подстановку:** подстановка проверок вправе
+    /// бросить исключение (так проверяется «файл подготовки пропал»), и обёртка подготовки
+    /// (<c>UpdateInstall.Fetch</c>) обязана превратить его в ТОТ ЖЕ исход, иначе живой путь и
+    /// прогон говорили бы человеку разное об одном случае.
+    /// </summary>
+    public static UpdateDownloadResult Failure(Exception error, UpdateDownloadOutcome outcome) =>
+        new(
+            error is FileNotFoundException or DirectoryNotFoundException
+                ? UpdateDownloadOutcome.FileMissing
+                : outcome,
+            Describe(error));
 
     /// <summary>Временный файл куска рядом с рабочим путём: <c>&lt;path&gt;.part-&lt;N&gt;</c>.</summary>
     public static string PartPath(string path, int index) =>

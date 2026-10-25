@@ -633,16 +633,26 @@ public class UpdateInstallTests
     }
 
     /// <summary>
-    /// УСТАНОВЩИК ЕДЕТ РЯДОМ: он лежит в папке панели и уходит в полную копию, поэтому его
-    /// скачивание и сверка — часть подготовки. Его сумма проверяется так же строго.
+    /// В ВЫПУСКЕ С УСТАНОВЩИКОМ КАЧАЕТСЯ РОВНО ОДИН ФАЙЛ (DEF-060, 2.4.2): архив `DshPanel.zip` —
+    /// тот, которым панель ДЕЙСТВИТЕЛЬНО заменяет свои файлы (`UpdateScript.robocopy`).
+    ///
+    /// **От какого случая.** Прежде вторым файлом качался `dsh-panel-setup.exe` (45,1 МБ) и
+    /// сверялась его сумма — а применялся он нигде: потребителя у установщика во всём дереве нет.
+    /// Владелец 24.10.2026 на 2.4.1 видел «34 % второго файла после полного первого» — ~90 МБ
+    /// вместо ~45.
+    ///
+    /// Проверка идёт по ЖУРНАЛУ ОБРАЩЕНИЙ подстановки: в выпуске есть и установщик, а спрошены
+    /// ровно два адреса — файл сумм и архив. Мутация «вернуть вторую загрузку» падает здесь
+    /// третьим адресом в журнале.
     /// </summary>
     [Fact]
-    public void Установщик_выпуска_скачивается_и_сверяется()
+    public void В_выпуске_с_установщиком_качается_ровно_один_файл()
     {
         using var stand = new Stand();
 
-        var setup = Encoding.UTF8.GetBytes("установщик");
         var zip = PanelArchive();
+        var setup = Encoding.UTF8.GetBytes("установщик");
+
         stand.Download.Add(SumsUrl, Encoding.UTF8.GetBytes(SumsText(
             (UpdateAssets.ArchiveName, zip), (UpdateAssets.SetupName, setup))));
         stand.Download.Add(ArchiveUrl, zip);
@@ -654,37 +664,29 @@ public class UpdateInstallTests
             _ => "2.1.0");
 
         Assert.True(preparation.Ok, preparation.RefusalKey + ": " + preparation.Detail);
-        Assert.True(File.Exists(Path.Combine(preparation.StagedFolder, UpdateAssets.SetupName)));
 
-        // Установщик с чужой суммой — отказ, и в папке панели по-прежнему ничего не тронуто.
-        using var second = new Stand();
-        var before = second.Snapshot(second.Target);
-        var other = Encoding.UTF8.GetBytes("подменённый установщик");
+        // РОВНО ДВА ОБРАЩЕНИЯ: файл сумм (это индекс, а не файл выпуска) и архив.
+        Assert.Equal(new[] { SumsUrl, ArchiveUrl }, stand.Download.Asked);
 
-        second.Download.Add(SumsUrl, Encoding.UTF8.GetBytes(SumsText(
-            (UpdateAssets.ArchiveName, zip), (UpdateAssets.SetupName, setup))));
-        second.Download.Add(ArchiveUrl, zip);
-        second.Download.Add(SetupUrl, other);
-
-        var refused = UpdateInstall.Prepare(
-            Request(second, new ReleaseAssets(ArchiveUrl, SetupUrl, SumsUrl)),
-            second.Download,
-            _ => "2.1.0");
-
-        Assert.False(refused.Ok);
-        Assert.Equal(UpdateRefusal.SetupSumMismatch, refused.Refusal);
-        Assert.Equal("UpdateSetupSumMismatchFormat", refused.RefusalKey);
-        Assert.Equal(before, second.Snapshot(second.Target));
+        // И установщика в подготовленной сборке нет вовсе: его никто не скачивал.
+        Assert.False(
+            File.Exists(Path.Combine(preparation.StagedFolder, UpdateAssets.SetupName)),
+            "в папке сборки оказался установщик, которого панель не качает");
     }
 
     /// <summary>
-    /// НЕУДАЧА ЗАГРУЗКИ НАЗВАНА ОТКАЗОМ, а не исключением наружу, и КАЖДАЯ НЕУДАЧА — СВОИМ
-    /// ОТКАЗОМ: у файла сумм, архива и установщика ключи разные. Один ключ на троих значил бы,
-    /// что различать их снова придётся словами в <c>Detail</c>, — а <c>Detail</c> подставляется
-    /// в строку, которую читает человек (дефект языка, найденный 29.09.2026).
+    /// НЕУДАЧА ЗАГРУЗКИ НАЗВАНА ОТКАЗОМ, А ПРИЧИНА — СЛОВАМИ (DEF-059, 2.4.2). Обрыв связи даёт
+    /// ОДНУ причину на все файлы («нет связи с GitHub»): виноват канал, а не файл, и «какой файл»
+    /// человек уже видел строкой хода.
+    ///
+    /// ⚠️ Прежде ключи были РАЗНЫЕ на каждый файл — и различать их приходилось технической
+    /// строкой в <c>Detail</c> («interrupted: HttpRequestException: HTTP 500»), а она
+    /// подставляется в строку, которую читает человек. Владелец 24.10.2026 прочитал там тип
+    /// исключения и свой путь. Теперь техслед идёт в журнал под маской
+    /// (<c>UpdateDownloadFailedLogFormat</c>), а здесь проверяется, что человеку он НЕ подставлен.
     /// </summary>
     [Fact]
-    public void Неудача_загрузки_названа_отказом_и_своим_для_каждого_файла()
+    public void Неудача_загрузки_названа_отказом_и_причиной_словами()
     {
         using var stand = new Stand();
 
@@ -694,12 +696,15 @@ public class UpdateInstallTests
         var preparation = UpdateInstall.Prepare(Request(stand, assets), stand.Download, _ => "2.1.0");
 
         Assert.False(preparation.Ok);
-        Assert.Equal(UpdateRefusal.ArchiveDownloadFailed, preparation.Refusal);
-        Assert.Equal("UpdateArchiveDownloadFailedFormat", preparation.RefusalKey);
-        Assert.Contains("HTTP 500", preparation.Detail, StringComparison.Ordinal);
+        Assert.Equal(UpdateRefusal.DownloadNetwork, preparation.Refusal);
+        Assert.Equal("UpdateNetworkError", preparation.RefusalKey);
+
+        // ЧЕЛОВЕКУ ТЕХСТРОКА НЕ ПОДСТАВЛЯЕТСЯ: значения причины нет вовсе, слова — в ключе.
+        Assert.Equal(string.Empty, preparation.Detail);
+        Assert.DoesNotContain("HTTP 500", UpdateRefusalLines.Line(preparation), StringComparison.Ordinal);
         Assert.Empty(Directory.GetFiles(stand.UpdateRoot));
 
-        // Тот же путь, но не скачался файл сумм: отказ ДРУГОЙ, и ключ у него свой.
+        // Тот же путь, но не скачался файл сумм: причина ТА ЖЕ — канал, а не файл.
         using var second = new Stand();
         var secondAssets = Ready(second);
         second.Download.FailUrl = SumsUrl;
@@ -707,8 +712,8 @@ public class UpdateInstallTests
         var sums = UpdateInstall.Prepare(Request(second, secondAssets), second.Download, _ => "2.1.0");
 
         Assert.False(sums.Ok);
-        Assert.Equal(UpdateRefusal.SumsDownloadFailed, sums.Refusal);
-        Assert.NotEqual(preparation.RefusalKey, sums.RefusalKey);
+        Assert.Equal(UpdateRefusal.DownloadNetwork, sums.Refusal);
+        Assert.Equal(preparation.RefusalKey, sums.RefusalKey);
     }
 
     // ------------------------------------------------------------------ текст сценария

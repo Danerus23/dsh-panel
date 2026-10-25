@@ -161,63 +161,139 @@ public class UpdateLinesTests
     }
 
     /// <summary>
-    /// ХОД ПОДГОТОВКИ НАЗЫВАЕТ ЭТАП И ПРОЦЕНТЫ, а когда размер файла не назван — у СКАЧИВАНИЯ
-    /// говорит «размер неизвестен»: «0 %» вместо этого показало бы, что загрузка встала.
+    /// ХОД СКАЧИВАНИЯ НАЗЫВАЕТ ОБЪЁМ, СКОРОСТЬ И ОСТАТОК (DEF-060, 2.4.2): «скачано 20,0 МБ
+    /// из 44,7 МБ · 2,0 МБ/с · осталось ~12,0 с». Прежде строка показывала ПРОЦЕНТЫ одного файла,
+    /// и человек не знал ни общего объёма, ни скорости, ни того, сколько ждать; на двух файлах
+    /// полоса дважды начиналась с нуля (владелец: «34 % второго файла после полного первого»).
+    ///
+    /// Числа форматирует тот же <see cref="DshPanel.Backup.BackupFormat"/>, что и весь размер
+    /// на панели: ожидание собирается ЕГО дверьми, а не своей копией шаблона.
+    ///
+    /// ⚠️ Мутации, которые обязаны упасть ИМЕННО здесь: **«вернуть проценты»** (строка пошла бы
+    /// через `UpdateProgressFormat`, и скорости в ней нет) · **«не показывать скорость/остаток»**
+    /// (строка стала бы короткой формой без скорости).
     /// </summary>
     [Fact]
-    public void Ход_подготовки_называет_этап_и_проценты()
+    public void Ход_скачивания_называет_объём_скорость_и_остаток()
     {
-        var text = UpdateLines.ProgressLine(new UpdateProgress(UpdateStage.Archive, "DshPanel.zip", 42, 100));
+        const long total = 44_730_712L;
+        const long done = 20_971_520L;
+        var rate = 2.0 * 1024 * 1024;
 
-        Assert.Contains(UpdateStageLines.Text(UpdateStage.Archive), text, StringComparison.Ordinal);
-        Assert.Contains("42", text, StringComparison.Ordinal);
+        var text = UpdateLines.ProgressLine(new UpdateProgressView(
+            UpdateStage.Archive, "DshPanel.zip", done, total, rate, TimeSpan.FromSeconds((total - done) / rate)));
 
-        var unknown = UpdateLines.ProgressLine(new UpdateProgress(UpdateStage.Archive, "DshPanel.zip", 0, -1));
+        var expected = string.Format(
+            System.Globalization.CultureInfo.CurrentCulture,
+            PanelStrings.UpdateProgressBytesFormat,
+            DshPanel.Backup.BackupFormat.Size(done),
+            DshPanel.Backup.BackupFormat.Size(total),
+            string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.UpdateSpeedFormat,
+                DshPanel.Backup.BackupFormat.Size((long)rate)),
+            DshPanel.Backup.BackupFormat.Duration(TimeSpan.FromSeconds((total - done) / rate)));
 
-        Assert.Contains(UpdateStageLines.Text(UpdateStage.Archive), unknown, StringComparison.Ordinal);
+        Assert.Equal(expected, text);
+
+        // И это правда ВИДНО: объём, скорость и остаток стоят в строке, а «этап:» — нет.
+        Assert.Contains(DshPanel.Backup.BackupFormat.Size(done), text, StringComparison.Ordinal);
+        Assert.Contains(DshPanel.Backup.BackupFormat.Size(total), text, StringComparison.Ordinal);
+        Assert.Contains(DshPanel.Backup.BackupFormat.Size((long)rate), text, StringComparison.Ordinal);
+        Assert.Contains(DshPanel.Backup.BackupFormat.Duration(TimeSpan.FromSeconds((total - done) / rate)), text, StringComparison.Ordinal);
+        Assert.DoesNotContain(PanelStrings.UpdateProgressStageFormat.Split('{')[0].Trim(), text, StringComparison.Ordinal);
+
+        // РАЗМЕР НЕ НАЗВАН — не проценты и не «0 %», а сколько уже скачано и почему остатка нет.
+        var unknown = UpdateLines.ProgressLine(new UpdateProgressView(
+            UpdateStage.Archive, "DshPanel.zip", done, -1, 0, null));
+
+        Assert.Equal(
+            string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.UpdateProgressUnknownFormat,
+                DshPanel.Backup.BackupFormat.Size(done)),
+            unknown);
+        Assert.Contains("размер файла", unknown, StringComparison.Ordinal);
         Assert.DoesNotContain("0 %", unknown, StringComparison.Ordinal);
 
-        // ФРАЗА ПРО РАЗМЕР ОСТАЁТСЯ У СКАЧИВАНИЯ: там дело именно в размере, который сервер
-        // не назвал (слово владельца 20.10.2026: «остаётся только для скачивания»).
-        Assert.Contains("размер файла", unknown, StringComparison.Ordinal);
+        // СКОРОСТИ ЕЩЁ НЕТ (ничего не принято) — остаток ОБЪЁМОМ, а не выдуманные «0,0 МБ/с».
+        var noSpeed = UpdateLines.ProgressLine(new UpdateProgressView(
+            UpdateStage.Archive, "DshPanel.zip", 0, total, 0, null));
+
+        Assert.Equal(
+            string.Format(
+                System.Globalization.CultureInfo.CurrentCulture,
+                PanelStrings.UpdateProgressNoSpeedFormat,
+                DshPanel.Backup.BackupFormat.Size(0),
+                DshPanel.Backup.BackupFormat.Size(total),
+                DshPanel.Backup.BackupFormat.Size(total)),
+            noSpeed);
+        Assert.DoesNotContain(
+            string.Format(System.Globalization.CultureInfo.CurrentCulture, PanelStrings.UpdateSpeedFormat, string.Empty),
+            noSpeed,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// У ЭТАПОВ БЕЗ ПРОЦЕНТОВ СЛОВ ПРО РАЗМЕР ФАЙЛА НЕТ — только «этап: …». Размер у сверки
+    /// СКОРОСТЬ И ОСТАТОК СЧИТАЮТСЯ ЧИСТО (DEF-060): средняя скорость — принятое за время,
+    /// остаток — сколько осталось при этой скорости. Часы монотонные, поэтому правила принимают
+    /// ПРОШЕДШЕЕ ВРЕМЯ доводом и проверяются перебором, а не «на глаз по живому окну».
+    ///
+    /// ⚠️ Мутации, которые обязаны упасть ИМЕННО здесь: **«скорость = 0»** (строка хода навсегда
+    /// осталась бы без скорости) · **«остаток врёт»** (прибавить минуту или поделить не на ту
+    /// скорость) · **«делить на ноль при пустых часах»** (исключение вместо 0).
+    /// </summary>
+    [Fact]
+    public void Скорость_и_остаток_считаются_по_часам()
+    {
+        Assert.Equal(500, UpdateProgressMath.BytesPerSecond(2000, TimeSpan.FromSeconds(4)), 6);
+        Assert.Equal(0, UpdateProgressMath.BytesPerSecond(0, TimeSpan.FromSeconds(4)), 6);
+        Assert.Equal(0, UpdateProgressMath.BytesPerSecond(2000, TimeSpan.Zero), 6);
+
+        Assert.Equal(TimeSpan.FromSeconds(1), UpdateProgressMath.Remaining(1000, 500, 500));
+        Assert.Equal(TimeSpan.FromSeconds(4), UpdateProgressMath.Remaining(3000, 1000, 500));
+        Assert.Null(UpdateProgressMath.Remaining(0, 0, 500));
+        Assert.Null(UpdateProgressMath.Remaining(1000, 500, 0));
+        Assert.Equal(TimeSpan.Zero, UpdateProgressMath.Remaining(1000, 1500, 500));
+    }
+
+    /// <summary>
+    /// У ЭТАПОВ БЕЗ ОБЪЁМА СЛОВ ПРО РАЗМЕР ФАЙЛА НЕТ — только «этап: …». Размер у сверки
     /// контрольной суммы, распаковки, страховочной копии и записи сценария ни при чём, и прежняя
     /// фраза «размер файла неизвестен» на них была ложью по смыслу (слово владельца 20.10.2026,
     /// пункт 3 пакета 2.3.1).
     ///
     /// ⚠️ Группы этапов названы здесь ЦЕЛИКОМ, а их сумма сверена с числом значений
     /// <see cref="UpdateStage"/>: новый этап в перечислении обязан попасть в одну из групп,
-    /// а не проскользнуть мимо правила.
+    /// а не проскользнуть мимо правила. После 2.4.2 скачивается ОДИН файл выпуска — этапа
+    /// установщика в перечислении больше нет (DEF-060).
     ///
     /// ⚠️ Мутации, которые обязаны упасть ИМЕННО здесь: **«вернуть старую формулировку на этапах
-    /// без процентов»** (строка пошла бы через ключ «размер файла неизвестен») и **«перевернуть
-    /// правило выбора»** (`HasPercent` отвечает не про те этапы).
+    /// без объёма»** (строка пошла бы через ключ «размер файла») и **«перевернуть правило выбора»**
+    /// (<see cref="UpdateStageLines.IsDownload"/> отвечает не про те этапы).
     /// </summary>
     [Fact]
-    public void Этапы_без_процентов_не_говорят_про_размер_файла()
+    public void Этапы_без_объёма_не_говорят_про_размер_файла()
     {
-        var withoutPercent = new[]
+        var withoutVolume = new[]
         {
             UpdateStage.Verify, UpdateStage.Unpack, UpdateStage.Backup, UpdateStage.Script,
         };
 
-        var downloads = new[] { UpdateStage.Sums, UpdateStage.Archive, UpdateStage.Setup };
+        var downloads = new[] { UpdateStage.Sums, UpdateStage.Archive };
 
         Assert.Equal(
             Enum.GetValues<UpdateStage>().Length,
-            withoutPercent.Length + downloads.Length);
+            withoutVolume.Length + downloads.Length);
 
-        // У этапов без процентов — «этап: …» и НИ СЛОВА про размер.
-        foreach (var stage in withoutPercent)
+        // У этапов без объёма — «этап: …» и НИ СЛОВА про размер.
+        foreach (var stage in withoutVolume)
         {
-            var text = UpdateLines.ProgressLine(new UpdateProgress(stage, "update.cmd", 0, -1));
+            var text = UpdateLines.ProgressLine(new UpdateProgressView(stage, "update.cmd", 0, -1, 0, null));
 
             Assert.False(
-                UpdateStageLines.HasPercent(stage),
-                $"этап {stage}: процентов у него нет, а правило говорит, что есть");
+                UpdateStageLines.IsDownload(stage),
+                $"этап {stage}: объёма у него нет, а правило говорит, что есть");
             Assert.Contains(UpdateStageLines.Text(stage), text, StringComparison.Ordinal);
             Assert.StartsWith(
                 PanelStrings.UpdateProgressStageFormat.Split('{')[0].Trim(),
@@ -226,20 +302,20 @@ public class UpdateLinesTests
             Assert.DoesNotContain("размер файла", text, StringComparison.Ordinal);
         }
 
-        // У скачивания при неизвестном размере — прежняя честная фраза, и никакого «этап:».
+        // У скачивания при неизвестном размере — честная фраза, и никакого «этап:».
         foreach (var stage in downloads)
         {
-            var text = UpdateLines.ProgressLine(new UpdateProgress(stage, "DshPanel.zip", 0, -1));
+            var text = UpdateLines.ProgressLine(new UpdateProgressView(stage, "DshPanel.zip", 0, -1, 0, null));
 
             Assert.True(
-                UpdateStageLines.HasPercent(stage),
-                $"этап {stage}: он скачивание, а правило говорит, что процентов нет");
+                UpdateStageLines.IsDownload(stage),
+                $"этап {stage}: он скачивание, а правило говорит, что объёма нет");
             Assert.Contains("размер файла", text, StringComparison.Ordinal);
             Assert.DoesNotContain("этап:", text, StringComparison.Ordinal);
         }
 
         // И то самое имя из слова владельца: на «сценарии замены» слов про размер файла нет.
-        var script = UpdateLines.ProgressLine(new UpdateProgress(UpdateStage.Script, "update.cmd", 0, -1));
+        var script = UpdateLines.ProgressLine(new UpdateProgressView(UpdateStage.Script, "update.cmd", 0, -1, 0, null));
 
         Assert.Contains(UpdateStageLines.Text(UpdateStage.Script), script, StringComparison.Ordinal);
         Assert.DoesNotContain("размер файла", script, StringComparison.Ordinal);
