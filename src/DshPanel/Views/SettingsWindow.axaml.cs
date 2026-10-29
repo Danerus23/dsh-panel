@@ -960,148 +960,124 @@ public partial class SettingsWindow : Window, IQuietClose, IUpdateSectionWindow,
         return _saved;
     }
 
-    /// <summary>Что сейчас в полях — для проверок без экрана.</summary>
-    public PanelSettings PendingSettings() => new()
+    /// <summary>
+    /// ПОЛЯ, КОТОРЫЕ ОКНО НАСТРОЕК ДЕЙСТВИТЕЛЬНО БЕРЁТ ИЗ ФОРМЫ (DEF-065).
+    ///
+    /// **Зачем список.** <see cref="PendingSettings"/> начинает с ПОЛНОЙ копии текущих настроек
+    /// (<see cref="PanelSettings.Copy"/>) и перекрывает только эти поля. Тогда отметка первого
+    /// запуска (<c>WelcomeShownAt</c>) и любое будущее поле проходят через «Сохранить» нетронутыми,
+    /// а окно не считает правкой то, чего человек не менял. Список — единственное место, где
+    /// названо, что окно правит; сторож (`SettingsUnsavedTests.Общий_сторож_полей_окна`) сверяет
+    /// его с самими присваиваниями `pending.*` в этом файле, поэтому новое поле окна не может
+    /// появиться молча.
+    /// </summary>
+    public static readonly string[] EditedFields =
     {
-        ServerWorkingDir = WorkDirBox.Text ?? string.Empty,
+        nameof(PanelSettings.ServerWorkingDir),
+        nameof(PanelSettings.ServerPort),
+        nameof(PanelSettings.ServerPortChosen),
+        nameof(PanelSettings.Theme),
+        nameof(PanelSettings.Language),
+        nameof(PanelSettings.ActiveAgent),
+        nameof(PanelSettings.BalanceAutoRefresh),
+        nameof(PanelSettings.BalanceRefreshMinutes),
+        nameof(PanelSettings.BalanceWarnEnabled),
+        nameof(PanelSettings.BalanceWarnThreshold),
+        nameof(PanelSettings.PeakNotifyMinutes),
+        nameof(PanelSettings.BackupFolder),
+        nameof(PanelSettings.BackupScheduleEnabled),
+        nameof(PanelSettings.BackupEveryHours),
+        nameof(PanelSettings.BackupKeepCount),
+        nameof(PanelSettings.BackupWithKeys),
+        nameof(PanelSettings.BackupKeyDirs),
+        nameof(PanelSettings.PhoneEnabled),
+        nameof(PanelSettings.PhonePort),
+        nameof(PanelSettings.PhonePortChosen),
+    };
+
+    /// <summary>
+    /// ЧТО СЕЙЧАС В ПОЛЯХ — ДЛЯ ПРОВЕРОК БЕЗ ЭКРАНА.
+    ///
+    /// **Основа — ПОЛНАЯ КОПИЯ текущих настроек (DEF-065), а не новый объект по списку полей.**
+    /// От какого случая: `WelcomeShownAt` не попадал в `PendingSettings`, и окно, открытое после
+    /// окна первого запуска, при закрытии спрашивало «Настройки изменены. Сохранить их перед
+    /// закрытием?» у человека, который ничего не трогал; «Сохранить» стирало отметку — и окно
+    /// первого запуска возвращалось на следующем старте. Тем же промахом раньше терялись следы
+    /// проверки обновления (DEF-036) и прочитанные цены.
+    ///
+    /// Здесь перекрываются ТОЛЬКО поля из <see cref="EditedFields"/>; всё остальное — из копии,
+    /// включая поля ОКНА КОПИЙ (режим объёма, лишние имена), согласие на сервер, следы цен
+    /// и обновления, геометрию главного окна, телефонные следы и отметку первого запуска.
+    /// </summary>
+    public PanelSettings PendingSettings()
+    {
+        // КОПИЯ, А НЕ ПУСТОЙ ОБЪЕКТ: поле, которого окно не знает, обязано пережить «Сохранить».
+        var pending = _settings?.Settings.Copy() ?? new PanelSettings();
+
+        pending.ServerWorkingDir = WorkDirBox.Text ?? string.Empty;
 
         // Порт отдаётся уже приведённым: подсказка под полем обещает человеку, что будет взят
         // допустимый порт, и обещание обязано исполниться в том же нажатии, а не когда-нибудь
         // потом в хранилище.
-        ServerPort = PanelSettings.NormalizeServerPort(
-            (int)(PortBox.Value ?? ServerDecisions.DefaultServerPort)),
+        pending.ServerPort = PanelSettings.NormalizeServerPort(
+            (int)(PortBox.Value ?? ServerDecisions.DefaultServerPort));
 
         // ⚠️ ПРИЗНАК «порт выбран человеком» ставится ЗДЕСЬ — нажатием «Сохранить» и нигде больше.
         // Без него панель считала бы 3081 в файле остатком прежнего умолчания и переводила бы его
         // на 3080 при КАЖДОМ чтении, то есть переписывала бы выбор человека руками (решение
         // владельца 26.09.2026). Проверка — «Сохранение_из_окна_помечает_порт_выбранным».
-        ServerPortChosen = true,
-        Theme = PanelSettings.ThemeAt(ThemeBox.SelectedIndex),
+        pending.ServerPortChosen = true;
+        pending.Theme = PanelSettings.ThemeAt(ThemeBox.SelectedIndex);
 
         // Язык: значение уходит в файл настроек и применяется при СЛЕДУЮЩЕМ запуске панели —
         // так решено дирижёром, и об этом человеку сказано подписью под списком. Пересобирать
         // окна и меню на ходу — отдельная работа, и обещать её молчанием нельзя.
-        Language = PanelSettings.LanguageAt(LanguageBox.SelectedIndex),
-        ActiveAgent = AgentCatalog.IdAt(AgentBox.SelectedIndex),
-        BalanceAutoRefresh = BalanceAutoCheck.IsChecked == true,
-        BalanceRefreshMinutes = (int)(RefreshMinutesBox.Value ?? PanelSettings.RefreshMinutesMin),
-        BalanceWarnEnabled = BalanceWarnCheck.IsChecked == true,
-        BalanceWarnThreshold = ThresholdBox.Value ?? 0,
-        PeakNotifyMinutes = (int)(PeakNotifyBox.Value ?? 0),
+        pending.Language = PanelSettings.LanguageAt(LanguageBox.SelectedIndex);
+        pending.ActiveAgent = AgentCatalog.IdAt(AgentBox.SelectedIndex);
+        pending.BalanceAutoRefresh = BalanceAutoCheck.IsChecked == true;
+        pending.BalanceRefreshMinutes = (int)(RefreshMinutesBox.Value ?? PanelSettings.RefreshMinutesMin);
+        pending.BalanceWarnEnabled = BalanceWarnCheck.IsChecked == true;
+        pending.BalanceWarnThreshold = ThresholdBox.Value ?? 0;
+        pending.PeakNotifyMinutes = (int)(PeakNotifyBox.Value ?? 0);
 
         // Пустое поле означает «умолчание v1», и в файл уходит именно пустое: подставленное
         // значение перестало бы быть умолчанием, и вернуться к нему человек уже не смог бы.
-        BackupFolder = PanelSettings.NormalizeFolder(BackupFolderBox.Text),
+        pending.BackupFolder = PanelSettings.NormalizeFolder(BackupFolderBox.Text);
 
         // Расписание и хранение — поля ЭТОГО окна, поэтому берутся из полей и приводятся к границам
         // сразу: подсказка обещает человеку, что «100000 часов» станет неделей, и обещание обязано
         // исполниться в том же нажатии, а не когда-нибудь потом в хранилище (так же у порта).
-        BackupScheduleEnabled = BackupScheduleCheck.IsChecked == true,
-        BackupEveryHours = PanelSettings.ClampBackupHours((int)(BackupEveryBox.Value ?? 24)),
-        BackupKeepCount = PanelSettings.ClampBackupKeep((int)(BackupKeepBox.Value ?? 2)),
-
-        // ⚠️ Режим объёма и лишние имена — поля ОКНА КОПИЙ, и здесь они проходят НЕТРОНУТЫМИ.
-        // Окно настроек пишет файл целиком, и поле, которого оно не знает, обнулялось бы каждым
-        // нажатием «Сохранить»: человек выбрал «полный» в окне копий, зашёл в настройки, нажал
-        // «Сохранить» — и режим молча вернулся к автоматическому. Та же грабля, что с запомненным
-        // согласием на сервер (приёмка 26.09.2026); проверка — «Окно_настроек_не_забывает_режим_и_лишние_имена».
-        BackupScope = _settings?.Settings.BackupScope ?? BackupScopeDecisions.Auto,
-        BackupExtraExclusions = _settings?.Settings.BackupExtraExclusions ?? new List<string>(),
+        pending.BackupScheduleEnabled = BackupScheduleCheck.IsChecked == true;
+        pending.BackupEveryHours = PanelSettings.ClampBackupHours((int)(BackupEveryBox.Value ?? 24));
+        pending.BackupKeepCount = PanelSettings.ClampBackupKeep((int)(BackupKeepBox.Value ?? 2));
 
         // Ключи: разрешение и свои каталоги. Сюда же пишет и окно копий — через владельца
         // настроек, — поэтому файл остаётся единственным местом правды для обоих окон.
-        BackupWithKeys = BackupKeysCheck.IsChecked == true,
-        BackupKeyDirs = PanelSettings.NormalizeKeyDirs(Lines(BackupKeysDirsBox.Text)),
+        // ⚠️ Режим объёма и лишние имена — поля ОКНА КОПИЙ: они приходят из копии настроек
+        // нетронутыми (DEF-065), и перечислять их здесь не нужно.
+        pending.BackupWithKeys = BackupKeysCheck.IsChecked == true;
+        pending.BackupKeyDirs = PanelSettings.NormalizeKeyDirs(Lines(BackupKeysDirsBox.Text));
 
         // ⚠️ Мёртвое поле «копия для передачи» здесь НЕ читается и не пишется: передача — разовое
         // действие окна копий (п. 11 `docs\DESIGN.md`), и настройки о ней не знают. К `false` его
         // приводит общая дверь настроек (`SettingsStore.Clean`) — и при чтении, и при записи.
 
-        // Запомненное согласие на найденный сервер (решение владельца 26.09.2026) в окне НЕ
-        // ПОКАЗЫВАЕТСЯ — но обязано пройти через сохранение НЕТРОНУТЫМ: окно пишет настройки
-        // целиком, и поле, которого оно не знает, обнулялось бы каждым нажатием «Сохранить»,
-        // то есть человек молча терял бы своё «да» и панель начинала бы спрашивать заново.
-        // Нашла приёмка 26.09.2026; проверка — «Сохранение_из_окна_не_забывает_согласие».
-        AdoptedServerPort = _settings?.Settings.AdoptedServerPort ?? 0,
-
-        // След работы панели по странице цен (когда разбирали и какие окна оттуда взяли) проходит
-        // через сохранение НЕТРОНУТЫМ — по той же причине, что согласие на сервер: окно пишет
-        // настройки ЦЕЛИКОМ, и поле, которого оно не знает, обнулялось бы каждым нажатием
-        // «Сохранить». Тогда суточное правило разбора сбрасывалось бы, а расписание со страницы
-        // молча заменялось бы расписанием профиля. Проверка —
-        // «Сохранение_из_окна_не_забывает_след_разбора_цен».
-        PricingCheckedAt = _settings?.Settings.PricingCheckedAt ?? string.Empty,
-        PricingPeakWindows = _settings?.Settings.PricingPeakWindows ?? string.Empty,
-
-        // ⚠️ САМА ТАБЛИЦА ЦЕН — и это НЕ «на всякий случай», а закрытый дефект 29.09.2026.
-        // Её здесь не было, и одного пропуска хватило на ДВА разных отказа сразу:
-        //   * «Сохранить» в любом разделе настроек стирало прочитанные цены — панель снова
-        //     показывала пустое место («обновлял вчера, сегодня снова пусто»);
-        //   * окно считало цены НЕСОХРАНЁННОЙ ПРАВКОЙ (сравнение идёт по всем полям), поэтому
-        //     спрашивало «сохранить изменения?» у человека, который открыл настройки и не тронул
-        //     ничего, — а такой вопрос перестают читать, и однажды теряется настоящая правка.
-        // Проверка — «Сохранение_из_окна_не_забывает_прочитанные_цены» (падает на обоих отказах).
-        PricingLast = _settings?.Settings.PricingLast ?? string.Empty,
-
-        // Следы проверки обновления (когда проверяли, что нашлось, какие заметки) — по той же
-        // причине и тем же путём, что след разбора цен: окно пишет настройки ЦЕЛИКОМ, и поле,
-        // которого оно не знает, обнулялось бы каждым нажатием «Сохранить». Тогда суточное
-        // правило проверки сбросилось бы, шарик о той же версии показался бы снова, а заметки
-        // к выпуску пропали бы. ⚠️ Единственное из этих полей, которое человек меняет сам, —
-        // `updateSkippedVersion`; оно тоже проходит через окно нетронутым.
-        UpdateCheckedAt = _settings?.Settings.UpdateCheckedAt ?? string.Empty,
-        UpdateLatest = _settings?.Settings.UpdateLatest ?? string.Empty,
-        UpdatePublished = _settings?.Settings.UpdatePublished ?? string.Empty,
-        UpdatePageUrl = _settings?.Settings.UpdatePageUrl ?? string.Empty,
-        UpdateNotes = _settings?.Settings.UpdateNotes ?? string.Empty,
-        UpdateNotesRaw = _settings?.Settings.UpdateNotesRaw ?? string.Empty,
-        UpdateSkippedVersion = _settings?.Settings.UpdateSkippedVersion ?? string.Empty,
-
-        // ⚠️ СЛЕД ПОПЫТКИ ПРОВЕРКИ — тоже через окно и НЕТРОНУТЫМ (DEF-036, 2.4.0).
-        // Без этих трёх полей сравнение «есть ли несохранённая правка» видело разницу
-        // ПОСЛЕ ОДНОЙ ПРОВЕРКИ ОБНОВЛЕНИЯ: проверка пишет след в настройки, окно о нём
-        // не знает и подставляет пусто — и человек получал вопрос «сохранить изменения?»,
-        // не тронув ни одного поля. Такой вопрос перестают читать, и однажды теряется
-        // настоящая правка. Проверка — «Проверили_обновление_закрытие_не_спрашивает».
-        UpdateAttemptAt = _settings?.Settings.UpdateAttemptAt ?? string.Empty,
-        UpdateAttemptKind = _settings?.Settings.UpdateAttemptKind ?? string.Empty,
-        UpdateAttemptError = _settings?.Settings.UpdateAttemptError ?? string.Empty,
-
-        // Размер и положение ГЛАВНОГО окна в этом окне не показываются — но обязаны пройти
-        // через сохранение НЕТРОНУТЫМИ, по той же причине: окно пишет настройки целиком,
-        // и обнулять геометрию каждым «Сохранить» значило бы молча терять её.
-        // Проверка — «Сохранение_из_окна_не_забывает_размер_и_положение_окна».
-        WindowX = _settings?.Settings.WindowX ?? 0,
-        WindowY = _settings?.Settings.WindowY ?? 0,
-        WindowWidth = _settings?.Settings.WindowWidth ?? 0,
-        WindowHeight = _settings?.Settings.WindowHeight ?? 0,
-
-        // ТЕЛЕФОН (этап F) в этом окне ещё НЕ ПОКАЗЫВАЕТСЯ — раздел «Телефон» отдельный шаг, —
-        // но поля обязаны пройти через сохранение НЕТРОНУТЫМИ: окно пишет настройки ЦЕЛИКОМ,
-        // и поле, которого оно не знает, обнулялось бы каждым нажатием «Сохранить». Тогда человек,
-        // тронувший любую настройку, молча терял бы и разрешение на телефон, и запомненный адрес,
-        // и время согласия — то есть калитка закрывалась бы случайным щелчком в другом разделе.
-        // ТЕЛЕФОН (этап F1.d). Здесь поля показываются, и через «Сохранить» проходят НЕТРОНУТЫМИ —
+        // ТЕЛЕФОН (этап F1.d). Здесь поля показываются, и через «Сохранить» проходят НЕТРОНУТЫМИ
         // те, которых окно не меняет вовсе: след адреса, «когда видели» и «когда разрешили».
         // ⚠️ Рубильник и порт — поля ЭТОГО окна, и они читаются из формы: рубильник пишется сразу
         // по щелчку (он исполняет согласие человека), а порт — по кнопке «Сохранить», как у сервера.
-        // Обнулять же здесь следы значило бы, что человек, тронувший любую настройку, молча теряет
-        // и запомненный адрес, и время согласия — то есть калитка закрывалась бы щелчком в другом
-        // разделе. Проверка — «Сохранение_из_окна_не_теряет_телефонные_поля».
-        PhoneEnabled = PhoneAllowedCheck.IsChecked == true,
-        PhonePort = PanelSettings.NormalizePhonePort((int)(PhonePortBox.Value ?? Server.PhonePass.DefaultPort)),
+        pending.PhoneEnabled = PhoneAllowedCheck.IsChecked == true;
+        pending.PhonePort = PanelSettings.NormalizePhonePort((int)(PhonePortBox.Value ?? Server.PhonePass.DefaultPort));
 
         // ⚠️ ПРИЗНАК «порт выбирал человек» ставится ТОЛЬКО когда человек его действительно
         // тронул, — как у порта сервера, где признак ставит кнопка «Сохранить». Разница в том,
         // что порт сервера человек видит всегда, а порт телефона — тоже всегда; но окно пишет
         // файл ЦЕЛИКОМ, и безусловное «выбрал» стирало бы разницу между «в файле умолчание»
         // и «человек выбрал это число», ради которой признак и заведён.
-        PhonePortChosen = _phonePortTouched || (_settings?.Settings.PhonePortChosen ?? false),
-        PhoneLastAddress = _settings?.Settings.PhoneLastAddress ?? string.Empty,
-        PhoneChosenAddress = _settings?.Settings.PhoneChosenAddress ?? string.Empty,
-        PhoneLastSeen = _settings?.Settings.PhoneLastSeen ?? string.Empty,
-        PhoneConsentAt = _settings?.Settings.PhoneConsentAt ?? string.Empty,
-    };
+        pending.PhonePortChosen = _phonePortTouched || pending.PhonePortChosen;
+
+        return pending;
+    }
 
     /// <summary>Строки поля — по одному пути в строке. Пустые и повторы отсеивает NormalizeKeyDirs.</summary>
     private static IEnumerable<string> Lines(string? text) =>

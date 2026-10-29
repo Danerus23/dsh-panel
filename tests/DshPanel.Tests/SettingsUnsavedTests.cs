@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -51,11 +52,19 @@ public class SettingsUnsavedTests
     private static void RemoveTemp(string dir) => TempRoots.Remove(dir);
 
     /// <summary>Окно настроек с НАСТОЯЩИМ контроллером под своим временным корнем.</summary>
-    private static (SettingsWindow Window, SettingsStore Store, string Dir) Stand(bool allowed = true)
+    private static (SettingsWindow Window, SettingsStore Store, string Dir) Stand(
+        bool allowed = true, Action<PanelSettings>? seed = null)
     {
         var dir = TempDir();
         var paths = AppPaths.Under(dir);
         var store = new SettingsStore(paths.SettingsFile);
+
+        if (seed is not null)
+        {
+            var seeded = PanelSettings.Default;
+            seed(seeded);
+            Assert.True(store.Save(seeded));
+        }
 
         var controller = new SettingsController(
             store, paths, allowed: allowed, canReadOwnerEnvironment: false,
@@ -348,4 +357,225 @@ public class SettingsUnsavedTests
             RemoveTemp(dir);
         }
     }
+
+    // ------------------------------------------------------------------ DEF-065: отметка первого запуска
+
+    /// <summary>Отметка показа окна первого запуска — тем же форматом, каким её пишет App.</summary>
+    private static string WelcomeStamp() =>
+        FirstRunDecisions.Stamp(new DateTimeOffset(2026, 10, 25, 21, 48, 0, TimeSpan.Zero));
+
+    /// <summary>
+    /// ОТКРЫТЬ НАСТРОЙКИ ПОСЛЕ ОКНА ПЕРВОГО ЗАПУСКА И ЗАКРЫТЬ — ВОПРОСА НЕТ (DEF-065).
+    ///
+    /// **От какого случая.** `PendingSettings` собирался `new PanelSettings { … }` и не переносил
+    /// `WelcomeShownAt`; сравнение всех полей видело разницу и спрашивало «Настройки изменены.
+    /// Сохранить их перед закрытием?» у человека, который ничего не трогал (снимок владельца
+    /// 25.10.2026). Такой вопрос перестают читать, и однажды теряется настоящая правка.
+    ///
+    /// **Мутация, которая обязана упасть:** M4 «убрать `WelcomeShownAt`» — `pending.WelcomeShownAt =
+    /// string.Empty` в `PendingSettings`.
+    /// </summary>
+    [AvaloniaFact]
+    public void После_первого_запуска_закрытие_настроек_не_спрашивает()
+    {
+        var stamp = WelcomeStamp();
+        var (window, store, dir) = Stand(seed: settings => settings.WelcomeShownAt = stamp);
+
+        try
+        {
+            var asked = 0;
+            window.UnsavedChoiceForTests = () => { asked++; return UnsavedChoice.Cancel; };
+
+            window.Show();
+            Settle();
+
+            // Состояние то самое, в котором дефект и был возможен: отметка лежит в настройках.
+            Assert.Equal(stamp, store.Load().Settings.WelcomeShownAt);
+            Assert.False(window.HasUnsavedChanges(), "окно считает правкой отметку, которую не показывало");
+
+            window.Close();
+            Settle();
+
+            Assert.Equal(0, asked);
+            Assert.False(window.IsVisible);
+        }
+        finally
+        {
+            RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// «СОХРАНИТЬ» В НАСТРОЙКАХ НЕ СТИРАЕТ ОТМЕТКУ ПЕРВОГО ЗАПУСКА (DEF-065): сохранение пишет
+    /// файл ЦЕЛИКОМ, и поле, которого окно не знает, обязано пройти нетронутым — иначе окно первого
+    /// запуска возвращается на следующем старте.
+    ///
+    /// **Мутация, которая обязана упасть:** M4 (та же) — отметить поле пустым в `PendingSettings`.
+    /// </summary>
+    [AvaloniaFact]
+    public void Сохранить_не_стирает_отметку_первого_запуска()
+    {
+        var stamp = WelcomeStamp();
+        var (window, store, dir) = Stand(seed: settings => settings.WelcomeShownAt = stamp);
+
+        try
+        {
+            window.UnsavedChoiceForTests = () => UnsavedChoice.Save;
+
+            window.Show();
+            Settle();
+
+            // Настоящая правка человека — чтобы сохранение вообще случилось.
+            window.FindControl<TextBox>("WorkDirBox")!.Text = @"D:\Новая папка";
+            window.Close();
+            Settle();
+
+            Assert.True(window.Saved);
+
+            var reread = store.Load();
+
+            Assert.True(reread.Ok, reread.Problem);
+            Assert.Equal(stamp, reread.Settings.WelcomeShownAt);
+            Assert.Equal(@"D:\Новая папка", reread.Settings.ServerWorkingDir);
+        }
+        finally
+        {
+            RemoveTemp(dir);
+        }
+    }
+
+    /// <summary>
+    /// ИЗМЕНЕНИЕ САМОЙ ОТМЕТКИ — ПРАВКА, и сравнение обязано её видеть: иначе «сравнивать только
+    /// поля окна» прошло бы незамеченным, а отметка однажды снова выпала бы из-под стражи.
+    ///
+    /// **Мутация, которая обязана упасть:** «сравнивать по полям окна» — `HasUnsavedChanges`
+    /// перебирает только <c>SettingsWindow.EditedFields</c>.
+    /// </summary>
+    [Fact]
+    public void Изменение_отметки_первого_запуска_видно_как_правка()
+    {
+        var current = PanelSettings.Default;
+        var pending = current.Copy();
+
+        pending.WelcomeShownAt = WelcomeStamp();
+
+        Assert.True(SettingsCloseDecisions.HasUnsavedChanges(pending, current));
+        Assert.Contains(
+            nameof(PanelSettings.WelcomeShownAt),
+            SettingsCloseDecisions.ComparedFields(),
+            StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// КОПИЯ НАСТРОЕК СОХРАНЯЕТ КАЖДОЕ ПОЛЕ, ВКЛЮЧАЯ БУДУЩИЕ (DEF-065) — иначе окно снова начнёт
+    /// терять то, чего не показывает.
+    ///
+    /// Проверка перебирает поля ОТРАЖЕНИЕМ и заполняет каждое отличным от умолчания значением:
+    /// значение сверяется у копии, а ссылочные (списки) обязаны быть РАЗНЫМИ объектами, иначе
+    /// правка в окне меняла бы сами настройки. Новое поле неизвестного типа уронит проверку
+    /// с явным сообщением, а не выпадет молча.
+    /// </summary>
+    [Fact]
+    public void Копия_настроек_сохраняет_все_поля()
+    {
+        var all = typeof(PanelSettings)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property => property.CanRead && property.CanWrite && property.GetIndexParameters().Length == 0)
+            .ToArray();
+
+        Assert.True(all.Length > 20, $"полей настроек: {all.Length} — отражение вернуло не тот тип");
+
+        var original = new PanelSettings();
+
+        foreach (var property in all) property.SetValue(original, Marker(property.PropertyType));
+
+        var copy = original.Copy();
+
+        foreach (var property in all)
+        {
+            var before = property.GetValue(original);
+            var after = property.GetValue(copy);
+
+            if (before is IEnumerable<string> left && after is IEnumerable<string> right)
+            {
+                Assert.Equal(left, right);
+            }
+            else
+            {
+                Assert.Equal(before, after);
+            }
+
+            // Списки и прочие ссылочные поля — отдельными объектами: копия не делит ссылку с текущими.
+            if (property.PropertyType != typeof(string) && !property.PropertyType.IsValueType)
+            {
+                Assert.NotSame(before, after);
+            }
+        }
+    }
+
+    /// <summary>
+    /// ОБЩИЙ СТОРОЖ ПОЛЕЙ (DEF-065): каждое поле `PanelSettings` либо приходит из ПОЛНОЙ КОПИИ,
+    /// либо названо в <see cref="SettingsWindow.EditedFields"/> — списка «по одному полю» нет.
+    ///
+    /// **Как доказывается.** `PendingSettings` обязан начинаться с `_settings.Settings.Copy()`,
+    /// а каждое присваивание `pending.<Поле>` — быть названо в списке. Поэтому новое поле окна
+    /// нельзя добавить молча, а новое поле настроек не нужно вписывать руками: его копирует
+    /// <see cref="PanelSettings.Copy"/> (это стережёт проверка выше).
+    ///
+    /// **Мутации, которые обязаны упасть:** M4 «убрать `WelcomeShownAt`» (присваивание поля вне
+    /// списка) · «перечислять поля окна по одному, без копии» (нет `Copy()`).
+    /// </summary>
+    [Fact]
+    public void Общий_сторож_полей_окна()
+    {
+        var all = typeof(PanelSettings)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property => property.CanRead && property.GetIndexParameters().Length == 0)
+            .Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        var edited = SettingsWindow.EditedFields;
+
+        Assert.Equal(edited.Length, edited.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(edited, name => Assert.Contains(name, all, StringComparer.Ordinal));
+        Assert.True(edited.Length < all.Length, "окно не может править все поля: остальные обязаны проходить копией");
+
+        var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
+
+        Assert.False(string.IsNullOrEmpty(root), "не нашёл корень репозитория");
+
+        var source = File.ReadAllText(Path.Combine(root!, "src", "DshPanel", "Views", "SettingsWindow.axaml.cs"));
+
+        var start = source.IndexOf("public PanelSettings PendingSettings()", StringComparison.Ordinal);
+        Assert.True(start > 0, "в SettingsWindow нет PendingSettings");
+
+        var end = source.IndexOf("/// <summary>Строки поля", start, StringComparison.Ordinal);
+        Assert.True(end > start, "не нашёл конец PendingSettings");
+
+        var body = source[start..end];
+
+        Assert.Contains("_settings?.Settings.Copy()", body, StringComparison.Ordinal);
+
+        var assigned = Regex.Matches(body, @"pending\.([A-Za-z]+)\s*=")
+            .Select(match => match.Groups[1].Value)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(edited.OrderBy(name => name, StringComparer.Ordinal).ToArray(), assigned);
+    }
+
+    /// <summary>Отличное от умолчания значение каждого типа поля — и явный отказ на незнакомый тип.</summary>
+    private static object? Marker(Type type) => type switch
+    {
+        _ when type == typeof(string) => "маркер-проверки",
+        _ when type == typeof(int) => 424242,
+        _ when type == typeof(bool) => true,
+        _ when type == typeof(decimal) => 12.5m,
+        _ when type == typeof(List<string>) => new List<string> { "маркер-проверки" },
+        _ => throw new InvalidOperationException(
+            $"новое поле настроек типа {type.Name}: проверка не знает, чем его заполнить, — " +
+            "допиши значение, иначе поле однажды выпадет из копии молча"),
+    };
 }

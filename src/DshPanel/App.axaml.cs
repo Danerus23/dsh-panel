@@ -1017,11 +1017,20 @@ public partial class App : Application
         var shownAt = _settings?.Settings.WelcomeShownAt ?? string.Empty;
         var door = new FirstRunFactsDoor(() => FirstRunFactsNow(paths));
 
-        if (!FirstRunDecisions.ShouldShow(human, isolated, shownAt, FirstRunDecisions.Rows(door.Read())))
-            return false;
+        // ОДИН СНИМОК ФАКТОВ — И НА РЕШЕНИЕ, И НА ПОКАЗ (DEF-064). Прежде дверь читалась дважды
+        // (решением и окном), и второе чтение приходило уже с другим ответом: окно открывалось
+        // по непустому списку, а рисовалось пустым, оставляя в журнале «показано: » без слов.
+        var decision = FirstRunDecisions.Decide(human, isolated, shownAt, door);
+
+        if (!decision.Show) return false;
 
         var window = new FirstRunWindow();
-        window.Attach(door);
+
+        // ОКНО ПОЛУЧАЕТ ТОТ ЖЕ СНИМОК и подписку на состояние сервера (DEF-064): пока идёт старт —
+        // оно молчит, сервер ответил — закрывается само, настоящая неудача — перерисовывается.
+        // Пустой снимок окно не показывает: строк нет — говорить нечего, и пустой строки журнала
+        // «окно первого запуска показано: » больше не бывает.
+        if (!window.Attach(door, decision.Facts, _server)) return false;
 
         // ДВЕРИ ОКНА — существующие: раздел «Обновление» у уже открытого окна настроек
         // (`PanelShell.OpenUpdateSection` — второго окна настроек не бывает) и окно панели.
@@ -1061,29 +1070,20 @@ public partial class App : Application
     {
         var enginePresent = OwnEngine.Locate(paths) is not null;
 
-        // ИДЁТ ПОПЫТКА СТАРТА — ОТДЕЛЬНЫЙ ФАКТ (DEF-054, 2.4.0). Спрашивается ПЕРВЫМ и без замка
-        // контроллера: замок держит сам старт (до 240 с), и `Refresh` на нитке интерфейса замер бы
-        // её на всё время подъёма. Пока попытка идёт, причина не называется: «не поднялся» —
-        // неверное слово для «поднимается» (журнал 23.10.2026 10:07:42: обе строки в одну секунду).
-        var starting = _server?.Starting == true;
-
+        // ФАКТЫ О СЕРВЕРЕ — ОДНИМ СНИМКОМ И В ПРАВИЛЬНОМ ПОРЯДКЕ (DEF-064): сперва `TryRefresh`
+        // (он выставляет «процесс поднят, но ещё не ответил»), и только потом `Starting`.
+        // Наоборот — и решение получало устаревшее «не поднялся», пока сервер поднимался;
+        // порядок назван в `FirstRunDecisions.ServerSnapshot` и проверяется подставным сервером.
+        //
         // Состояние читается БЕЗ ОЖИДАНИЯ ЗАМКА: занят — значит прямо сейчас идёт работа
         // (старт, гашение), и это тот же факт «в движении», а не «не поднялся».
-        var state = ServerState.Stopped(0);
-
-        if (_server is not null && _server.TryRefresh(out var fresh))
-        {
-            state = fresh;
-        }
-        else if (_server is not null)
-        {
-            starting = true;
-        }
+        var snapshot = FirstRunDecisions.ServerSnapshot(_server);
 
         // Причина считается ЧИСТЫМ решением: «не отвечает прямо сейчас» причиной не является,
         // и окно не имеет права выдать одно за другое.
         var problem = FirstRunDecisions.Reason(
-            enginePresent, state.IsRunning, starting, state.Presence, _server?.Owner ?? ServerOwner.None, state.Detail);
+            enginePresent, snapshot.State.IsRunning, snapshot.Starting,
+            snapshot.State.Presence, _server?.Owner ?? ServerOwner.None, snapshot.State.Detail);
 
         var agent = Agents.AgentCatalog.Find(_settings?.Settings.ActiveAgent ?? string.Empty);
 

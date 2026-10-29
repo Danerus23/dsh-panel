@@ -314,10 +314,15 @@ public sealed class PhoneGateTests
         await stream.WriteAsync(bytes);
         await stream.FlushAsync();
 
+        return await ReadHead(stream);
+    }
+
+    /// <summary>Голова ответа целиком: читаем до пустой строки (тело для головы не нужно).</summary>
+    private static async Task<string> ReadHead(NetworkStream stream)
+    {
         var buffer = new byte[4096];
         var text = new StringBuilder();
 
-        // Читаем до конца заголовков ответа: тело (страница входа) для головы не нужно.
         while (text.Length < 262144)
         {
             var read = await stream.ReadAsync(buffer);
@@ -329,6 +334,49 @@ public sealed class PhoneGateTests
         }
 
         return text.ToString();
+    }
+
+    /// <summary>
+    /// ПОСЛАТЬ БАЙТЫ, КОТОРЫЕ HTTP-ЗАПРОСОМ НЕ ЯВЛЯЮТСЯ, и дождаться, чем кончится соединение:
+    /// сколько байт калитка прислала в ответ и через сколько закрыла. Обрыв (`RST`) — тоже
+    /// закрытие: байт в ответ всё равно ноль, и это тот же счёт.
+    /// </summary>
+    private static async Task<(int Bytes, TimeSpan Elapsed)> NonHttpAnswer(Stand stand, byte[] bytes)
+    {
+        using var client = new TcpClient();
+
+        await client.ConnectAsync(IPAddress.Loopback, stand.Port);
+
+        using var stream = client.GetStream();
+        stream.ReadTimeout = 20000;
+        stream.WriteTimeout = 20000;
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        await stream.WriteAsync(bytes);
+        await stream.FlushAsync();
+
+        var buffer = new byte[4096];
+        var received = 0;
+
+        try
+        {
+            while (true)
+            {
+                var read = await stream.ReadAsync(buffer);
+                if (read <= 0) break;
+
+                received += read;
+            }
+        }
+        catch (IOException)
+        {
+            // RST — закрытие, а не ответ: байт в ответ всё равно ноль.
+        }
+
+        clock.Stop();
+
+        return (received, clock.Elapsed);
     }
 
     /// <summary>Код ответа из первой строки головы (<c>0</c> — ответа не было вовсе).</summary>
@@ -1261,6 +1309,109 @@ public sealed class PhoneGateTests
 
         Assert.False(string.IsNullOrWhiteSpace(get.Body));
         Assert.False(string.IsNullOrWhiteSpace(post.Body));
+    }
+
+    // ---- чтение запроса: что считается запросом (DEF-062) ------------------------------------
+
+    /// <summary>
+    /// TLS CLIENTHELLO — НЕ ЗАПРОС: калитка закрывает соединение СРАЗУ и НИЧЕГО не пишет.
+    ///
+    /// ⚠️ **Числа этого дефекта.** Первый вход на страницу телефона занимал **15 068 мс**: браузер
+    /// пробует HTTPS и первым шлёт TLS ClientHello (`0x16 0x03…`), а калитка держала его до
+    /// <see cref="PhoneGate.RequestTimeout"/> (15 с). Здесь проверяются ОБА числа сразу: **0 байт**
+    /// ответа и закрытие **≤100 мс** — предел выбран так, чтобы отличать «сразу» от «по сроку»,
+    /// а не мерить скорость машины.
+    /// </summary>
+    [Fact]
+    public async Task TLS_соединение_закрывается_сразу_и_молча()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        // Настоящая голова TLS ClientHello: 0x16 — handshake, 0x03 0x01 — запись TLS 1.0,
+        // дальше длина и тело рукопожатия. Содержимое не важно: важно, что это НЕ HTTP-метод.
+        var hello = new byte[]
+        {
+            0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xFC, 0x03, 0x03, 0x9A, 0x1B,
+        };
+
+        // Прогрев: первое соединение после старта платит за JIT — мерить надо дорогу, а не её
+        // первый шаг. Мусор, который HTTP-методом не является ни одним байтом.
+        var warm = await NonHttpAnswer(stand, new byte[] { 0x01, 0x02, 0x03 });
+        Assert.Equal(0, warm.Bytes);
+
+        var best = TimeSpan.MaxValue;
+
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var answer = await NonHttpAnswer(stand, hello);
+
+            // Байты проверяются на КАЖДОЙ попытке: «0 байт» — не среднее, а условие каждого входа.
+            Assert.Equal(0, answer.Bytes);
+
+            if (answer.Elapsed < best) best = answer.Elapsed;
+        }
+
+        Assert.True(
+            best < TimeSpan.FromMilliseconds(100),
+            $"TLS-соединение закрывалось за {best.TotalMilliseconds:F1} мс (предел 100 мс): калитка снова ждёт RequestTimeout");
+    }
+
+    /// <summary>
+    /// GET / ЧЕРЕЗ КАЛИТКУ — ПРЕЖНИЙ ОТВЕТ: <c>200</c> и страница входа ТОЙ ЖЕ ДЛИНЫ. Число
+    /// закреплено намеренно: правка «закрывать любое соединение после первого чтения» (M-D2)
+    /// оставила бы TLS-проверку зелёной, а телефон — без страницы; длина ловит это раньше глаз.
+    /// </summary>
+    [Fact]
+    public async Task GET_через_калитку_отдаёт_страницу_входа_прежней_длины()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        var reply = await Send(stand.Http, HttpMethod.Get, "/");
+
+        Assert.Equal(200, reply.Status);
+        Assert.Contains("id=\"code\"", reply.Body, StringComparison.Ordinal);
+
+        // 3 908 знаков — страница входа по-русски на ревизии этой правки; столько же она отдавала
+        // ДО неё. Число — не «красивое», а СНЯТОЕ: правка чтения обязана ответ не менять.
+        Assert.Equal(3908, reply.Body.Length);
+    }
+
+    /// <summary>
+    /// РАЗРЕЗАННЫЙ ПО TCP ЗАПРОС ПРИНИМАЕТСЯ: «GE», пауза, «T / HTTP/1.1…». Решать по первому
+    /// куску нельзя — иначе телефон, чей запрос лёг в два сегмента, получал бы закрытие вместо
+    /// страницы. Пауза здесь обязательна: она гарантирует, что калитка получила «GE» ОТДЕЛЬНЫМ
+    /// чтением, а не сросшийся запрос.
+    /// </summary>
+    [Fact]
+    public async Task Разрезанный_по_TCP_запрос_принимается()
+    {
+        using var stand = NewStand();
+        Assert.True(Started(stand));
+
+        var token = TestContext.Current.CancellationToken;
+
+        using var client = new TcpClient();
+
+        await client.ConnectAsync(IPAddress.Loopback, stand.Port, token);
+
+        using var stream = client.GetStream();
+        stream.ReadTimeout = 20000;
+        stream.WriteTimeout = 20000;
+
+        await stream.WriteAsync(Encoding.ASCII.GetBytes("GE"), token);
+        await stream.FlushAsync(token);
+
+        await Task.Delay(300, token);
+
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(
+            "T / HTTP/1.1\r\nHost: 127.0.0.1:" + stand.Port + "\r\n\r\n"), token);
+        await stream.FlushAsync(token);
+
+        var head = await ReadHead(stream);
+
+        Assert.Equal(200, StatusOf(head));
     }
 
     // ---- заголовки безопасности ответов (B-10) ----------------------------------------------

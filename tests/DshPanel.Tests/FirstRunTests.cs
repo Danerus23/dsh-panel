@@ -500,22 +500,25 @@ public class FirstRunTests
     }
 
     /// <summary>
-    /// ПРОВЕРКА ГОТОВНОСТИ СПРАШИВАЕТ КОНТРОЛЛЕР ОБ ИДУЩЕМ СТАРТЕ (DEF-054, 2.4.0) — ВОРОТА
-    /// ПО ИСХОДНИКАМ, потому что App в проверке не построить.
+    /// ПРОВЕРКА ГОТОВНОСТИ СПРАШИВАЕТ КОНТРОЛЛЕР ОБ ИДУЩЕМ СТАРТЕ (DEF-054, 2.4.0; DEF-064) —
+    /// ВОРОТА ПО ИСХОДНИКАМ, потому что App в проверке не построить.
     ///
     /// **Почему одних решений мало.** `FirstRunDecisions.Reason` может быть идеально правильным,
     /// а факт «старт идёт» — не дойти до неё: тогда на старте ПК окно снова скажет «не поднялся».
     /// Это тот же класс, что и ворота выше («решение можно не позвать»).
     ///
-    /// **Что проверяется пятью строками:**
-    /// 1. у контроллера есть сам факт (`Starting`), и он читается без замка старта;
-    /// 2. проба первого запуска его спрашивает;
-    /// 3. состояние читается без ожидания замка (`TryRefresh`);
-    /// 4. факт доходит до решения;
-    /// 5. после попытки проверка спрашивается снова.
+    /// **Что проверяется:**
+    /// 1. у двери сервера есть сам факт (`Starting`) и чтение без ожидания замка (`TryRefresh`);
+    /// 2. «процесс жив, но не ответил» ставится там, где контроллер сам говорит «ещё стартует»;
+    /// 3. проба первого запуска берёт ОДИН снимок (`FirstRunDecisions.ServerSnapshot`), а не
+    ///    читает два поля по отдельности;
+    /// 4. в самом снимке `Starting` стоит ПОСЛЕ `TryRefresh` (DEF-064: наоборот — и решение
+    ///    получает устаревшее «не поднялся», пока сервер поднимается);
+    /// 5. факт доходит до решения;
+    /// 6. после попытки проверка спрашивается снова.
     ///
     /// **Мутации, которые обязаны упасть:** «не спрашивать Starting» · «спросить и не передать» ·
-    /// «после попытки не переспрашивать».
+    /// «прочитать Starting до TryRefresh» (M1) · «после попытки не переспрашивать».
     /// </summary>
     [Fact]
     public void Проверка_готовности_спрашивает_контроллер_об_идущем_старте()
@@ -526,26 +529,313 @@ public class FirstRunTests
 
         var app = File.ReadAllText(Path.Combine(root!, "src", "DshPanel", "App.axaml.cs"));
         var controller = File.ReadAllText(Path.Combine(root!, "src", "DshPanel", "Server", "ServerController.cs"));
+        var decisions = File.ReadAllText(Path.Combine(root!, "src", "DshPanel", "Shell", "FirstRunDecisions.cs"));
 
-        // 1. Факт существует и назван словами «идёт попытка старта».
+        // 1. Факт существует в ДВЕРИ (проверке первого запуска он нужен тем же правом, что и окну)
+        // и назван словами «идёт попытка старта» у контроллера.
+        Assert.Contains("bool Starting => false;", controller, StringComparison.Ordinal);
         Assert.Contains("public bool Starting => _startAttempt || _engineStillStarting;", controller, StringComparison.Ordinal);
+        Assert.Contains("bool TryRefresh(out ServerState state)", controller, StringComparison.Ordinal);
 
         // 1а. И «процесс жив, но не ответил» ставится ТАМ, где контроллер сам говорит «ещё стартует»
         // (`WaitUntilRunning`): без этой строки `Starting` после конца ожидания станет ложью.
         Assert.Contains("_engineStillStarting = true;", controller, StringComparison.Ordinal);
 
-        // 2. Проба первого запуска его спрашивает.
-        Assert.Contains("var starting = _server?.Starting == true;", app, StringComparison.Ordinal);
+        // 2. Проба первого запуска берёт ОДИН снимок фактов о сервере.
+        Assert.Contains("var snapshot = FirstRunDecisions.ServerSnapshot(_server);", app, StringComparison.Ordinal);
 
-        // 3. И состояние читается БЕЗ ОЖИДАНИЯ ЗАМКА старта: `Refresh` на нитке интерфейса
-        // замер бы панель на всё время подъёма. Занятый замок — тоже «в движении», а не «не поднялся».
-        Assert.Contains("_server.TryRefresh(out var fresh)", app, StringComparison.Ordinal);
+        // 3. В снимке состояние читается ПЕРВЫМ, а «идёт попытка» — ПОСЛЕ обновления (DEF-064).
+        var refresh = decisions.IndexOf("server.TryRefresh(out var fresh)", StringComparison.Ordinal);
+        var starting = decisions.IndexOf("server?.Starting == true", StringComparison.Ordinal);
+
+        Assert.True(refresh > 0, "в FirstRunDecisions нет чтения состояния без замка (`TryRefresh`)");
+        Assert.True(
+            starting > refresh,
+            "`Starting` читается ДО `TryRefresh`: решение получит устаревшее «не поднялся» (DEF-064)");
 
         // 4. И факт доходит до чистого решения.
-        Assert.Contains("enginePresent, state.IsRunning, starting,", app, StringComparison.Ordinal);
+        Assert.Contains("enginePresent, snapshot.State.IsRunning, snapshot.Starting,", app, StringComparison.Ordinal);
 
         // 5. ПОСЛЕ ПОПЫТКИ проверка спрашивается СНОВА: иначе настоящую неудачу этого запуска
         // человек не увидит — окно показывается один раз, и второго случая не будет.
         Assert.Contains("ShowFirstRunAfterStart(autoStart, paths, log, human, isolated)", app, StringComparison.Ordinal);
+    }
+
+    // --- DEF-064: один снимок, правильный порядок и сторож состояния -------------
+
+    /// <summary>
+    /// `STARTING` ЧИТАЕТСЯ ПОСЛЕ ОБНОВЛЕНИЯ СОСТОЯНИЯ (DEF-064) — иначе решение видит устаревшее
+    /// «наш процесс умер» и зовёт окно о сервере, который ещё поднимается.
+    ///
+    /// **Как устроено доказательство.** Подставной сервер выставляет «идёт попытка» САМИМ
+    /// обновлением (`TryRefresh`) — ровно как настоящий контроллер выставляет `_engineStillStarting`.
+    /// Если снимок прочитал `Starting` раньше, попытки он не видит, и причина становится
+    /// `ExitedSilent` — то есть тот самый ложный «не поднялся» из журнала 25.10.2026.
+    ///
+    /// **Мутация, которая обязана упасть:** M1 «прочитать `Starting` до `TryRefresh`».
+    /// </summary>
+    [Fact]
+    public void Медленный_старт_читается_после_обновления_состояния()
+    {
+        var server = new SlowStartServer();
+
+        var snapshot = FirstRunDecisions.ServerSnapshot(server);
+
+        Assert.True(
+            snapshot.Starting,
+            "`Starting` прочитан ДО `TryRefresh` — попытка старта не видна (DEF-064)");
+
+        var problem = FirstRunDecisions.Reason(
+            enginePresent: true,
+            running: snapshot.State.IsRunning,
+            starting: snapshot.Starting,
+            snapshot.State.Presence,
+            server.Owner,
+            snapshot.State.Detail);
+
+        Assert.Null(problem);
+        Assert.Empty(FirstRunDecisions.Rows(
+            new FirstRunFacts(true, problem, KeyFound: true, KeyReadable: true)));
+    }
+
+    /// <summary>
+    /// ФАКТЫ ЧИТАЮТСЯ РОВНО ОДИН РАЗ, И ЭТОТ ЖЕ СНИМОК УХОДИТ ОКНУ (DEF-064).
+    ///
+    /// **От какого случая.** Решение брало одно чтение, окно — второе; между ними `TryRefresh`
+    /// переставлял факты, окно открывалось по непустому списку и рисовалось пустым, а в журнал
+    /// уходила строка «окно первого запуска показано: » без слов.
+    ///
+    /// **Мутация, которая обязана упасть:** M2 «открывать окно по второму чтению» — вызов окна
+    /// без готового снимка (`window.Attach(door, null, _server)`) роняет ворота по исходникам,
+    /// а второе чтение в `Decide` — счётчик обращений.
+    /// </summary>
+    [Fact]
+    public void Окно_первого_запуска_читает_факты_один_раз()
+    {
+        var reads = 0;
+        var facts = new FirstRunFactsDoor(() =>
+        {
+            reads++;
+            return Clean();
+        });
+
+        var decision = FirstRunDecisions.Decide(humanLaunch: true, isolated: false, shownAt: "", facts);
+
+        Assert.Equal(1, reads);
+        Assert.True(decision.Show);
+        Assert.Equal(new[] { FirstRunRowKind.EngineMissing, FirstRunRowKind.KeyMissing }, decision.Rows);
+
+        var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
+
+        Assert.False(string.IsNullOrEmpty(root), "не нашёл корень репозитория");
+
+        var app = File.ReadAllText(Path.Combine(root!, "src", "DshPanel", "App.axaml.cs"));
+
+        // Решение — по одному снимку, окно получает ЕГО ЖЕ, а не читает дверь заново.
+        Assert.Contains("FirstRunDecisions.Decide(human, isolated, shownAt, door)", app, StringComparison.Ordinal);
+        Assert.Contains("window.Attach(door, decision.Facts, _server)", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("Rows(door.Read())", app, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ОКНО БЕЗ СТРОК НЕ ОТКРЫВАЕТСЯ: `Attach` отвечает «говорить нечего», и вызывающий не
+    /// показывает окно и не пишет пустую строку «окно первого запуска показано: » (DEF-064).
+    ///
+    /// **Мутация, которая обязана упасть:** M3 «показывать окно с нулём строк» — `Attach`,
+    /// всегда отвечающий `true`.
+    /// </summary>
+    [AvaloniaFact]
+    public void Окно_без_строк_не_открывается()
+    {
+        var window = new FirstRunWindow();
+
+        try
+        {
+            Assert.False(window.Attach(new FirstRunFactsDoor(Ready), Ready()));
+            Assert.Empty(window.Rows);
+        }
+        finally
+        {
+            window.Close();
+        }
+
+        // А с непустым снимком — открывается и пишет в журнал именно то, что показывает.
+        var shown = new FirstRunWindow();
+
+        try
+        {
+            var facts = Clean();
+
+            Assert.True(shown.Attach(new FirstRunFactsDoor(() => facts), facts));
+            Assert.Equal(2, shown.Rows.Count);
+            Assert.Contains(PanelStrings.FirstRunServerMissingEngineTitle, shown.ShownLogLine, StringComparison.Ordinal);
+            Assert.Contains(PanelStrings.FirstRunKeyMissingTitle, shown.ShownLogLine, StringComparison.Ordinal);
+        }
+        finally
+        {
+            shown.Close();
+        }
+
+        // И вызывающий обязан спросить у окна «есть ли что сказать» до показа.
+        var root = SourceStringsTests.FindRepositoryRoot(AppContext.BaseDirectory);
+
+        Assert.False(string.IsNullOrEmpty(root), "не нашёл корень репозитория");
+
+        var app = File.ReadAllText(Path.Combine(root!, "src", "DshPanel", "App.axaml.cs"));
+
+        Assert.Contains("if (!window.Attach(door, decision.Facts, _server)) return false;", app, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ОКНО САМО СЛЕДИТ ЗА СЕРВЕРОМ (DEF-064): подписка на <see cref="IServerControl.Changed"/>
+    /// (сторож состояния, а не таймер), закрытие после ответа сервера и перерисовка на настоящей
+    /// неудаче. Подписка снимается вместе с окном.
+    ///
+    /// **Мутации, которые обязаны упасть:** «не подписываться» (счётчик 0) · «не закрываться после
+    /// ответа» · «не снимать подписку при закрытии».
+    /// </summary>
+    [AvaloniaFact]
+    public void Окно_следит_за_сервером_и_закрывается_само()
+    {
+        var facts = Clean();
+        var server = new WatchingServer();
+        var window = new FirstRunWindow();
+
+        try
+        {
+            Assert.True(window.Attach(new FirstRunFactsDoor(() => facts), facts, server));
+            window.Show();
+            Settle();
+
+            Assert.True(window.WatchesServer, "окно не запомнило сервер при наполнении");
+            Assert.True(server.Subscribers == 1, $"окно не подписалось на состояние сервера: {server.Subscribers}");
+
+            // СЕРВЕР ОТВЕТИЛ — строк больше нет, и окно закрывается САМО: «окна нет или оно
+            // закрылось» — второе из двух, и это не таймер, а сообщение о смене состояния.
+            facts = Ready();
+            server.Raise();
+            Settle();
+
+            Assert.False(window.IsVisible, "окно осталось открытым, хотя говорить больше нечего");
+            Assert.True(server.Subscribers == 0, $"подписка не снята при закрытии: {server.Subscribers}");
+        }
+        finally
+        {
+            window.Close();
+        }
+
+        // НАСТОЯЩАЯ НЕУДАЧА — окно остаётся и перерисовывается С ПРИЧИНОЙ: это то же окно,
+        // второго не появляется.
+        facts = new FirstRunFacts(
+            EnginePresent: true, ServerProblem: FirstRunReason.ExitedSilent,
+            KeyFound: true, KeyReadable: true);
+
+        var failed = new FirstRunWindow();
+
+        try
+        {
+            Assert.True(failed.Attach(new FirstRunFactsDoor(() => facts), facts, server));
+            failed.Show();
+            Settle();
+
+            Assert.True(server.Subscribers == 1, $"второе окно не подписалось: {server.Subscribers}");
+
+            // Факты обновились настоящей неудачей — перерисовка на месте, без «Проверить снова».
+            server.Raise();
+            Settle();
+
+            Assert.True(failed.IsVisible, "настоящая неудача не повод закрывать окно");
+            Assert.Equal(new[] { FirstRunRowKind.ServerNotStarted }, failed.Rows);
+            Assert.Contains(
+                PanelStrings.FirstRunReasonExitedSilent,
+                Texts(failed),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            failed.Close();
+        }
+
+        Assert.True(server.Subscribers == 0, $"подписка пережила закрытие окна: {server.Subscribers}");
+    }
+
+    // --- помощники DEF-064 ----------------------------------------------------
+
+    /// <summary>Подставной сервер: всё, кроме нужного проверке, молчит и ничего не делает.</summary>
+    private abstract class ServerStub : IServerControl
+    {
+        public ServerState State => ServerState.Stopped(0);
+
+        public ServerOwner Owner => ServerOwner.Panel;
+
+        public bool ConsentRemembered => false;
+
+        public virtual bool Starting => false;
+
+        public virtual bool TryRefresh(out ServerState state)
+        {
+            state = Refresh();
+            return true;
+        }
+
+        public ServerState Refresh() => State;
+
+        public ServerState Start(TimeSpan timeout) => State;
+
+        public ServerState Stop(bool confirmed) => State;
+
+        public ServerState Restart(TimeSpan timeout, bool confirmed) => State;
+
+        public ServerState RecoverOwnServer(TimeSpan timeout, bool confirmed) => State;
+
+        public DiscoveryResult Scan() => DiscoveryResult.Nothing;
+
+        public ServerState Adopt(FoundServer found) => State;
+
+        public ServerState Detach() => State;
+
+        public string EntryLink => string.Empty;
+
+        public virtual event Action? Changed
+        {
+            add { }
+            remove { }
+        }
+    }
+
+    /// <summary>
+    /// СЕРВЕР, У КОТОРОГО «ИДЁТ ПОПЫТКА» ПОЯВЛЯЕТСЯ ОТ САМОГО ОБНОВЛЕНИЯ — как у настоящего
+    /// контроллера (`TryRefresh` выставляет `_engineStillStarting`). Только так проверяется порядок.
+    /// </summary>
+    private sealed class SlowStartServer : ServerStub
+    {
+        private bool _attemptLive;
+
+        public override bool Starting => _attemptLive;
+
+        public override bool TryRefresh(out ServerState state)
+        {
+            _attemptLive = true;
+            state = State;
+            return true;
+        }
+    }
+
+    /// <summary>СЕРВЕР, КОТОРЫЙ УМЕЕТ СООБЩАТЬ О СМЕНЕ СОСТОЯНИЯ и считает подписчиков.</summary>
+    private sealed class WatchingServer : ServerStub
+    {
+        private Action? _changed;
+
+        /// <summary>Сколько обработчиков подписано СЕЙЧАС — по списку вызовов, а не счётчиком ±1:
+        /// панель снимает подписку перед тем, как поставить, и «минус один на пустом» соврал бы.</summary>
+        public int Subscribers => _changed?.GetInvocationList().Length ?? 0;
+
+        public override event Action? Changed
+        {
+            add => _changed += value;
+            remove => _changed -= value;
+        }
+
+        public void Raise() => _changed?.Invoke();
     }
 }

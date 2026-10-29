@@ -1283,7 +1283,14 @@ public sealed class PhoneGate : IDisposable
                 timed.CancelAfter(RequestTimeout);
 
                 var stream = client.GetStream();
-                var request = await ReadAsync(stream, client, timed.Token).ConfigureAwait(false);
+                var (request, notHttp) = await ReadAsync(stream, client, timed.Token).ConfigureAwait(false);
+
+                // ⚠️ НЕ HTTP — ЗАКРЫВАЕМ СРАЗУ И МОЛЧА, НИ ОДНОГО БАЙТА В ОТВЕТ (DEF-062). Чужая
+                // проба — это TLS ClientHello от браузера телефона (`0x16 0x03…`), сканер или
+                // просто мусор; «запроса» здесь нет, и дочитывать нечего. Держать такое соединение
+                // до RequestTimeout и было дефектом: первый вход на страницу телефона занимал
+                // 15 068 мс — ровно срок запроса.
+                if (notHttp) return;
 
                 var response = request is null
                     ? PhoneHttpResponse.Words(400, false, Loc.T(PanelStrings.PhoneGateBadRequest))
@@ -1327,7 +1334,62 @@ public sealed class PhoneGate : IDisposable
         string Host,
         string Origin);
 
-    private static async Task<PhoneHttpRequest?> ReadAsync(NetworkStream stream, TcpClient client, CancellationToken token)
+    /// <summary>
+    /// НАЧАЛА HTTP-МЕТОДОВ, которые калитка разбирает. Список нужен НЕ маршрутизации (метод сверяет
+    /// <see cref="Route"/>), а первой развилке чтения: чем кончилось соединение — запросом или
+    /// чужим протоколом.
+    ///
+    /// ⚠️ **От какого случая (DEF-062).** Первый вход на страницу телефона занимал **15 068 мс**:
+    /// браузер телефона пробует HTTPS и первым делом шлёт TLS ClientHello (`0x16 0x03…`), а калитка
+    /// считала его началом запроса и ждала заголовков до <see cref="RequestTimeout"/> — ровно 15 с.
+    /// Теперь такое соединение закрывается сразу и молча: 0 байт в ответ, ноль ожидания.
+    /// </summary>
+    private static readonly string[] HttpMethodStarts =
+        { "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH" };
+
+    /// <summary>
+    /// ЭТО НАЧАЛО HTTP-ЗАПРОСА — ответ по первым байтам: <c>false</c> — «закрывай, это не HTTP»,
+    /// <c>true</c> — «похоже и, может быть, ещё не всё» (<c>GE</c> — начало <c>GET</c>), либо метод
+    /// уже дочитан и за ним стоит пробел.
+    ///
+    /// ⚠️ **РЕШАТЬ ПО ПЕРВОМУ КУСКУ НЕЛЬЗЯ.** Запрос идёт по TCP кусками: телефон вправе прислать
+    /// «GE», помолчать и прислать «T / HTTP/1.1…». Поэтому мусором «GE» становится не сразу, а
+    /// только когда следующий байт перестал быть продолжением ни одного метода.
+    /// </summary>
+    private static bool PlausibleHttpStart(byte[] buffer, int length)
+    {
+        foreach (var method in HttpMethodStarts)
+        {
+            if (length <= method.Length)
+            {
+                if (Prefix(buffer, length, method)) return true;
+
+                continue;
+            }
+
+            // Метод дочитан целиком: за ним обязан стоять пробел — «GETX» запросом не является.
+            if (Prefix(buffer, method.Length, method) && buffer[method.Length] == (byte)' ') return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Первые <paramref name="length"/> байт — начало <paramref name="method"/>.</summary>
+    private static bool Prefix(byte[] buffer, int length, string method)
+    {
+        for (var index = 0; index < length; index++)
+            if (buffer[index] != (byte)method[index]) return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// ОДИН ЗАПРОС ИЗ СОКЕТА. Пара на выходе различает три исхода, и это НЕ украшение: мусору
+    /// ответа не пишут вовсе (<c>NotHttp: true</c>), испорченному запросу отвечают 400 словами
+    /// (<c>Request: null</c>), а разобранный уходит в <see cref="Route"/>.
+    /// </summary>
+    private static async Task<(PhoneHttpRequest? Request, bool NotHttp)> ReadAsync(
+        NetworkStream stream, TcpClient client, CancellationToken token)
     {
         var head = new MemoryStream();
         var chunk = new byte[4096];
@@ -1335,12 +1397,17 @@ public sealed class PhoneGate : IDisposable
 
         while (end < 0)
         {
-            if (head.Length > MaxHeaderBytes) return TooBig(string.Empty);
+            if (head.Length > MaxHeaderBytes) return (TooBig(string.Empty), false);
 
             var read = await stream.ReadAsync(chunk.AsMemory(), token).ConfigureAwait(false);
-            if (read <= 0) return null;
+            if (read <= 0) return (null, false);
 
             head.Write(chunk, 0, read);
+
+            // Решение принимается по НАКОПЛЕННОМУ, а не по последнему куску: разрезанный запрос
+            // остаётся запросом, а TLS ClientHello отсекается на первом же байте 0x16.
+            if (!PlausibleHttpStart(head.GetBuffer(), (int)head.Length)) return (null, true);
+
             end = HeaderEnd(head.GetBuffer(), (int)head.Length);
         }
 
@@ -1348,7 +1415,7 @@ public sealed class PhoneGate : IDisposable
         var lines = text.Split("\r\n");
         var first = lines[0].Split(' ');
 
-        if (first.Length < 2) return null;
+        if (first.Length < 2) return (null, false);
 
         var method = first[0].Trim().ToUpperInvariant();
 
@@ -1375,7 +1442,7 @@ public sealed class PhoneGate : IDisposable
 
             headers++;
 
-            if (headers > MaxHeaders) return TooBig(AddressOf(client));
+            if (headers > MaxHeaders) return (TooBig(AddressOf(client)), false);
 
             var colon = line.IndexOf(':');
             if (colon <= 0) continue;
@@ -1406,7 +1473,7 @@ public sealed class PhoneGate : IDisposable
             }
         }
 
-        if (contentLength < 0 || contentLength > MaxBodyBytes) return TooBig(AddressOf(client));
+        if (contentLength < 0 || contentLength > MaxBodyBytes) return (TooBig(AddressOf(client)), false);
 
         var body = new byte[contentLength];
         var carried = (int)Math.Min(head.Length - (end + 4), contentLength);
@@ -1426,9 +1493,9 @@ public sealed class PhoneGate : IDisposable
             filled += read;
         }
 
-        return new PhoneHttpRequest(
+        return (new PhoneHttpRequest(
             method, path, query, cookie, language, AddressOf(client),
-            Encoding.UTF8.GetString(body, 0, filled), false, userAgent, host, origin);
+            Encoding.UTF8.GetString(body, 0, filled), false, userAgent, host, origin), false);
     }
 
     /// <summary>Второй такой же заголовок не уточняет первый, а склеивается с ним: сверка двери

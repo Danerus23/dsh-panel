@@ -579,6 +579,30 @@ public sealed class PanelSettings
 
     public static PanelSettings Default => new();
 
+    /// <summary>
+    /// ПОЛНАЯ КОПИЯ НАСТРОЕК — ОДНИМ МЕСТОМ (DEF-065).
+    ///
+    /// **Зачем копия, а не новый объект по списку полей.** Окно настроек пишет файл ЦЕЛИКОМ:
+    /// оно берёт то, что стоит в его полях, и ОБЯЗАНО положить обратно всё остальное. Прежде
+    /// остальное перечислялось по полю, и каждое новое поле однажды выпадало (DEF-036 — следы
+    /// проверки обновления; DEF-065 — отметка первого запуска): человек, тронувший одну настройку,
+    /// молча терял чужое решение, а окно считало правкой то, чего он не менял.
+    ///
+    /// Копирование идёт <see cref="object.MemberwiseClone"/> — то есть ЗАВЕДОМО каждое поле,
+    /// включая будущие, — а списки копируются отдельно, чтобы у копии и оригинала не было одной
+    /// ссылки. Сторож (`SettingsUnsavedTests.Копия_настроек_сохраняет_все_поля`) перебирает поля
+    /// отражением: новое поле неизвестного типа уронит его, а не выпадет молча.
+    /// </summary>
+    public PanelSettings Copy()
+    {
+        var copy = (PanelSettings)MemberwiseClone();
+
+        copy.BackupKeyDirs = new List<string>(BackupKeyDirs);
+        copy.BackupExtraExclusions = new List<string>(BackupExtraExclusions);
+
+        return copy;
+    }
+
     /// <summary>Порядок тем в списке окна настроек — он же порядок значений в файле.</summary>
     public static readonly string[] ThemeValues = { ThemeSystem, ThemeLight, ThemeDark };
 

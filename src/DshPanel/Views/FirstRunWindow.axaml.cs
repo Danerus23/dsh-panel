@@ -2,6 +2,7 @@ using System.Globalization;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
+using DshPanel.Server;
 using DshPanel.Shell;
 
 namespace DshPanel.Views;
@@ -31,6 +32,16 @@ public partial class FirstRunWindow : Window
     public const string AutomationIdValue = "first-run";
 
     private IFirstRunFacts? _facts;
+
+    /// <summary>
+    /// СЕРВЕР, ЗА СОСТОЯНИЕМ КОТОРОГО ОКНО СЛЕДИТ (DEF-064). Подписка — на <see cref="IServerControl.Changed"/>,
+    /// а не на таймер: окно обязано закрыться само, когда сервер ответил, и перерисоваться, когда
+    /// наступила настоящая неудача, — без «Проверить снова».
+    ///
+    /// ⚠️ Снимается вместе с окном (<see cref="OnClosed"/>): мёртвый подписчик держал бы закрытое окно
+    /// живым и будил бы его на каждую смену состояния.
+    /// </summary>
+    private IServerControl? _server;
 
     public FirstRunWindow()
     {
@@ -98,25 +109,96 @@ public partial class FirstRunWindow : Window
     /// <summary>Что сказала последняя проверка: «ничего не изменилось» или пусто.</summary>
     public string RecheckText => RecheckLine.Text ?? string.Empty;
 
+    /// <summary>Следит ли окно за сервером — для проверки подписки (DEF-064).</summary>
+    internal bool WatchesServer => _server is not null;
+
     /// <summary>
     /// ДАТЬ ОКНУ ДВЕРЬ ФАКТОВ и показать то, что она говорит СЕЙЧАС. Дверь, а не запись фактов:
     /// кнопка «Проверить снова» обязана спросить истину заново, а не перерисовать прежний ответ.
     /// </summary>
-    public void Attach(IFirstRunFacts facts)
+    public bool Attach(IFirstRunFacts facts) => Attach(facts, snapshot: null, server: null);
+
+    /// <summary>
+    /// ДАТЬ ОКНУ ГОТОВЫЙ СНИМОК ФАКТОВ, дверь для повторной проверки и сервер для слежения (DEF-064).
+    ///
+    /// **Почему снимок приходит доводом, а не читается здесь.** Вызывающий уже прочитал факты для
+    /// решения «показывать ли»; второе чтение в окне — это ровно тот дефект, от которого задача:
+    /// между чтениями состояние успевает смениться, и окно рисуется пустым по непустому решению.
+    ///
+    /// Возвращает, есть ли окну что сказать: пустое окно не показывается и пустой строки журнала
+    /// «окно первого запуска показано: » не оставляет.
+    /// </summary>
+    public bool Attach(IFirstRunFacts facts, FirstRunFacts? snapshot, IServerControl? server = null)
     {
         _facts = facts ?? throw new ArgumentNullException(nameof(facts));
-        Refresh();
+        _server = server;
+
+        if (snapshot is { } known) RenderFacts(known);
+        else Refresh();
+
+        // ПОДПИСКА — ЗДЕСЬ, а не в OnOpened: окно может быть наполнено и показано разными
+        // вызовами, а подписка обязана быть ровно одна. Пустой снимок её тут же снимает —
+        // окно, которое так и не показали, не оставляет мёртвого подписчика.
+        Subscribe();
+
+        if (Rows.Count > 0) return true;
+
+        Unsubscribe();
+        return false;
+    }
+
+    /// <summary>Подписаться на смену состояния сервера — один раз, повторный вызов не плодит обработчиков.</summary>
+    private void Subscribe()
+    {
+        if (_server is null) return;
+
+        _server.Changed -= OnServerChanged;
+        _server.Changed += OnServerChanged;
+    }
+
+    /// <summary>Снять подписку: делается и при закрытии окна, и когда говорить оказалось нечего.</summary>
+    private void Unsubscribe()
+    {
+        if (_server is not null) _server.Changed -= OnServerChanged;
     }
 
     /// <summary>Перечитать факты и перерисовать строки. Возвращает то, что показано.</summary>
     public IReadOnlyList<FirstRunRowKind> Refresh()
     {
-        var facts = _facts?.Read() ?? FirstRunFacts.Unknown;
+        RenderFacts(_facts?.Read() ?? FirstRunFacts.Unknown);
+        return Rows;
+    }
 
+    /// <summary>Показать готовый снимок фактов — строки считает чистое решение, окно только рисует.</summary>
+    private void RenderFacts(FirstRunFacts facts)
+    {
         Rows = FirstRunDecisions.Rows(facts);
         Render(Rows, facts);
+    }
 
-        return Rows;
+    /// <summary>ОКНО ЗАКРЫЛОСЬ — СНЯТЬ ПОДПИСКУ. Мёртвый подписчик держал бы закрытое окно живым.</summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        Unsubscribe();
+
+        _server = null;
+        base.OnClosed(e);
+    }
+
+    /// <summary>
+    /// СЕРВЕР СМЕНИЛ СОСТОЯНИЕ — ПЕРЕЧИТАТЬ ФАКТЫ И, ЕСЛИ ГОВОРИТЬ БОЛЬШЕ НЕЧЕГО, ЗАКРЫТЬСЯ.
+    ///
+    /// Это сторож, а не таймер: событие приходит, когда сервер ответил (тогда строки «чего нет»
+    /// исчезают и окно закрывается) или когда попытка кончилась настоящей неудачей (тогда строка
+    /// с причиной остаётся и обновляется на месте). Окно, открытое с пустым списком, не бывает:
+    /// <see cref="Attach"/> не пускает.
+    /// </summary>
+    private void OnServerChanged()
+    {
+        // Событие могло прийти уже после закрытия: перерисовывать нечего, и закрывать нечего.
+        if (!IsVisible) return;
+
+        if (Refresh().Count == 0) Close();
     }
 
     /// <summary>

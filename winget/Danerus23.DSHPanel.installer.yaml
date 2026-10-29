@@ -34,7 +34,7 @@
 # Version and hash are rewritten by tools\winget-manifest.ps1.
 
 PackageIdentifier: Danerus23.DSHPanel
-PackageVersion: 2.4.2
+PackageVersion: 2.4.3
 InstallerType: inno
 Scope: user
 UpgradeBehavior: install
@@ -56,17 +56,18 @@ AppsAndFeaturesEntries:
   Publisher: Danerus23
   ProductCode: '{7F3C6A21-9D4E-4B8A-9C1F-2E5D8B7A4C11}_is1'
 # ReleaseDate and InstallerSha256 below are the RELEASE's numbers, not a revision's:
-#   * InstallerSha256 — the 2.3.2 installer of the release build (44 987 628 bytes, D23E8DE0…9D75),
-#     taken from the assets of the GitHub release v2.3.2 (created 2026-10-22T13:29:11Z); never
-#     recomputed from a local rebuild — the pipeline and this machine build in different trees, so
-#     bytes and sums differ by construction;
-#   * ReleaseDate     — the day the release went out: 2026-10-22 (GitHub release creation date, UTC;
-#     the date is the release's, not the session's).
-# Both are rewritten by tools\winget-manifest.ps1 (offline, idempotent) from the sums file.
+#   * InstallerSha256 — the digest of the dsh-panel-setup.exe asset of this release, taken from
+#     `gh release view vX.Y.Z --json assets`; never recomputed from a local rebuild — the pipeline
+#     and this machine build in different trees, so bytes and sums differ by construction;
+#   * ReleaseDate     — the day the release went out (GitHub release creation date, UTC; the date is
+#     the release's, not the session's).
+# Both are rewritten by tools\winget-manifest.ps1 (offline, idempotent); the sum taken from the
+# local sums file is a PRE-RELEASE stand-in and must be refilled from the release assets after the
+# release (docs\RELEASE-V2.md §3 п. 10б), before the announcement.
 ReleaseDate: 2026-10-25
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/Danerus23/dsh-panel/releases/download/v2.4.2/dsh-panel-setup.exe
-  InstallerSha256: 5FD713E9B510D9E61DA30901FD265E5D39DB2089F474ED9884C5A9C9CD1022E6
+  InstallerUrl: https://github.com/Danerus23/dsh-panel/releases/download/v2.4.3/dsh-panel-setup.exe
+  InstallerSha256: E747EEEDE409EFDD0B79FD20B669353F41FD3FD794CD8BBD09B1013D634816CD
 ManifestType: installer
 ManifestVersion: 1.12.0

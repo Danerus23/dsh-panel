@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ПРОБА TableView (этап 2.4.3) — В РАЗДАЧУ НЕ ВХОДИТ.
+
+    Проект живёт в tools\ и ссылается на продукт ТОЛЬКО ЧТЕНИЕМ: ни один файл src\DshPanel
+    из-за него не меняется, ни один пакет не добавляется (Avalonia приходит транзитивно
+    по ProjectReference), в решение DshPanel.slnx он не входит и профилем публикации
+    не собирается. Это стенд замера: два вида одной таблицы в НАСТОЯЩЕМ окне «История цен».
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>TableViewProbe</AssemblyName>
+    <RootNamespace>TableViewProbe</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DshPanel\DshPanel.csproj" />
+  </ItemGroup>
+
+</Project>

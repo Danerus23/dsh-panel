@@ -2,6 +2,22 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.4.3 - 2026-10-29
+
+**Three live defects — the phone entry and two windows. No new capabilities.** The first entry to the
+phone page no longer waits fifteen seconds; the first-run window no longer talks about a server that
+is still starting and closes itself once the server answers; settings no longer treat the first-run
+mark as an edit. The version is in "About": it says **2.4.3**.
+
+* **The first entry to the phone page is fast:** a connection that does not start with HTTP (a TLS
+  ClientHello or other noise) is closed at once and silently — in tenths of a millisecond instead of
+  15 068 ms; plain HTTP and a request split across TCP packets are accepted as before.
+* **The first-run window does not lie about the start:** while the server is starting there is no
+  window; once the server has answered, the window closes itself; a real failure is shown with its
+  reason, and an empty window with no lines no longer appears.
+* **Settings do not treat the first-run mark as an edit:** after the first-run window, opening and
+  closing settings asks no "Save changes?" question, and "Save" does not erase the mark.
+
 ## 2.4.2 - 2026-10-25
 
 **Four live update and window defects — no new capabilities.** The panel no longer loses an

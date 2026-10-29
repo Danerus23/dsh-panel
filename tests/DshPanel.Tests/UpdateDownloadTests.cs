@@ -866,8 +866,24 @@ public class UpdateDownloadTests
         Assert.False(string.IsNullOrWhiteSpace(result.Detail), "причина обрыва не названа");
         Assert.StartsWith("HttpIOException: ", result.Detail, StringComparison.Ordinal);
 
-        // ПОПЫТОК РОВНО ПО ПОЛИТИКЕ: три попытки куска — три запроса, потом отказ.
-        Assert.Equal(policy.Attempts, loop.Requests);
+        // ПОПЫТОК РОВНО ПО ПОЛИТИКЕ: три попытки куска — три РАЗНЫХ НАЧАЛА запроса, потом отказ.
+        //
+        // ⚠️ СЧЁТ ЗАПРОСОВ ≠ СЧЁТ ПОПЫТОК (DEF-063, 29.10.2026), и это замер, а не догадка.
+        // `SocketsHttpHandler` повторяет GET САМ, когда соединение умерло ДО заголовков ответа
+        // (в пробе: один `Send` → до четырёх запросов на сервере, клиенту это НЕ ВИДНО и попыток
+        // не прибавляет). ⚠️ Повтор даёт закрытие (FIN), а не сброс (RST): при RST его нет.
+        // На этой петле убитое до заголовков соединение даёт ровно «попыток 3,
+        // запросов 4» — тот самый счёт, что падал 1 раз из 3 полных прогонов 2.4.2, — и лишний
+        // запрос повторяет УЖЕ ЗАПРОШЕННОЕ начало. Поэтому «ровно по политике» считается по
+        // РАЗНЫМ началам: у каждой попытки свой байт, а повтор транспорта его не меняет.
+        var starts = loop.Ranges.Select(range => range.From).Distinct().OrderBy(from => from).ToArray();
+
+        Assert.True(
+            starts.SequenceEqual(new[] { 0L, 8192L, 16384L }),
+            "попытки (начала запросов): " + string.Join("; ", starts) +
+            "; всего запросов " + loop.Requests.ToString(CultureInfo.InvariantCulture) +
+            ", политика " + policy.Attempts.ToString(CultureInfo.InvariantCulture) +
+            " — ожидались три разных начала 0; 8192; 16384 (четвёртая попытка — уже нарушение)");
 
         // ХОД НЕ ОБЪЯВИЛ ФАЙЛ ГОТОВЫМ...
         List<(long Done, long Total)> seen;
@@ -1127,7 +1143,11 @@ public class UpdateDownloadTests
     /// пошёл повтор.
     ///
     /// **Мутация «не логировать повторы» роняет эту проверку:** строк станет меньше, чем
-    /// запросов, и строки <c>attempt=2</c> не будет вовсе.
+    /// начал запросов, и строки <c>attempt=2</c> не будет вовсе.
+    ///
+    /// ⚠️ **Счёт запросов ≠ счёт попыток (DEF-066, 29.10.2026):** транспортный повтор GET
+    /// (соединение умерло до заголовков ответа) даёт лишний запрос с тем же началом, но строки
+    /// журнала не прибавляет — поэтому сверяются начала, а не количества.
     /// </summary>
     [Fact]
     public void Журнал_попыток_называет_повтор_и_байт_с_которого_он_пошёл()
@@ -1145,7 +1165,9 @@ public class UpdateDownloadTests
             (_, from, _) => from == chunk && Interlocked.Exchange(ref broken, 1) == 0,
             truncate: true);
 
-        var result = Fetch(loop, box, Sha(bytes), Small(chunk, 3), stateDir: box.StateDir);
+        var policy = Small(chunk, 3);
+
+        var result = Fetch(loop, box, Sha(bytes), policy, stateDir: box.StateDir);
 
         Assert.True(result.Ok, "загрузка не закончилась: " + result.Report());
 
@@ -1153,8 +1175,32 @@ public class UpdateDownloadTests
 
         Assert.NotEmpty(log);
 
-        // КАЖДАЯ ПОПЫТКА — СТРОКА, и строк ровно столько, сколько запросов видел сервер.
-        Assert.Equal(loop.Requests, log.Length);
+        // КАЖДАЯ ПОПЫТКА — СТРОКА, и строк ровно столько, сколько РАЗНЫХ НАЧАЛ запросов видел
+        // сервер. ⚠️ СЧЁТ ЗАПРОСОВ ≠ СЧЁТ ПОПЫТОК (DEF-066, 29.10.2026): `SocketsHttpHandler` сам
+        // повторяет GET, если соединение умерло ДО заголовков ответа — закрытием (FIN), а не
+        // сбросом (RST) — сервер видит лишний
+        // запрос с ТЕМ ЖЕ началом, продукт его не видит и строки журнала не прибавляет. Поэтому
+        // сверяются НАЧАЛА, а не количества: множество начал запросов = множество «from» журнала,
+        // и оба — ровно начала сценария. Повтор транспорта с тем же началом допускается; лишняя
+        // строка журнала, повтор «с начала куска» и четвёртая попытка — красные.
+        var starts = loop.Ranges.Select(range => range.From).Distinct().OrderBy(from => from).ToArray();
+
+        var written = log
+            .Select(line => long.Parse(Field(line, "from"), CultureInfo.InvariantCulture))
+            .OrderBy(from => from)
+            .ToArray();
+
+        var expected = new[] { 0L, chunk, chunk + 8192, 2 * chunk, 3 * chunk };
+
+        var named = "начала запросов: " + string.Join("; ", starts) +
+            "; строк журнала " + log.Length.ToString(CultureInfo.InvariantCulture) +
+            " с началами " + string.Join("; ", written) +
+            "; всего запросов " + loop.Requests.ToString(CultureInfo.InvariantCulture) +
+            ", политика " + policy.Attempts.ToString(CultureInfo.InvariantCulture) +
+            " попытки на кусок " + policy.Size.ToString(CultureInfo.InvariantCulture);
+
+        Assert.True(starts.SequenceEqual(expected), "попытки не те: " + named + " — ожидались начала сценария");
+        Assert.True(written.SequenceEqual(starts), "журнал не совпал с попытками: " + named);
 
         // ОБОРВАННАЯ ПОПЫТКА НАЗВАНА: кусок 1, попытка 1, с 300 000, принято 8 192, секунды есть.
         var firstTry = Assert.Single(log, line => Field(line, "chunk") == "1" && Field(line, "attempt") == "1");
