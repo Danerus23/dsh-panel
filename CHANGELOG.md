@@ -2,6 +2,26 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.4.4 - 2026-10-29
+
+**Three live defects — the phone entry and two windows — plus a build fix. No new capabilities.**
+The first entry to the phone page no longer waits fifteen seconds; the first-run window no longer
+talks about a server that is still starting and closes itself once the server answers; settings no
+longer treat the first-run mark as an edit; the build installs exactly the SDK it was verified with.
+The version is in "About": it says **2.4.4**.
+
+* **The first entry to the phone page is fast:** a connection that does not start with HTTP (a TLS
+  ClientHello or other noise) is closed at once and silently — in tenths of a millisecond instead of
+  15 068 ms; plain HTTP and a request split across TCP packets are accepted as before.
+* **The first-run window does not lie about the start:** while the server is starting there is no
+  window; once the server has answered, the window closes itself; a real failure is shown with its
+  reason, and an empty window with no lines no longer appears.
+* **Settings do not treat the first-run mark as an edit:** after the first-run window, opening and
+  closing settings asks no "Save changes?" question, and "Save" does not erase the mark.
+* **Build: the SDK is pinned to exactly the version we verified** — `global.json` and CI install
+  **10.0.403**, and the package locks agree with it. The previous attempt (2.4.3) was never released
+  precisely because the SDK pin and the locks disagreed: `restore --locked-mode` failed in CI.
+
 ## 2.4.3 - 2026-10-29
 
 **Three live defects — the phone entry and two windows. No new capabilities.** The first entry to the
