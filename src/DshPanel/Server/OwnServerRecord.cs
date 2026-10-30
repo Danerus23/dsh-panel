@@ -100,6 +100,22 @@ public readonly record struct OwnServerRecord(
     public bool LaunchedFromOwnEngine(string? runningBinPath, string? engineDir) =>
         Port > 0 && OwnEngine.IsOwnBinPath(runningBinPath, engineDir);
 
+    /// <summary>
+    /// НАЗЫВАЕТ ЛИ ЗАПИСЬ НАШ ДВИЖОК — по своей же четвёртой части (путь к <c>bin.js</c>).
+    ///
+    /// **Чем это отличается от <see cref="LaunchedFromOwnEngine"/>.** Та примета спрашивает путь
+    /// у ЖИВОГО процесса и потому требует, чтобы слушатель был найден. Эта отвечает по файлу:
+    /// «панель когда-то поднимала сервер на этом порту СВОИМ движком». Нужна там, где слушателя
+    /// назвать не удалось (DEF-074): запись остаётся единственным доказательством владения,
+    /// и без неё «Запустить» отказало бы «порт занят» в свой же сервер.
+    ///
+    /// Ответ «нет» безопасен всегда: запись прежних сборок движка не называет, а чужой
+    /// глобальный движок в нашу папку не попадает — сверка идёт по границе ИМЕНИ папки,
+    /// а не по вхождению подстроки (<see cref="OwnEngine.IsOwnBinPath"/>).
+    /// </summary>
+    public bool NamesOwnEngine(string? engineDir) =>
+        Port > 0 && OwnEngine.IsOwnBinPath(EnginePath, engineDir);
+
     /// <summary>Назван ли в записи движок: пусто — запись прежней сборки, и это не ошибка.</summary>
     public bool NamesEngine =>
         !string.IsNullOrWhiteSpace(EnginePath) || !string.IsNullOrWhiteSpace(EngineVersion);

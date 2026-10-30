@@ -14,7 +14,6 @@ public static class PortTable
     private const int AfInet = 2;
     private const int AfInet6 = 23;
     private const int TableOwnerPidListener = 3;
-    private const int StateListen = 2;
     private const int ErrorInsufficientBuffer = 122;
 
     [DllImport("iphlpapi.dll", SetLastError = true)]
@@ -43,8 +42,8 @@ public static class PortTable
 
         // IPv4 и IPv6 собираются в один список: один и тот же процесс нередко слушает оба
         // семейства на одном порту, и повтор ему в списке не нужен.
-        var ok4 = Collect(found, AfInet, 24, 0, 8, 20);
-        var ok6 = Collect(found, AfInet6, 56, 48, 20, 52);
+        var ok4 = Collect(found, AfInet, 24, 0, 8, 20, 16);
+        var ok6 = Collect(found, AfInet6, 56, 48, 20, 52, 44);
 
         if (!ok4 && !ok6) return null;
 
@@ -58,8 +57,33 @@ public static class PortTable
         return result;
     }
 
+    /// <summary>
+    /// ЭТА СТРОКА — СЛУШАТЕЛЬ? Чистое решение, чтобы его можно было проверить строками
+    /// синтетическими, а не живой таблицей (DEF-074, §4.1).
+    ///
+    /// ⚠️ **`dwState` В РЕШЕНИИ НЕ УЧАСТВУЕТ, И ЭТО ГЛАВНОЕ.** В таблице
+    /// <c>TCP_TABLE_OWNER_PID_LISTENER</c> лежат ТОЛЬКО слушатели — фильтр «состояние равно
+    /// LISTEN» приехал сюда из v1, где он стоял на таблице СОЕДИНЕНИЙ, и здесь он выкидывает
+    /// живых слушателей. Замер на машине владельца 30.10.2026: у порта 3080 (живой сервер DSH,
+    /// pid 21008) в слушающей таблице <c>dwState = 6</c>, а не 2, — и панель 2.4.4 не находила
+    /// слушателя вовсе, снимала свою же запись о сервере и упиралась в «порт занят» (DEF-074).
+    /// Тот же замер показал состояния 0 и 1 у других настоящих слушателей: поле состояния
+    /// в этой таблице не значит того, что мы у него спрашивали.
+    ///
+    /// Приметы, которые значат: локальный порт назван, удалённый порт нулевой (у слушателя
+    /// соединения нет) и номер процесса ненулевой (иначе это не «кто слушает», а «дырка»).
+    /// </summary>
+    internal static bool RowIsListener(int state, int localPort, int remotePort, int pid)
+    {
+        // Намеренно не читается: довод оставлен в подписи, чтобы проверка могла подать строку
+        // с `dwState = 6` и доказать, что он на решение не влияет.
+        _ = state;
+
+        return localPort > 0 && remotePort == 0 && pid > 0;
+    }
+
     private static bool Collect(
-        List<Listener> into, int af, int rowSize, int stateOffset, int portOffset, int pidOffset)
+        List<Listener> into, int af, int rowSize, int stateOffset, int portOffset, int pidOffset, int remotePortOffset)
     {
         var size = 0;
         var status = GetExtendedTcpTable(IntPtr.Zero, ref size, false, af, TableOwnerPidListener, 0);
@@ -76,15 +100,15 @@ public static class PortTable
             var row = IntPtr.Add(buffer, 4);
             for (var i = 0; i < count; i++, row = IntPtr.Add(row, rowSize))
             {
-                // Только настоящие слушатели: у строк TIME_WAIT состояние другое, и номер
-                // процесса у них нулевой — по ним нашлась бы «дырка» вместо сервера (урок v1).
-                if (Marshal.ReadInt32(row, stateOffset) != StateListen) continue;
+                var state = Marshal.ReadInt32(row, stateOffset);
 
                 var raw = Marshal.ReadInt32(row, portOffset);
                 var localPort = (ushort)IPAddress.NetworkToHostOrder((short)(raw & 0xFFFF));
+                var rawRemote = Marshal.ReadInt32(row, remotePortOffset);
+                var remotePort = (ushort)IPAddress.NetworkToHostOrder((short)(rawRemote & 0xFFFF));
                 var owner = Marshal.ReadInt32(row, pidOffset);
 
-                if (localPort > 0 && owner > 0) into.Add(new Listener(localPort, owner));
+                if (RowIsListener(state, localPort, remotePort, owner)) into.Add(new Listener(localPort, owner));
             }
 
             return true;
@@ -107,18 +131,18 @@ public static class PortTable
     public static int GetListenerPid(int port)
     {
         // IPv4: строка 24 байта, состояние на 0, порт на 8, PID на 20.
-        var result = Scan(port, AfInet, 24, 0, 8, 20, out var failed);
+        var result = Scan(port, AfInet, 24, 0, 8, 20, 16, out var failed);
         if (result > 0) return result;
         if (failed) return -1;
 
         // IPv6: строка 56 байт, состояние на 48, порт на 20, PID на 52.
-        result = Scan(port, AfInet6, 56, 48, 20, 52, out failed);
+        result = Scan(port, AfInet6, 56, 48, 20, 52, 44, out failed);
         if (result > 0) return result;
         return failed ? -1 : 0;
     }
 
     private static int Scan(
-        int port, int af, int rowSize, int stateOffset, int portOffset, int pidOffset, out bool failed)
+        int port, int af, int rowSize, int stateOffset, int portOffset, int pidOffset, int remotePortOffset, out bool failed)
     {
         failed = false;
         var size = 0;
@@ -136,11 +160,18 @@ public static class PortTable
             var row = IntPtr.Add(buffer, 4);
             for (var i = 0; i < count; i++, row = IntPtr.Add(row, rowSize))
             {
-                if (Marshal.ReadInt32(row, stateOffset) != StateListen) continue;
+                var state = Marshal.ReadInt32(row, stateOffset);
                 var raw = Marshal.ReadInt32(row, portOffset);
                 var localPort = (ushort)IPAddress.NetworkToHostOrder((short)(raw & 0xFFFF));
                 if (localPort != port) continue;
-                return Marshal.ReadInt32(row, pidOffset);
+
+                var rawRemote = Marshal.ReadInt32(row, remotePortOffset);
+                var remotePort = (ushort)IPAddress.NetworkToHostOrder((short)(rawRemote & 0xFFFF));
+                var owner = Marshal.ReadInt32(row, pidOffset);
+
+                if (!RowIsListener(state, localPort, remotePort, owner)) continue;
+
+                return owner;
             }
         }
         catch

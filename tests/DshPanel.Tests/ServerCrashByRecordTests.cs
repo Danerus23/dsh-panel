@@ -328,8 +328,12 @@ public class ServerCrashByRecordTests
             Assert.Equal(ServerOwner.Panel, controller.Owner);
             Assert.False(controller.WatchingRecordedOwn, "дескриптор ушедшего процесса открылся — проверка не про этот случай");
 
-            // Порт опустел — второго способа узнать о выходе у панели нет.
+            // Порт опустел и МОЛЧИТ (и слушателя, и отпечатка нет) — второго способа узнать
+            // о выходе у панели нет. ⚠ `Fingerprint = false` обязателен: живой порт, который
+            // ОТВЕЧАЕТ сервером DSH, панель смертью не считает (DEF-074, §4.2) — там запись
+            // и ссылка входа остаются, а говорится «не удалось узнать, кто слушает».
             world.Listens = false;
+            world.Fingerprint = false;
 
             var state = controller.Refresh();
 

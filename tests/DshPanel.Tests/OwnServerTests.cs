@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using DshPanel.Server;
 using DshPanel.Shell;
 using Xunit;
@@ -448,7 +450,9 @@ public class OwnServerTests
     [Fact]
     public void Запись_про_ушедший_сервер_снимается()
     {
-        var world = new World { Port = 3097, Listener = 0 };
+        // ПОРТ МОЛЧИТ: сервера нет и ответить некому. Иначе это был бы уже другой случай —
+        // «слушателя не назвать, а порт отвечает», и запись тогда НЕ снимается (DEF-074, §4.2).
+        var world = new World { Port = 3097, Listener = 0, Fingerprint = false };
         var files = new Files { Own = new OwnServerRecord(3097, 4242, Ticks).Format() };
 
         using var controller = Controller(world, files);
@@ -474,6 +478,298 @@ public class OwnServerTests
         Assert.Equal(ServerOwner.None, controller.Owner);
         Assert.NotEqual(string.Empty, files.Own);
         Assert.Equal(0, files.OwnClears);
+    }
+    // ---------------------------------------------------------------- DEF-074: живой сервер на своём порту
+
+    /// <summary>
+    /// УСТАРЕВШАЯ ЗАПИСЬ + СВОЙ СЛУШАТЕЛЬ — ПАНЕЛЬ ПРИЗНАЁТ ЕГО СВОИМ И НИЧЕГО НЕ СНИМАЕТ
+    /// (DEF-074, §4.3).
+    ///
+    /// **От какого случая (живой 2.4.4, 30.10.2026).** На 3080 работал СВОЙ сервер, но запись ему
+    /// была не пара (номер процесса и время создания не сошлись). Панель шла в ветку «запись
+    /// устарела» и снимала её ВМЕСТЕ со ссылкой входа — у ЖИВОГО сервера. Ссылку человек получил за
+    /// минуту до этого и больше уже не получил.
+    ///
+    /// **Что требуется.** Слушающий процесс поднят ИЗ НАШЕЙ папки движка — это наш сервер, чей бы
+    /// номер ни был: владение берётся, запись переписывается ЖИВОЙ парой (номер + время), а ссылка
+    /// входа остаётся на месте.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«не признавать по пути движка»** (тогда `Owner`
+    /// остаётся `None`, а запись и ссылка снимаются) и **«признать, но снять запись»** (тогда
+    /// `OwnClears` станет 1 и живая запись пропадёт).
+    /// </summary>
+    [Fact]
+    public void Устаревшая_запись_и_свой_слушатель_не_снимают_ни_записи_ни_ссылки()
+    {
+        const string engineDir = @"C:\Temp\dsh-own-home\engine";
+        var ownBin = OwnEngine.BinPath(engineDir, "0.2.0-rc.2");
+
+        var world = new World { Port = 3097, Listener = 5000, ListenerTicks = Ticks + 7 };
+        world.CommandLineTemplate = $"\"node.exe\" {ownBin} web --no-open --port ";
+
+        // ЗАПИСЬ — ПРО ДРУГОЙ ПРОЦЕСС: 4242 против живого 5000, и время другое.
+        var saved = new OwnServerRecord(3097, 4242, Ticks, ownBin, "0.2.0-rc.2");
+
+        var files = new Files
+        {
+            Own = saved.Format(),
+            Entry = "http://127.0.0.1:3097/?token=SECRET",
+            EngineDir = engineDir,
+        };
+
+        var log = new List<string>();
+
+        using var controller = Controller(world, files, log: log);
+        var state = controller.Refresh();
+
+        Assert.Equal(ServerOwner.Panel, controller.Owner);
+        Assert.True(state.IsRunning);
+        Assert.Equal(3097, state.Port);
+        Assert.Equal(5000, state.Pid);
+
+        // ЗАПИСЬ ПЕРЕПИСАНА ЖИВОЙ ПАРОЙ, а не снята: следующий перезапуск панели узнает сервер.
+        var rewritten = OwnServerRecord.Parse(files.Own);
+
+        Assert.NotNull(rewritten);
+        Assert.Equal(5000, rewritten!.Value.Pid);
+        Assert.Equal(Ticks + 7, rewritten.Value.StartTicks);
+        Assert.Equal(0, files.OwnClears);
+
+        // ССЫЛКА ВХОДА ЦЕЛА: сервер жив, лечить её незачем.
+        Assert.Equal("http://127.0.0.1:3097/?token=SECRET", files.Entry);
+        Assert.Equal(0, files.EntryClears);
+
+        Assert.DoesNotContain(log, line => line.Contains("устарела", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// СЛУШАТЕЛЯ НЕ НАЗВАТЬ, А ПОРТ ОТВЕЧАЕТ СЕРВЕРОМ DSH — ЗАПИСЬ И ССЫЛКА ОСТАЮТСЯ,
+    /// А ЧЕЛОВЕКУ ГОВОРИТСЯ ПРЕДЕЛ ЗНАНИЯ (DEF-074, §4.2).
+    ///
+    /// **От какого случая.** `PortTable` отдавала живого слушателя 3080 с `dwState = 6`, панель
+    /// видела «никто не слушает», но порт при этом отвечал 401-отпечатком DSH. Прежний код считал
+    /// это смертью сервера и стирал запись вместе с адресом входа. Честный ответ — «не удалось
+    /// узнать, кто слушает порт 3080»: сервер ЖИВ, доказательства владения на месте.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«снять запись без слушателя, не спросив порт»**
+    /// (`OwnClears` станет 1, ссылка пропадёт) и **«говорить "порт свободен"»** (текст состояния
+    /// станет другим).
+    /// </summary>
+    [Fact]
+    public void Слушателя_не_узнать_но_порт_отвечает_запись_и_ссылка_целы()
+    {
+        var world = new World { Port = 3097, Listener = 0 };
+
+        var saved = new OwnServerRecord(3097, 4242, Ticks);
+        var files = new Files
+        {
+            Own = saved.Format(),
+            Entry = "http://127.0.0.1:3097/?token=SECRET",
+        };
+
+        var log = new List<string>();
+
+        using var controller = Controller(world, files, log: log);
+        var state = controller.Refresh();
+
+        // ВЛАДЕНИЕ НЕ ПРИСВОЕНО: назвать процесс нечем, а гадать панель не имеет права.
+        Assert.Equal(ServerOwner.None, controller.Owner);
+        Assert.False(state.IsRunning);
+        Assert.Equal(3097, state.Port);
+        Assert.Equal(
+            string.Format(CultureInfo.InvariantCulture, PanelStrings.SrvListenerUnknownFormat, 3097),
+            state.Detail);
+
+        // ЗАПИСЬ И ССЫЛКА ЦЕЛЫ — сервер жив.
+        Assert.Equal(saved.Format(), files.Own);
+        Assert.Equal(0, files.OwnClears);
+        Assert.Equal("http://127.0.0.1:3097/?token=SECRET", files.Entry);
+        Assert.Equal(0, files.EntryClears);
+
+        // СЛОВО ОБ ЭТОМ — ОДНО на порт, а не каждую секунду: осмотр идёт раз в секунду.
+        Assert.Equal(1, log.Count(line => line.Contains("кто слушает порт 3097", StringComparison.Ordinal)));
+
+        controller.Refresh();
+
+        Assert.Equal(1, log.Count(line => line.Contains("кто слушает порт 3097", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// ЗАПИСЬ НАЗЫВАЕТ НАШ ДВИЖОК, А СЛУШАТЕЛЯ НЕ УЗНАТЬ: «ЗАПУСТИТЬ» НЕ ГОВОРИТ «ЗАНЯТ»
+    /// (DEF-074, §4.4).
+    ///
+    /// Порт занят по-настоящему (проверка держит его своим слушателем), отпечаток DSH отвечает,
+    /// запись на ЭТОТ порт называет наш движок — значит сервер наш, и второй движок поднимать
+    /// нечего. Владение берётся по записи (погасить его будет чем), а "кто слушает" остаётся
+    /// неизвестным — и об этом говорится словами, а не "занят".
+    /// </summary>
+    [Fact]
+    public void Запись_называет_наш_движок_старт_не_говорит_занят()
+    {
+        const string engineDir = @"C:\Temp\dsh-own-home\engine";
+        var ownBin = OwnEngine.BinPath(engineDir, "0.2.0-rc.2");
+
+        using var holder = BusyPort(out var port);
+
+        var world = new World { Port = port, Listener = 0 };
+
+        var saved = new OwnServerRecord(port, 4242, Ticks, ownBin, "0.2.0-rc.2");
+        var files = new Files { Own = saved.Format(), EngineDir = engineDir };
+        var log = new List<string>();
+
+        using var controller = Controller(world, files, log: log);
+        var state = controller.Start(StartWait);
+
+        Assert.Equal(ServerOwner.Panel, controller.Owner);
+        Assert.False(state.IsRunning);
+        Assert.Equal(port, state.Port);
+        Assert.Equal(
+            string.Format(CultureInfo.InvariantCulture, PanelStrings.SrvListenerUnknownFormat, port),
+            state.Detail);
+
+        Assert.DoesNotContain(log, line => line.Contains("занят", StringComparison.OrdinalIgnoreCase));
+
+        // ЗАПИСЬ ЦЕЛА: владение взято по ней, и терять её нельзя.
+        Assert.Equal(saved.Format(), files.Own);
+        Assert.Equal(0, files.OwnClears);
+    }
+
+    /// <summary>
+    /// НЕТ ЗАПИСИ, А ПОРТ ЗАНЯТ СВОИМ ДВИЖКОМ — «ЗАПУСТИТЬ» ПРИНИМАЕТ ЕГО (DEF-074, §4.4).
+    ///
+    /// Порт держит проверка (по-настоящему), а слушающим назван процесс с командной строкой
+    /// НАШЕГО движка — того самого, который панель и ставила. Прежний `Start` в этот миг говорил
+    /// "порт занят" (или "наш движок уже работает — остановите"), а второй движок не поднимался
+    /// никогда: данные у него те же.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«убрать приём»** (будет отказ словами);
+    /// **«принимать без проверки пути движка»** (примет чужого — краснеет соседняя проверка
+    /// <see cref="Порт_занят_чужим_движком_старт_говорит_прежними_словами"/>).
+    /// </summary>
+    [Fact]
+    public void Нет_записи_а_порт_занят_своим_движком_старт_принимает_его()
+    {
+        const string engineDir = @"C:\Temp\dsh-own-home\engine";
+        var ownBin = OwnEngine.BinPath(engineDir, "0.2.0-rc.2");
+
+        using var holder = BusyPort(out var port);
+
+        var world = new World { Port = port, Listener = 5000, ListenerTicks = Ticks };
+        world.CommandLineTemplate = $"\"node.exe\" {ownBin} web --no-open --port ";
+
+        // ЗАПИСИ НЕТ ВОВСЕ: признание держится ТОЛЬКО на пути движка живого процесса.
+        var files = new Files { EngineDir = engineDir };
+        var log = new List<string>();
+
+        using var controller = Controller(world, files, log: log);
+        var state = controller.Start(StartWait);
+
+        Assert.Equal(ServerOwner.Panel, controller.Owner);
+        Assert.True(state.IsRunning);
+        Assert.Equal(port, state.Port);
+        Assert.Equal(5000, state.Pid);
+
+        // ВТОРОГО ДВИЖКА НЕТ: движка на машине проверки не ищется вовсе (`locateEngine` → null),
+        // и обычный ход сказал бы "сервер DSH не найден", а не "принят по пути".
+        Assert.Contains(log, line => line.Contains("ПО ПУТИ СЕРВЕРА DSH", StringComparison.Ordinal));
+        Assert.DoesNotContain(log, line => line.Contains("занят", StringComparison.OrdinalIgnoreCase));
+
+        // И запись теперь есть: следующий осмотр узнает сервер по ней, а не по догадке.
+        var written = OwnServerRecord.Parse(files.Own);
+
+        Assert.NotNull(written);
+        Assert.Equal(port, written!.Value.Port);
+        Assert.Equal(5000, written.Value.Pid);
+    }
+
+    /// <summary>
+    /// ЧУЖОЙ ДВИЖОК НА ПОРТУ — ПРЕЖНИЕ СЛОВА ОТКАЗА (DEF-074, §4.4).
+    ///
+    /// Примета владения одна: путь запуска. Чужая (глобальная) установка движка — не наша, и никакой
+    /// "приём" её не касается: панель по-прежнему не поднимает второй сервер на тех же данных и
+    /// говорит человеку то же, что говорила.
+    /// </summary>
+    [Fact]
+    public void Порт_занят_чужим_движком_старт_говорит_прежними_словами()
+    {
+        using var holder = BusyPort(out var port);
+
+        // Командная строка — ГЛОБАЛЬНАЯ установка (как у человека), своей папки движка нет вовсе.
+        var world = new World { Port = port, Listener = 5000, ListenerTicks = Ticks };
+
+        var files = new Files();
+        var log = new List<string>();
+
+        using var controller = Controller(world, files, log: log);
+        var state = controller.Start(StartWait);
+
+        Assert.Equal(ServerOwner.None, controller.Owner);
+        Assert.False(state.IsRunning);
+
+        // СЛОВА ОТКАЗА — прежние (второй сервер на тех же данных), а не "принят".
+        Assert.Contains(log, line => line.Contains("второй сервер", StringComparison.Ordinal));
+        Assert.DoesNotContain(log, line => line.Contains("ПО ПУТИ СЕРВЕРА DSH", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// ПОРТ ЗАНЯТ, А СЛУШАТЕЛЯ НЕТ — "ПОРТ СВОБОДЕН" НЕ ГОВОРИТСЯ (DEF-074, §4.5).
+    ///
+    /// Своего сервера уже нет (слушатель пропал и не отвечает), но порт держит кто-то, кто не
+    /// слушает (резерв системы, чужая служба): связать его панель не может. "Свободен" здесь —
+    /// ложь, из-за которой человек жмёт "Запустить" и получает непонятный отказ.
+    /// </summary>
+    [Fact]
+    public void Порт_занят_а_слушателя_нет_свободным_не_называется()
+    {
+        using var holder = BusyPort(out var port);
+
+        var world = new World { Port = port, Listener = 4242, ListenerTicks = Ticks };
+        var saved = new OwnServerRecord(port, 4242, Ticks);
+        var files = new Files { Own = saved.Format(), Entry = "http://127.0.0.1:" + port + "/?token=SECRET" };
+
+        using var controller = Controller(world, files);
+
+        // СНАЧАЛА СЕРВЕР УЗНАН по записи — иначе проверять нечего.
+        var first = controller.Refresh();
+
+        Assert.Equal(ServerOwner.Panel, controller.Owner);
+        Assert.True(first.IsRunning);
+
+        // СЛУШАТЕЛЬ ПРОПАЛ, НО ПОРТ ВСЁ ЕЩЁ ЗАНЯТ и не отвечает: это не "свободен".
+        world.Listener = 0;
+        world.Fingerprint = false;
+
+        var state = controller.Refresh();
+
+        Assert.Equal(ServerOwner.Panel, controller.Owner);
+        Assert.False(state.IsRunning);
+        Assert.Equal(port, state.Port);
+        Assert.Equal(
+            string.Format(CultureInfo.InvariantCulture, PanelStrings.SrvListenerUnknownFormat, port),
+            state.Detail);
+
+        // Запись и ссылка остаются: панель не объявила сервер ушедшим, она не знает, кто на порту.
+        Assert.Equal(saved.Format(), files.Own);
+        Assert.Equal(0, files.OwnClears);
+        Assert.Equal(0, files.EntryClears);
+    }
+
+    /// <summary>
+    /// ЗАНЯТЬ НАСТОЯЩИЙ ПОРТ ПЕТЛИ на время проверки.
+    ///
+    /// `Start` решает "занят или нет" СВЯЗЫВАНИЕМ (<see cref="FreePort.CanBind"/>), и подставить
+    /// этот ответ нечем — он спрашивает систему. Порт берётся у системы (связывание на 0), а не
+    /// назначается числом: 3080 и 3081 не занимаются никогда.
+    /// </summary>
+    private static TcpListener BusyPort(out int port)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+
+        listener.Start();
+
+        port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        return listener;
     }
 
     /// <summary>
@@ -1129,7 +1425,9 @@ public class OwnServerTests
     [Fact]
     public void Неубитая_запись_повторяется_с_паузой_а_не_каждую_секунду()
     {
-        var world = new World { Port = 3097, Listener = 0 };
+        // ПОРТ МОЛЧИТ (Fingerprint = false): речь о записи в мёртвый сервер, а не о живом порте,
+        // слушателя которого не удалось назвать (DEF-074, §4.2).
+        var world = new World { Port = 3097, Listener = 0, Fingerprint = false };
         var files = new Files
         {
             Own = new OwnServerRecord(3097, 4242, Ticks).Format(),
@@ -1174,7 +1472,8 @@ public class OwnServerTests
     [Fact]
     public void После_лимита_панель_говорит_словами_и_замолкает()
     {
-        var world = new World { Port = 3097, Listener = 0 };
+        // ПОРТ МОЛЧИТ (Fingerprint = false): запись в мёртвый сервер, а не живой порт без имени.
+        var world = new World { Port = 3097, Listener = 0, Fingerprint = false };
         var files = new Files
         {
             Own = new OwnServerRecord(3097, 4242, Ticks).Format(),
@@ -1236,7 +1535,8 @@ public class OwnServerTests
     [Fact]
     public void Убранная_запись_отказа_не_оставляет()
     {
-        var world = new World { Port = 3097, Listener = 0 };
+        // ПОРТ МОЛЧИТ (Fingerprint = false): запись в мёртвый сервер, а не живой порт без имени.
+        var world = new World { Port = 3097, Listener = 0, Fingerprint = false };
         var files = new Files
         {
             Own = new OwnServerRecord(3097, 4242, Ticks).Format(),

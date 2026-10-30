@@ -432,6 +432,11 @@ public sealed class ServerController : IServerControl, IDisposable
     private DateTimeOffset _forgetLastAt = DateTimeOffset.MinValue;
     private string _forgetRefusal = string.Empty;
 
+    // СЛОВА О НЕИЗВЕСТНОМ СЛУШАТЕЛЕ — ОДИН РАЗ НА ПОРТ (DEF-074). Осмотр идёт раз в секунду:
+    // без этой памяти одна и та же строка «не удалось узнать, кто слушает порт 3080» утопила бы
+    // журнал, а журнал читают, чтобы понять, что было на самом деле. Смена порта — новое событие.
+    private int _listenerUnknownLoggedPort;
+
     // Встроенный сервер: порт, номер процесса и время его создания. Время нужно, чтобы гашение
     // не попало в чужой процесс с тем же номером (номера переиспользуются).
     private int _adoptedPort;
@@ -700,7 +705,7 @@ public sealed class ServerController : IServerControl, IDisposable
             // СВОЙ СЕРВЕР, УЗНАННЫЙ ПО ЗАПИСИ, — ДО ветки запомненного согласия. Панель при выходе
             // сервер не гасит, и после перезапуска её собственный сервер выглядел бы «найденным
             // чужим»: панель предложила бы в него «встроиться», а «Остановить» отказывалась бы.
-            var restoredOwn = RestoreOwnServer();
+            var restoredOwn = RestoreOwnServer(out var listenerUnknownPort);
 
             // Согласие, запомненное человеком, панель восстанавливает САМА: он уже ответил один раз
             // (решение владельца 26.09.2026), и переспрашивать — значит не исполнять его ответ.
@@ -738,6 +743,10 @@ public sealed class ServerController : IServerControl, IDisposable
                 // Причина держится, пока верна, и гаснет вместе с записью.
                 if (_forgetRefusal.Length > 0) return State = ServerState.Stopped(0, _forgetRefusal);
 
+                // СВОЙ СЕРВЕР ПО ЗАПИСИ ЖИВ, А СЛУШАТЕЛЯ НЕ НАЗВАТЬ (DEF-074, §4.2). Сказать
+                // «порт свободен» здесь было бы ложью, а «ещё не запускался» — тем более.
+                if (listenerUnknownPort > 0) return State = ListenerUnknown(listenerUnknownPort);
+
                 return State = ServerState.Stopped(0, PanelStrings.SrvNotStartedYet);
             }
 
@@ -748,6 +757,24 @@ public sealed class ServerController : IServerControl, IDisposable
                 return State = new ServerState(
                     ServerPresence.Stopped, port, 0, string.Empty,
                     string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvListenerUnknownFormat, port));
+            }
+
+            // СЛУШАТЕЛЯ НЕ НАЗВАТЬ, А ПОРТ ЗАНЯТ ИЛИ ОТВЕЧАЕТ (DEF-074, §4.2 и §4.5).
+            //
+            // **От какого случая (живой 2.4.4).** Слушающая таблица отдавала живого слушателя
+            // с `dwState = 6` (корень — `PortTable`, уже поправлен), и панель оказывалась в мире,
+            // где «порт отвечает сервером DSH, но кто его слушает — неизвестно». Прежний код в этот
+            // миг объявлял сервер ушедшим (`ForgetRecordedOwnWithoutHandle` снимал запись И ссылку
+            // входа) либо говорил «порт свободен» — два самых неправдивых ответа из возможных.
+            //
+            // Честный ответ — назвать предел знания: «не удалось узнать, кто слушает порт N».
+            // Запись и ссылка остаются: сервер ЖИВ. Занятый порт (§4.5) сюда же: «свободен» можно
+            // говорить только о порте, который панель действительно может занять.
+            if (listener == 0
+                && (_probe.AnswersFingerprint(port) || !FreePort.CanBind(port, _mayOccupyOwnerPort)))
+            {
+                _engineStillStarting = false;
+                return State = ListenerUnknown(port);
             }
 
             // ПРИНЯТЫЙ ПО ЗАПИСИ СЕРВЕР, У КОТОРОГО НЕ ОТКРЫЛСЯ ДЕСКРИПТОР (DEF-057): выход
@@ -811,8 +838,15 @@ public sealed class ServerController : IServerControl, IDisposable
     /// чтобы не принять мгновенную пустоту порта сразу после принятия за смерть сервера
     /// (<see cref="ForgetRecordedOwnWithoutHandle"/>).
     /// </summary>
-    private bool RestoreOwnServer()
+    /// <param name="listenerUnknownPort">
+    /// Порт записи, слушателя которой назвать НЕ удалось, а порт при этом отвечает сервером DSH
+    /// (DEF-074, §4.2): запись и ссылка входа при этом НЕ снимаются, а вызывающий обязан сказать
+    /// человеку «не удалось узнать, кто слушает порт» — это не «свободен» и не «сервер ушёл».
+    /// </param>
+    private bool RestoreOwnServer(out int listenerUnknownPort)
     {
+        listenerUnknownPort = 0;
+
         if (Owner != ServerOwner.None || _port > 0) return false;
 
         var record = OwnServerRecord.Parse(ReadOwnServerFile());
@@ -822,13 +856,30 @@ public sealed class ServerController : IServerControl, IDisposable
 
         // «Не смог узнать» — НЕ то же самое, что «сервера нет»: запись не трогаем, врать нельзя.
         if (listener < 0) return false;
-
         // Чем поднят тот, кто СЕЙЧАС слушает порт: путь к bin.js из его командной строки.
         // Это третья примета владения (этап E3) — она не зависит ни от номера процесса,
         // ни от версии движка.
         var runningBin = listener > 0 ? OwnEngine.BinPathFromCommandLine(_probe.CommandLine(listener)) : string.Empty;
 
-        if (listener == 0 || listener != saved.Pid)
+        // СЛУШАТЕЛЯ НЕТ (DEF-074, §4.2). Запись снимается как прежде ТОЛЬКО если порт МОЛЧИТ.
+        // Порт, который ОТВЕЧАЕТ сервером DSH, может слушать НАШ же движок, которого мы не сумели
+        // назвать (живой 2.4.4: слушающая таблица отдавала его с `dwState = 6`). Снять в этот миг
+        // запись и ссылку входа — значит стереть единственное доказательство владения И адрес
+        // входа у ЖИВОГО сервера; ровно это и случилось 30.10.2026 (DEF-074).
+        if (listener == 0)
+        {
+            if (_probe.AnswersFingerprint(saved.Port))
+            {
+                listenerUnknownPort = saved.Port;
+                LogListenerUnknown(saved.Port);
+                return false;
+            }
+
+            ForgetStaleOwnRecord(saved);
+            return false;
+        }
+
+        if (listener != saved.Pid)
         {
             if (AdoptOwnEngineProcess(saved, listener, runningBin)) return true;
 
@@ -859,6 +910,111 @@ public sealed class ServerController : IServerControl, IDisposable
         _log(string.Format(
             CultureInfo.CurrentCulture, PanelStrings.SrvOwnServerRestoredLogFormat, _port, _ownPid));
 
+        return true;
+    }
+
+    /// <summary>
+    /// СОСТОЯНИЕ «НЕ УДАЛОСЬ УЗНАТЬ, КТО СЛУШАЕТ ПОРТ» (DEF-074, §4.2 и §4.5).
+    ///
+    /// Отдельно от «порт свободен» и от «сервер не запущен»: оба этих ответа — утверждения, а панель
+    /// в этот миг знает только то, что порт ОТВЕЧАЕТ сервером DSH или занят. Врать человеку нельзя
+    /// ни в одну сторону, а журнал и шарик говорят одно и то же.
+    /// </summary>
+    private static ServerState ListenerUnknown(int port) =>
+        new(ServerPresence.Stopped, port, 0, string.Empty,
+            string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvListenerUnknownFormat, port));
+
+    /// <summary>
+    /// СЛОВА О НЕИЗВЕСТНОМ СЛУШАТЕЛЕ — ОДИН РАЗ НА ПОРТ.
+    ///
+    /// Осмотр идёт раз в секунду, и без этой памяти одна и та же строка утопила бы журнал.
+    /// Смена порта — новое событие, и о ней сказать снова есть что.
+    /// </summary>
+    private void LogListenerUnknown(int port)
+    {
+        if (_listenerUnknownLoggedPort == port) return;
+
+        _listenerUnknownLoggedPort = port;
+
+        _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvListenerUnknownFormat, port));
+    }
+
+    /// <summary>
+    /// ПРИЗНАТЬ СВОИМ СЕРВЕР, КОТОРЫЙ УЖЕ СТОИТ НА ПОРТУ, КОТОРЫЙ ПАНЕЛЬ СОБИРАЕТСЯ ЗАНЯТЬ
+    /// (DEF-074, §4.4). <c>false</c> — принимать нечего, обычный запуск идёт своим чередом;
+    /// <c>true</c> — сервер наш, и второй движок не поднимается.
+    ///
+    /// **От какого случая (живой 2.4.4, 30.10.2026).** «Запустить» на порту, где уже работал СВОЙ же
+    /// сервер, отвечало «порт занят»: человеку — отказ в сервере, который работает. Между тем примет
+    /// владения две, и обе живут без живой записи: путь запуска слушающего процесса в НАШЕЙ папке
+    /// движка (<see cref="OwnEngine.IsOwnBinPath"/>) и запись, которая САМА называет наш движок
+    /// (<see cref="OwnServerRecord.NamesOwnEngine"/>).
+    ///
+    /// **Чего здесь НЕЛЬЗЯ.** Присвоить чужой процесс: путь вне нашей папки движка не принимается
+    /// ни по записи, ни без неё, а без отпечатка сервера DSH не принимается вообще ничего (процесс
+    /// без ответа — не сервер, а занятая программа, и слова о ней — прежние). Запись принимается
+    /// только про ЭТОТ порт, только когда она называет НАШ движок и либо указывает на того же
+    /// слушателя, либо слушателя назвать не удалось — иначе у панели не осталось бы никакого способа
+    /// признать свой же погашенный-и-поднятый сервер, а запись снималась бы как «устаревшая».
+    ///
+    /// Состояние собирает обычный <see cref="Refresh"/>: второго сборщика не заводится. Если
+    /// слушателя назвать не удалось, честный ответ — «не удалось узнать, кто слушает порт N»;
+    /// но владение уже взято, второй движок не поднимается, запись и ссылка входа целы.
+    /// </summary>
+    private bool TryAdoptBusyOwnPort(int port, out ServerState state)
+    {
+        state = State;
+
+        // Свободный порт — принимать нечего: дальше обычный запуск.
+        if (FreePort.CanBind(port, _mayOccupyOwnerPort)) return false;
+
+        var listener = _probe.ListenerPid(port);
+
+        // «Не смог узнать» — не повод ни присвоить, ни отказать: откажет обычный ход ниже.
+        if (listener < 0) return false;
+
+        var engineDir = _ownEngineDir();
+
+        var runningBin = listener > 0
+            ? OwnEngine.BinPathFromCommandLine(_probe.CommandLine(listener))
+            : string.Empty;
+
+        var saved = OwnServerRecord.Parse(ReadOwnServerFile());
+        var record = saved is { } value && value.Port == port ? value : (OwnServerRecord?)null;
+
+        var processIsOurs = listener > 0 && OwnEngine.IsOwnBinPath(runningBin, engineDir);
+        var recordNamesOurs = record?.NamesOwnEngine(engineDir) == true;
+        var recordPointsAtListener = recordNamesOurs && listener > 0 && record!.Value.Pid == listener;
+        var recordInsteadOfListener = recordNamesOurs && listener == 0;
+
+        if (!processIsOurs && !recordPointsAtListener && !recordInsteadOfListener) return false;
+
+        // Без отпечатка сервера DSH на порту говорить «наш сервер» нечем: молчание — не согласие.
+        if (!_probe.AnswersFingerprint(port)) return false;
+
+        var pid = listener > 0 ? listener : record!.Value.Pid;
+        var ticks = listener > 0 ? _probe.StartTicks(listener) : record!.Value.StartTicks;
+        var enginePath = runningBin.Length > 0 ? runningBin : record?.EnginePath ?? string.Empty;
+
+        _port = port;
+        _ownPid = pid;
+        _ownEnginePath = enginePath;
+        Owner = ServerOwner.Panel;
+
+        // Запись приводим в порядок ТОЙ ЖЕ рукой, что и при запуске: следующий перезапуск панели
+        // не должен снова упереться в «номер не тот». Запись НЕ снимается ни в одной ветке.
+        if (listener > 0 && ticks > 0) PersistOwnRecord(OwnEngine.Record(port, pid, ticks, runningBin));
+
+        WatchRecordedOwn(pid, ticks);
+
+        _log(string.Format(
+            CultureInfo.CurrentCulture,
+            PanelStrings.SrvOwnServerRestoredByEngineLogFormat,
+            _port,
+            _ownPid,
+            Shell.DisplayMask.Path(enginePath)));
+
+        state = Refresh();
         return true;
     }
 
@@ -1541,6 +1697,25 @@ public sealed class ServerController : IServerControl, IDisposable
             // сервер из находки — на замок ниже он не попал бы вовсе.
             if (Owner == ServerOwner.Adopted) return Refresh();
 
+            // ПРИЗНАТЬ СВОИМ — ПРЕЖДЕ ОТКАЗА И ПРЕЖДЕ ЗАМКА ОТ ВТОРОГО ДВИЖКА (DEF-074, §4.4).
+            //
+            // **От какого случая (живой 2.4.4, 30.10.2026).** Свой сервер работал на 3080, а панель
+            // не могла узнать его слушателя (корень — `PortTable`: `dwState = 6` вместо 2). Дальше
+            // `Start` шёл обычным ходом, видел занятый порт и отказывал «порт 3080 занят» — в СВОЙ же
+            // сервер. Человек в этот миг видел отказ в сервере, который работает.
+            //
+            // Право занять порт владельца приходит ЯВНО (<c>mayOccupyOwnerPort</c>) и решает ЗДЕСЬ:
+            // у обычного запуска 3080 остаётся собой (решение владельца 26.09.2026), у прогона
+            // проверки приводится к 3081 — и тогда на 3080 панель не покушается вовсе.
+            var requested = _requestedPort();
+            var port = ServerDecisions.NormalizePort(requested, _mayOccupyOwnerPort);
+
+            if (TryAdoptBusyOwnPort(port, out var adoptedOwn))
+            {
+                _startRefusal = string.Empty;
+                return adoptedOwn;
+            }
+
             // ЗАМОК ОТ ВТОРОГО ДВИЖКА (находка 25.09.2026). Найденный работающий DSH — это, как
             // правило, сервер самого человека, и данные у него те же самые (`~/.dsh`): движок
             // при старте перезаписывает `profiles/web/cordis.yml`, а в профиле стоит
@@ -1574,18 +1749,13 @@ public sealed class ServerController : IServerControl, IDisposable
             // иначе после обновления движка панель не скажет, что именно работает.
             _ownEnginePath = engine.BinPath;
 
-            var requested = _requestedPort();
-
-            // Право занять порт владельца приходит ЯВНО (<c>mayOccupyOwnerPort</c>), и здесь оно
-            // и решает: у обычного запуска человеком 3080 остаётся собой (решение владельца
-            // 26.09.2026 — 2.0 встаёт на место 1.x), у прогона проверки приводится к 3081.
-            var port = ServerDecisions.NormalizePort(requested, _mayOccupyOwnerPort);
             if (port != requested)
                 _log(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvPortReplacedLogFormat, requested, port));
 
-            // Порт, который прямо сейчас нельзя занять, движку не подойдёт: он упадёт с EADDRINUSE
-            // и не переселится (docs\ENGINE.md §5). Молча съехать на другой порт нельзя тем более:
-            // человек ищет свой сервер по адресу, и «вроде порт тот, а сервера нет» — хуже отказа.
+            // Порт, который нельзя занять и СВОИМ не оказался, движку не подойдёт: он упадёт
+            // с EADDRINUSE и не переселится (docs\ENGINE.md §5). Молча съехать на другой порт
+            // нельзя тем более: человек ищет свой сервер по адресу, и «вроде порт тот, а сервера
+            // нет» — хуже отказа. Чужой занявший порт — прежние слова отказа (DEF-074, §4.4).
             if (!FreePort.CanBind(port, _mayOccupyOwnerPort))
             {
                 return Fail(string.Format(CultureInfo.CurrentCulture, PanelStrings.SrvPortBusyStartFormat, port));

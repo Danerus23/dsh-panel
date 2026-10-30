@@ -98,9 +98,13 @@ public sealed class PhoneGateTests
             Paths = AppPaths.Under(root);
             Port = port ?? FreeLoopbackPort();
             EventDoors = events;
+            // АДРЕС — СВОЙСТВО, А НЕ ЗАХВАЧЕННОЕ ЗНАЧЕНИЕ. Человек меняет адрес в разделе
+            // «Телефон» и сразу жмёт «сохранить» — калитка читает адрес заново, и проверка переезда
+            // (DEF-069) должна уметь сделать то же самое: поменять адрес у ЖИВОЙ калитки.
+            AddressValue = address ?? string.Empty;
 
             Doors = new PhoneGateDoors(
-                () => address ?? string.Empty,
+                () => AddressValue,
                 Port,
                 Engine,
                 passFiles ?? PhonePassFiles.Under(Paths, Log.Add),
@@ -119,6 +123,9 @@ public sealed class PhoneGateTests
         }
 
         public AppPaths Paths { get; }
+
+        /// <summary>АДРЕС, НА КОТОРОМ КАЛИТКА ВСТАНЕТ: его читает сама калитка при каждом запуске.</summary>
+        public string AddressValue { get; set; }
 
         public int Port { get; }
 
@@ -733,6 +740,111 @@ public sealed class PhoneGateTests
         Assert.False(stand.Gate.Listening);
         Assert.True(CanBind(stand.Port), $"порт {stand.Port} не освободился после остановки калитки");
         Assert.Contains(stand.Log, line => line.Contains("закрыто", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// ПОВТОРНЫЙ START НЕ ЛОМАЕТ ОТКРЫТУЮ ДВЕРЬ (DEF-069).
+    ///
+    /// **От какого случая (живой 2.4.4).** В журнале: «23:54:20 … открыто на …:43127», а через
+    /// пять секунд «порт 43127 занят» — и после этого ЛЮБОЙ `Host` получал 403 (`.71`, `localhost`,
+    /// `127.0.0.1`, соседние адреса — все). `Start` во второй раз связывал тот же порт, ловил
+    /// `SocketException` и обнулял `_own`, хотя прежний слушатель был ЖИВ. Страница телефона не
+    /// открывалась; лечил только перезапуск панели.
+    ///
+    /// **Что требуется.** Второй `Start` при живой двери: `Opened = true`, ровно ОДНА подписка
+    /// (второго `accept`-цикла быть не может — порт один), имя двери цело — и это доказывается
+    /// ЖИВЫМ запросом `GET /` → 200, а не 403.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«обнулить `_own` на занятом порту»** (старое тело
+    /// `catch` — тогда второй `Start` говорит «занято», а `GET /` отвечает 403) и **«завести на
+    /// повтор вторую подписку»** (число открытий подписки станет 2).
+    /// </summary>
+    [Fact]
+    public async Task Повторный_Start_идемпотентен_и_дверь_не_теряется()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+
+        Assert.True(Started(stand));
+        Assert.Equal(1, events.Opens);
+
+        // ПЕРВЫЙ ОТВЕТ — чтобы второй сравнивался не с пустотой, а с работающей дверью.
+        Assert.Equal(200, (await Send(stand.Http, HttpMethod.Get, "/")).Status);
+
+        // ВТОРОЙ Start — ровно то, что делает раздел «Телефон» при сохранении настроек.
+        var again = stand.Gate.Start();
+
+        Assert.True(again.Opened, "повторный Start при живой двери сказал «не открыто»: " + again.Text);
+        Assert.Contains(
+            stand.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            again.Text,
+            StringComparison.Ordinal);
+
+        // ДВЕРЬ ЦЕЛА — и это проверяется ЖИВЫМ запросом, а не полем: сверка двери берёт `_own`,
+        // и обнулённое имя двери отвечает 403 на верном адресе (ровно дефект 2.4.4).
+        Assert.Equal(200, (await Send(stand.Http, HttpMethod.Get, "/")).Status);
+        Assert.True(stand.Gate.Listening);
+
+        // НИ ВТОРОЙ ПОДПИСКИ, НИ ВТОРОГО СЛУШАТЕЛЯ: повтор ничего не заводит.
+        Assert.Equal(1, events.Opens);
+
+        stand.Gate.Stop();
+
+        Assert.False(stand.Gate.Listening);
+        Assert.True(CanBind(stand.Port), $"порт {stand.Port} не освободился: повтор завёл вторую дверь");
+    }
+
+    /// <summary>
+    /// СМЕНА АДРЕСА ПРИ ЖИВОЙ ДВЕРИ — ПЕРЕЕЗД, А НЕ ВТОРАЯ ДВЕРЬ (DEF-069).
+    ///
+    /// Раздел «Телефон» даёт сменить адрес и сразу зовёт `Start`. Связывать новый адрес ПОВЕРХ
+    /// прежнего слушателя нельзя: прежний остался бы открытым — с чужим для него именем двери
+    /// (403 своему же телефону), — а `Stop` погасил бы только новый. Поэтому дверь на другом
+    /// адресе сначала закрывается, и открыта ровно одна — на том адресе, который человек видит.
+    ///
+    /// Мутации, которые обязаны упасть здесь: **«не закрывать прежнюю дверь при переезде»** (тогда
+    /// `127.0.0.1` продолжает принимать — проверка последнего соединения краснеет), и **«считать
+    /// переездом любой повтор»** — тогда повтор на том же адресе завёл бы вторую подписку и уронил
+    /// `Повторный_Start_идемпотентен_и_дверь_не_теряется`.
+    /// </summary>
+    [Fact]
+    public async Task Смена_адреса_при_живой_двери_переоткрывает_её()
+    {
+        var events = new FakeEvents();
+
+        using var stand = NewStand(events: events.Doors);
+
+        Assert.True(Started(stand));
+        Assert.Equal(200, (await Send(stand.Http, HttpMethod.Get, "/")).Status);
+
+        // ЧЕЛОВЕК СМЕНИЛ АДРЕС В РАЗДЕЛЕ И НАЖАЛ «СОХРАНИТЬ»: дверь читает адрес заново.
+        stand.AddressValue = "127.0.0.2";
+
+        var moved = stand.Gate.Start();
+
+        Assert.True(moved.Opened, "дверь на новом адресе не открылась: " + moved.Text);
+        Assert.Equal("127.0.0.2", stand.BoundTo);
+
+        // НОВАЯ ДВЕРЬ ОТВЕЧАЕТ: своё имя двери — новый адрес.
+        // `UseProxy = false` — чтобы проверка не зависела от прокси машины: 127.0.0.2 — петля,
+        // но настроенный системный прокси мог бы увести запрос мимо калитки.
+        using var movedDoor = new HttpClient(
+            new HttpClientHandler { UseCookies = false, AllowAutoRedirect = false, UseProxy = false })
+        {
+            BaseAddress = new Uri("http://127.0.0.2:" + stand.Port + "/"),
+            Timeout = TimeSpan.FromSeconds(20),
+        };
+
+        Assert.Equal(200, (await Send(movedDoor, HttpMethod.Get, "/")).Status);
+
+        // ПРЕЖНЯЯ ДВЕРЬ ЗАКРЫТА, а не оставлена вторым слушателем: соединение не устанавливается.
+        await Assert.ThrowsAnyAsync<SocketException>(async () =>
+        {
+            using var client = new TcpClient();
+
+            await client.ConnectAsync(IPAddress.Loopback, stand.Port, TestContext.Current.CancellationToken);
+        });
     }
 
     // ---- страница входа --------------------------------------------------------------------
@@ -2946,11 +3058,19 @@ public sealed class PhoneGateTests
         var gate = UiThreadTests.WithoutComments(
             File.ReadAllText(Path.Combine(source, "Server", "PhoneGate.cs")));
 
+        // С DEF-069 запуск разделён: `Start` держит замок, проверки и связывание — в `Open`.
+        // Право по-прежнему спрашивается ВНУТРИ запуска — проверяется по телу `Open`, а `Start`
+        // обязан делегировать именно туда (иначе «Start обходит право» вернулся бы, не тронув проверку).
         var start = WindowlessTests.BodyAt(gate, "public PhoneGateStart Start(");
 
         Assert.False(string.IsNullOrWhiteSpace(start), "тело запуска калитки не найдено — проверять нечего");
-        Assert.Contains("RunRights.MayOpenPhoneGate", start, StringComparison.Ordinal);
-        Assert.Contains("PortForbidden", start, StringComparison.Ordinal);
+        Assert.Contains("Open()", start, StringComparison.Ordinal);
+
+        var open = WindowlessTests.BodyAt(gate, "private PhoneGateStart Open(");
+
+        Assert.False(string.IsNullOrWhiteSpace(open), "тело самого запуска не найдено — проверять нечего");
+        Assert.Contains("RunRights.MayOpenPhoneGate", open, StringComparison.Ordinal);
+        Assert.Contains("PortForbidden", open, StringComparison.Ordinal);
 
         // (2) и (3) — по исходникам панели.
         var files = Directory

@@ -2,6 +2,34 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.4.5 - 2026-10-30
+
+**A patch: the panel no longer loses its own server, and the phone gate survives a repeated
+opening. No new capabilities.** A server was running on 3080; the panel treated its record as
+stale, removed it together with the saved entry link, and "Start" answered "port 3080 is busy".
+Now the panel recognises its own server by the live port, leaves the record and the entry link
+alone, "Start" returns the running server, and when the listener cannot be named it says so.
+The version is in "About": it says **2.4.5**.
+
+* **The panel does not lose its own server:** it no longer drops a live port listener because of
+  the state field of the port table — for a running DSH server that field came with a value we did
+  not expect, and the panel found no listener at all. Now it does.
+* **The record of the panel's own server and the saved entry link stay in place** while the port
+  answers as a DSH server: "stale — removed" no longer erases the proof of ownership and the
+  entry address of a live server.
+* **"Start" over a running own server adopts it:** no second engine is spawned, there is no
+  "port 3080 is busy" refusal, and the panel shows the running server. A foreign process on the
+  port is refused with the same words as before, and is never adopted.
+* **When the listener cannot be named, the panel says exactly that:** "could not find out who is
+  listening on port 3080" — instead of "the port is free" and instead of "the server is gone".
+  The log gets one such line per port, not one per second.
+* **The phone gate survives a repeated start:** a second start no longer clears the door address,
+  the phone page answers 200 (it used to answer 403 with its own address), and there is one
+  subscription; changing the address reopens the door, and a pending question is dropped at that
+  moment — the named behaviour.
+* Internal: "is this row a listener?" is a pure function with its own tests; the state field of
+  the table row takes no part in the decision.
+
 ## 2.4.4 - 2026-10-29
 
 **Three live defects — the phone entry and two windows — plus a build fix. No new capabilities.**
