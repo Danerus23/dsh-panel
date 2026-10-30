@@ -64,10 +64,10 @@ AppsAndFeaturesEntries:
 # Both are rewritten by tools\winget-manifest.ps1 (offline, idempotent); the sum taken from the
 # local sums file is a PRE-RELEASE stand-in and must be refilled from the release assets after the
 # release (docs\RELEASE-V2.md §3 п. 10б), before the announcement.
-ReleaseDate: 2026-10-25
+ReleaseDate: 2026-10-30
 Installers:
 - Architecture: x64
   InstallerUrl: https://github.com/Danerus23/dsh-panel/releases/download/v2.4.5/dsh-panel-setup.exe
-  InstallerSha256: B6A7E1BC26DE170A32E98EFDDF654DFCF6E07FB872703A95E57C1F8E2ABEF4A3
+  InstallerSha256: 78A7F76E44EA6FA51D28963DAA69C17E4659DA63052DA006E97455BF49FE1FD6
 ManifestType: installer
 ManifestVersion: 1.12.0
