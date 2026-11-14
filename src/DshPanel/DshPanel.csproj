@@ -34,7 +34,7 @@
 
     <AssemblyName>DshPanel</AssemblyName>
     <RootNamespace>DshPanel</RootNamespace>
-    <Version>2.4.5</Version>
+    <Version>2.5.0</Version>
     <Product>DSH Panel</Product>
   </PropertyGroup>
 
@@ -92,6 +92,15 @@
     -->
     <EmbeddedResource Include="..\..\engine-lock.json" Link="Server/engine-lock.json" LogicalName="DshPanel.Server.EngineTreeLock.json" />
     <EmbeddedResource Include="..\..\engine-lock-0.2.1-rc.2.json" Link="Server/engine-lock-0.2.1-rc.2.json" LogicalName="DshPanel.Server.EngineTreeLock.0.2.1-rc.2.json" />
+    <!--
+      ПУЛЬТ S1+S2 — ВНУТРИ EXE (`src\DshPanel\WebAssets`, собирается из `src\web`).
+      Имена ресурсов заданы ЯВНО: `PhoneWeb` ищет их по точному имени, а имя из пути точками
+      ломается от переименования папки. Оболочка и карта ассетов — по одной; файлы ассетов —
+      с префиксом `DshPanel.WebAssets.assets.`.
+    -->
+    <EmbeddedResource Include="WebAssets\shell.html" LogicalName="DshPanel.WebAssets.shell.html" />
+    <EmbeddedResource Include="WebAssets\assets.json" LogicalName="DshPanel.WebAssets.assets.json" />
+    <EmbeddedResource Include="WebAssets\assets\**\*" LogicalName="DshPanel.WebAssets.assets.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

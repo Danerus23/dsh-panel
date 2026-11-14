@@ -521,6 +521,50 @@ public static class PhoneDecisions
     public const string SessionListEndpoint = "session/list";
 
     /// <summary>
+    /// ДОГОН ЛЕНТЫ ВВЕРХ — одиночный вызов белого списка (следующий шаг собирает по нему
+    /// телефонный ответ). Имя стоит здесь ОДНИМ местом по той же причине, что у списка и отмены.
+    /// </summary>
+    public const string SessionPageEndpoint = "session/page";
+
+    /// <summary>
+    /// ЖИВАЯ ЛЕНТА — ПОТОК. Имя уже в белом списке; S1 открывает его ЧТЕНИЕМ своей дверью
+    /// <c>/api/phone/live</c>, а не сырым запросом телефона (поток одиночным POST не зовётся).
+    /// </summary>
+    public const string SessionFollowEndpoint = "session/follow";
+
+    /// <summary>
+    /// ЖИВОЕ СОСТОЯНИЕ СЕССИИ — ПОТОК. Его открывает дверь очереди S3
+    /// (<c>GET /api/phone/queue</c>): очередь лежит в проекции <c>inbox</c> первого кадра
+    /// <c>baseline</c> (контракт S3 §0.1, §5.1). Имя стоит здесь ОДНИМ местом по той же причине,
+    /// что у списка и отмены: дверь и белый список не должны разойтись.
+    /// </summary>
+    public const string SessionControlEndpoint = "session/control";
+
+    /// <summary>
+    /// АРХИВ РАБОЧИХ ПРОСТРАНСТВ — ПОТОК, и это 14-е имя белого списка (слово владельца
+    /// 11.11.2026, `<c>_team\s3e\owner-slovo-14-2026-11-11.md</c>`).
+    ///
+    /// **Зачем.** Движок не отдаёт архив унарно: `workspace/follow` — единственный его источник
+    /// (замер R1 §1.1, §6.1). Калитка берёт из первого кадра <c>baseline</c> РОВНО
+    /// <c>archivedSessionIds</c> и вычитает их из списка сессий на телефоне; `items[].path`,
+    /// `title`, `sessionIds` и `pinnedSessionIds` наружу не выходят НИКОГДА (R1 §1.2).
+    ///
+    /// ⚠️ **Имя открыто ТОЛЬКО НА ЧТЕНИЕ и только калитке.** Двери записи нет: телефон это имя
+    /// сырым POST не зовёт (поток одиночным POST не зовётся — отказ словами), а кадры потока
+    /// телефону не пересылаются вовсе — наружу уходит лишь результат фильтра.
+    /// </summary>
+    public const string WorkspaceFollowEndpoint = "workspace/follow";
+
+    /// <summary>СОЗДАТЬ РАЗГОВОР — вызов двери D2 (<c>POST /api/phone/new</c>), контракт S3 §3.2.</summary>
+    public const string SessionCreateEndpoint = "session/create";
+
+    /// <summary>ПОСТАВИТЬ ЗАДАЧУ — вызов двери D1 (§2.2) и второй вызов D2. Идемпотентен по <c>requestId</c>.</summary>
+    public const string SessionPromptEndpoint = "session/prompt";
+
+    /// <summary>ОЧЕРЕДЬ СЕССИИ — вызов двери D5 (<c>action.kind=remove</c>), контракт S3 §6.2.</summary>
+    public const string SessionQueueEndpoint = "session/updateQueue";
+
+    /// <summary>
     /// ЧТО ТЕЛЕФОНУ МОЖНО — ЗАКРЕПЛЁННЫЙ СПИСОК, ОДНО МЕСТО НА ВСЮ ПАНЕЛЬ.
     ///
     /// **Это не «мост наружу», а белый список, и разница принципиальна.** У движка без входа
@@ -532,8 +576,12 @@ public static class PhoneDecisions
     /// Чего здесь нет и почему:
     ///
     ///   * **всё, что трогает настройки, ключи и профиль движка** (`settings/*`, `credentials/*`,
-    ///     `workspace/*`, `directoryPicker/createDirectory|pick`, `goals/*`, `subagents/*`) — телефон
+    ///     `directoryPicker/createDirectory|pick`, `goals/*`, `subagents/*`) — телефон
     ///     не имеет дела ни с ключом модели, ни с профилем (решение владельца: ключ ему не нужен);
+    ///     ⚠️ **единственное имя семейства `workspace/` открыто — `workspace/follow`, и только
+    ///     на чтение** (слово владельца 11.11.2026): из него берётся один `archivedSessionIds`
+    ///     для фильтра архива в калитке, а `workspace/create|rename|delete|pick` и прочие
+    ///     мутации остаются закрытыми. Открытое имя стоит в списке ниже и проверяется тестом;
     ///   * **`fileUploads/upload` и `session/attachment`** — вложение с телефона это отдельное
     ///     решение и отдельный шаг, а не побочный эффект белого списка;
     ///   * **`llm/discoverModels`** — он ходит в сеть;
@@ -547,13 +595,16 @@ public static class PhoneDecisions
     public static IReadOnlyList<PhoneCall> Allowed { get; } = new[]
     {
         new PhoneCall(SessionListEndpoint, EngineRpcMode.Unary, ArgumentSessionList),
-        new PhoneCall("session/page", EngineRpcMode.Unary, ArgumentRequest),
-        new PhoneCall("session/follow", EngineRpcMode.Stream, ArgumentRequest),
-        new PhoneCall("session/control", EngineRpcMode.Stream, ArgumentRequest),
-        new PhoneCall("session/create", EngineRpcMode.Unary, ArgumentRequest),
-        new PhoneCall("session/prompt", EngineRpcMode.Unary, ArgumentRequest),
+        new PhoneCall(SessionPageEndpoint, EngineRpcMode.Unary, ArgumentRequest),
+        new PhoneCall(SessionFollowEndpoint, EngineRpcMode.Stream, ArgumentRequest),
+        new PhoneCall(SessionCreateEndpoint, EngineRpcMode.Unary, ArgumentRequest),
+        new PhoneCall(SessionPromptEndpoint, EngineRpcMode.Unary, ArgumentRequest),
         new PhoneCall(SessionCancelEndpoint, EngineRpcMode.Unary, ArgumentRequest),
-        new PhoneCall("session/updateQueue", EngineRpcMode.Unary, ArgumentRequest),
+        new PhoneCall(SessionQueueEndpoint, EngineRpcMode.Unary, ArgumentRequest),
+        new PhoneCall(SessionControlEndpoint, EngineRpcMode.Stream, ArgumentRequest),
+        // 14-е имя — только чтение архива рабочих пространств (слово владельца 11.11.2026).
+        // Доводов у потока нет вовсе: калитка передаёт пустые (`{}`) — это замер R1 §1.1.
+        new PhoneCall(WorkspaceFollowEndpoint, EngineRpcMode.Stream, string.Empty),
         new PhoneCall("session/modelCatalog", EngineRpcMode.Unary, ArgumentRequest),
         new PhoneCall("directoryPicker/list", EngineRpcMode.Unary, ArgumentRequest),
         new PhoneCall("agentPresets/list", EngineRpcMode.Unary, ArgumentRequest),

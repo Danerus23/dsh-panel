@@ -496,6 +496,39 @@ public class LocalizationTests
         }
     }
 
+    /// <summary>
+    /// Слова итога вопроса — СЛОВО ВЛАДЕЛЬЦА 11.11.2026 (D1 §7): на приёмке прежняя строка
+    /// («тот, кто взял вопрос» / «агент его снял») прочиталась как пугающая и неточная — вопрос
+    /// ответили на компьютере. Проверка сторожит точные тексты трёх языков: слово живёт в словарях,
+    /// а не в коде, и без него экран показал бы имя ключа либо старый текст.
+    /// </summary>
+    [Fact]
+    public void Слова_итога_вопроса_новые_во_всех_трёх_языках()
+    {
+        Assert.Equal(
+            "Вопрос уже отвечен на компьютере — ничего делать не нужно.",
+            Loc.TIn("ru", nameof(PanelStrings.PhonePageTaken)));
+        Assert.Equal(
+            "The question has already been answered on the computer — nothing to do.",
+            Loc.TIn("en", nameof(PanelStrings.PhonePageTaken)));
+        Assert.Equal(
+            "该问题已在电脑上回答——无需任何操作。",
+            Loc.TIn("zh", nameof(PanelStrings.PhonePageTaken)));
+    }
+
+    [Fact]
+    public void Новый_ключ_верхней_кнопки_есть_во_всех_трёх_языках()
+    {
+        // D1 §9: ОДИН новый ключ fix-захода — имя верхней кнопки пары «вверх/вниз».
+        // Ключ без языка валит проверку — это и есть «реализуемо».
+        foreach (var language in Loc.Known)
+        {
+            Assert.NotEqual(
+                nameof(PanelStrings.PhoneWebToTop),
+                Loc.TIn(language, nameof(PanelStrings.PhoneWebToTop)));
+        }
+    }
+
     [Fact]
     public void Заголовки_окон_берутся_из_строк()
     {

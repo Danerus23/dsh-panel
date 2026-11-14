@@ -258,89 +258,80 @@ public class ShotWiringTests
     }
 
     /// <summary>
-    /// КАДР ДОКУМЕНТАЦИИ НАЗЫВАЕТ ДАТЫ ВЫПУСКА, А НЕ ВЫДУМАННЫЕ (t13, 18.10.2026).
+    /// КАДР ДОКУМЕНТАЦИИ НАЗЫВАЕТ ДАТЫ ВЫПУСКА, А НЕ ВЫДУМАННЫЕ (t13, 18.10.2026;
+    /// редакция 2.5.0 — t23, 14.11.2026).
     ///
     /// **От какого случая.** Владелец увидел на витрине «Выпущен: 27.09.2026» и «проверено
     /// 28.09.2026», а выпуск 2.1.0 вышел **17.10.2026**. Прежняя проверка кадров считала ЦВЕТА
     /// («кадр не белый лист»), и кадр с неверной датой был для неё так же зелен, как с верной:
     /// число цветов про СМЫСЛ текста не говорит ничего.
     ///
-    /// **Что проверяется.** Текст СОБРАННОГО окна кадра «Обновление»: в нём обе даты — 17.10.2026
-    /// (выпуск) и 18.10.2026 (проверка) — и НЕТ прежних 27.09.2026 / 28.09.2026.
+    /// **Что проверяется.** Текст СОБРАННОГО окна кадра «Обновление»: дата выпуска 14.11.2026
+    /// и версия 2.5.0; прежних дат (24.10.2026, 27.09.2026) и прежней версии 2.4.0 в нём НЕТ.
     ///
-    /// ⚠️ Даты сверяются ЛИТЕРАЛАМИ, а не константами образцовой двери: проверка о том, что видит
-    /// ЧЕЛОВЕК, и «ожидание = источник» осталось бы зелёным после правки самого источника —
-    /// то есть не поймало бы ровно тот дефект, ради которого заведено.
+    /// ⚠️ Даты и номер сверяются ЛИТЕРАЛАМИ, а не константами образцовой двери: проверка о том,
+    /// что видит ЧЕЛОВЕК, и «ожидание = источник» осталось бы зелёным после правки самого
+    /// источника — то есть не поймало бы ровно тот дефект, ради которого заведено.
     ///
-    /// **Мутации, которые обязаны упасть:** вернуть `"2026-09-27T10:00:00Z"` в `ShotUpdateControl`
-    /// (дата выпуска снова 27.09) · вернуть 28.09.2026 датой проверки в `ShotUpdateControl.For()`.
+    /// **Мутации, которые обязаны упасть:** вернуть `"2026-10-24T10:00:00Z"` в `ShotSamples`
+    /// (дата выпуска снова 24.10) · вернуть 2.4.0 версией образцового выпуска.
     /// </summary>
     [AvaloniaFact]
-    public void Кадр_обновления_называет_даты_выпуска_2_4_0()
+    public void Кадр_обновления_называет_даты_выпуска_2_5_0()
     {
-        var text = ShowAndRead(StartModes.ShotSettingsUpdate, "24.10.2026");
+        var text = ShowAndRead(StartModes.ShotSettingsUpdate, "14.11.2026");
 
-        // U16 (2.4.0): витрина называет СВОЙ выпуск — 2.4.0, дата 24.10.2026, проверка та же.
-        Assert.Contains("24.10.2026", text, StringComparison.Ordinal);
-        Assert.Contains("2.4.0", text, StringComparison.Ordinal);
+        Assert.Contains("14.11.2026", text, StringComparison.Ordinal);
+        Assert.Contains("2.5.0", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("24.10.2026", text, StringComparison.Ordinal);
         Assert.DoesNotContain("27.09.2026", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("28.09.2026", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("18.10.2026", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("2.4.0", text, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// КАДРЫ ОБНОВЛЕНИЯ ПОКАЗЫВАЮТ «ЕСТЬ НОВЕЕ», А НЕ «ОБНОВЛЯТЬСЯ НЕ НУЖНО» (DEF-009, 2.4.1).
+    /// КАДРЫ ОБНОВЛЕНИЯ НАЗЫВАЮТ ТУ ЖЕ ВЕРСИЮ, ЧТО «О ПРОГРАММЕ», И НЕ ОБЕЩАЮТ ЧУЖОГО ВЫПУСКА
+    /// (редакция 2.5.0 — решение капитана 14.11.2026, t23).
     ///
-    /// **От какого случая.** На кадре стояла установленная версия самой панели, и после выпуска
-    /// 2.4.0 она совпала с образцовым выпуском: над готовой сборкой вставали «У вас последняя
-    /// версия 2.4.0 — обновляться не нужно» и «Обновляться некуда: выпуск не новее установленной
-    /// панели». Кадр противоречил сам себе и учил неправде. Теперь на кадре установлена **2.3.2**
-    /// (выпущена 22.10.2026), а выпуск — **2.4.0** (выпущен 24.10.2026): обе версии настоящие,
-    /// и доступным назван только существующий выпуск: 2.4.1 на кадре как «доступный» не называется.
+    /// **От какого случая.** Прежде на кадре стояла версия СТАРЕЕ выпуска, чтобы показать «есть
+    /// новее»; для витрины 2.5.0 это давало ДВА разных номера в одном ряду (`about` говорил 2.5.0,
+    /// `update` — другой установленный). Теперь обе версии равны, и кадр честно говорит
+    /// «у вас последняя версия 2.5.0».
     ///
-    /// ⚠️ Проверяются ОБА кадра — и «до подготовки», и «подготовлено»: противоречие жило не в одном.
-    /// Смотрится ТЕКСТ СОБРАННОГО ОКНА, а не образцовая дверь: «обновляться не нужно» — это фраза,
-    /// которую произносит окно, и ищется она теми же словами, какими её увидит человек.
+    /// ⚠️ Смотрится ТЕКСТ СОБРАННОГО ОКНА, а не образцовая дверь: «у вас последняя версия» — это
+    /// фраза, которую произносит окно, и ищется она теми же словами, какими её увидит человек.
     ///
-    /// Мутации, которые обязаны упасть: вернуть установленную версию 2.4.0 (равна выпуску) ·
-    /// заставить дверь отвечать «новее нет» при разных версиях.
+    /// Мутации, которые обязаны упасть: вернуть установленную 2.4.5 (номера разойдутся) ·
+    /// назвать доступным выпуск v2.6.0 (обещание несуществующего).
     /// </summary>
     [AvaloniaFact]
-    public void Кадры_обновления_показывают_новее_а_не_обновляться_не_нужно()
+    public void Кадры_обновления_называют_ту_же_версию_что_и_о_программе()
     {
-        foreach (var kind in new[] { StartModes.ShotSettingsUpdate, StartModes.ShotSettingsUpdatePrepared })
-        {
-            // «2.3.2» — обязательная строка кадра: без неё мерить «есть новее» не на чем.
-            var text = ShowAndRead(kind, "2.3.2");
+        // КАДР ВИТРИНЫ — `settings-update`: в нём и «установлено», и решение раздела.
+        var text = ShowAndRead(StartModes.ShotSettingsUpdate, "2.5.0");
 
-            // ЕСТЬ НОВЕЕ: установлено 2.3.2, и решение называет выпуск v2.4.0.
-            Assert.Contains(
-                string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateCurrentFormat, "2.3.2"),
-                text,
-                StringComparison.Ordinal);
-
-            Assert.Contains(
-                string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateAvailableFormat, "v2.4.0"),
-                text,
-                StringComparison.Ordinal);
-
-            // И НИ ОДНОЙ ФРАЗЫ «ОБНОВЛЯТЬСЯ НЕ НУЖНО» — ни решения, ни подсказки под кнопками.
-            Assert.DoesNotContain(
-                string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateWindowLatestFormat, "2.4.0"),
-                text,
-                StringComparison.Ordinal);
-
-            Assert.DoesNotContain(PanelStrings.UpdateAlreadyLatest, text, StringComparison.Ordinal);
-
-        // ДОСТУПНЫМ КАДР НАЗЫВАЕТ ТОЛЬКО СУЩЕСТВУЮЩИЙ ВЫПУСК: образцовый 2.4.0 (проверено выше).
-        // ⚠️ Запрет литерала «2.4.1» целиком был НЕВЕРЕН и уронил выпускной прогон 24.10.2026: с выпуском
-        // 2.4.1 это СОБСТВЕННАЯ версия панели, и она законно видна в окне («Версия: 2.4.1»). Запрещать
-        // надо не слово, а утверждение — «доступен выпуск, которого нет».
-        Assert.DoesNotContain(
-            string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateAvailableFormat, "v2.4.1"),
+        Assert.Contains(
+            string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateCurrentFormat, "2.5.0"),
             text,
             StringComparison.Ordinal);
-        }
+
+        // ОДИН НОМЕР В ОБОИХ МЕСТАХ: установлено 2.5.0 и решение говорит про 2.5.0 же.
+        Assert.Contains(
+            string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateWindowLatestFormat, "2.5.0"),
+            text,
+            StringComparison.Ordinal);
+
+        // НИ ОДНОГО ЧУЖОГО ВЫПУСКА: ни прежнего 2.4.0/2.3.2, ни несуществующего 2.6.0.
+        Assert.DoesNotContain("2.3.2", text, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateAvailableFormat, "v2.4.0"),
+            text,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            string.Format(CultureInfo.CurrentCulture, PanelStrings.UpdateAvailableFormat, "v2.6.0"),
+            text,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -390,7 +381,7 @@ public class ShotWiringTests
             // человек. «Users» в пути значило бы, что маска не легла и в витрину уехало имя.
             var text = staged.Text ?? string.Empty;
 
-            Assert.Contains(@"~\AppData\Local\DshPanel2\state\update\2.4.0", text, StringComparison.Ordinal);
+            Assert.Contains(@"~\AppData\Local\DshPanel2\state\update\2.5.0", text, StringComparison.Ordinal);
             Assert.DoesNotContain("Users", text, StringComparison.OrdinalIgnoreCase);
 
             // ПОДГОТОВКА БОЛЬШЕ НЕ ДОСТУПНА, ХОД ПУСТ — как у окна после успешной подготовки.
@@ -439,7 +430,7 @@ public class ShotWiringTests
         // U16 (2.4.0): числа — со страницы цен 24.10.2026 (deepseek-flash, фикстура pricing-en.html).
         Assert.Contains("$0.15", text, StringComparison.Ordinal);
         Assert.Contains("$0.3", text, StringComparison.Ordinal);
-        Assert.Contains("24.10.2026", text, StringComparison.Ordinal);
+        Assert.Contains("14.11.2026", text, StringComparison.Ordinal);
         Assert.DoesNotContain(PanelStrings.PriceLocked, text, StringComparison.Ordinal);
         Assert.DoesNotContain(PanelStrings.PriceNeverRead, text, StringComparison.Ordinal);
     }

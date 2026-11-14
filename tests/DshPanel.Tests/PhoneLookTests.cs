@@ -279,7 +279,7 @@ public class PhoneLookTests
 
         var cookie = await Pair(stand);
 
-        var page = await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie);
+        var page = await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie);
 
         Assert.Equal(200, page.Status);
 
@@ -333,7 +333,7 @@ public class PhoneLookTests
         Assert.True(stand.Gate.Start().Opened);
 
         var cookie = await Pair(stand);
-        var markup = Markup((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        var markup = Markup((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         // «ПРОВЕРИТЬ» — ССЫЛКА, и у неё есть `href` на свой корень.
         Assert.Contains("<a class=\"ghost narrow\" href=\"/\">", markup, StringComparison.Ordinal);
@@ -342,7 +342,7 @@ public class PhoneLookTests
         // ВОПРОС ЕСТЬ — ФОРМА ОТВЕТА ОБЫЧНАЯ (POST), а не скрипт.
         Ready(stand); stand.Events.Emit(Waterfall(Choice("q1", "Делать?", "Да", "Нет")));
 
-        var page = Markup((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        var page = Markup((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         Assert.Contains("<form method=\"post\" action=\"/answer\">", page, StringComparison.Ordinal);
         Assert.Contains("type=\"submit\"", page, StringComparison.Ordinal);
@@ -382,15 +382,15 @@ public class PhoneLookTests
         var cookie = await Pair(stand);
 
         // ОЖИДАНИЕ, ВОПРОС И ИСХОД — НИ НА ОДНОМ нет тега перезагрузки.
-        var states = new List<string> { (await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body };
+        var states = new List<string> { (await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body };
 
         Ready(stand); stand.Events.Emit(Waterfall(Choice("q1", "Делать?", "Да")));
 
-        states.Add((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        states.Add((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         await Send(stand.Http, HttpMethod.Post, "/answer", "eventId=" + EventId + "&q0=0", cookie);
 
-        states.Add((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        states.Add((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         foreach (var html in states)
         {
@@ -429,7 +429,7 @@ public class PhoneLookTests
         Ready(stand);
         stand.Events.Emit(Waterfall(Choice("q1", "Делать?", "Да", "Нет")));
 
-        var first = (await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body;
+        var first = (await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body;
 
         // (1) СКРИПТ НЕ ПОДМЕНЯЕТ КАРТОЧКУ, ПОКА ЧЕЛОВЕК ПИШЕТ ИЛИ ВЫБРАЛ: поле своего ответа
         //     непустое (или отмечен вариант) — следующий круг уходит в паузу, а не в запрос.
@@ -457,7 +457,7 @@ public class PhoneLookTests
         Assert.Contains(Ru(nameof(PanelStrings.PhonePageRepeatButton)), refused.Body, StringComparison.Ordinal);
 
         // ЭКРАН ТОТ ЖЕ, И СВОЙ ТЕКСТ В ПОЛЕ — ничего не потеряно без действия человека.
-        var again = Markup((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        var again = Markup((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         Assert.Contains("Делать?", again, StringComparison.Ordinal);
         Assert.Contains("value=\"" + own + "\"", again, StringComparison.Ordinal);
@@ -511,7 +511,7 @@ public class PhoneLookTests
         Ready(stand); stand.Events.Emit(Waterfall(Choice("q1", "Делать?", "Да", "Нет"), Choice("q2", "Ещё?", "А", "Б")));
 
         // ЭКРАН 1: счёт «Вопрос 1 из 2», ОДНО имя выбора и ОДИН вопрос.
-        var first = Markup((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        var first = Markup((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         Assert.Contains(Ru(nameof(PanelStrings.PhonePageQuestionCountFormat), 1, 2), first, StringComparison.Ordinal);
         Assert.Contains("Делать?", first, StringComparison.Ordinal);
@@ -530,7 +530,7 @@ public class PhoneLookTests
         // ⚠️ ЭКРАН СДВИНУЛСЯ, И ЭТО ПРАВИЛО: экран 1 УЖЕ ОТВЕЧЕН, а ждать больше нечего.
         // «Не сдвигается» касается ОТКАЗА (ответа не было вовсе) — он проверен отдельно,
         // в `Введённое_не_теряется_при_отказе_и_во_время_набора`.
-        var second = Markup((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        var second = Markup((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         Assert.Contains(Ru(nameof(PanelStrings.PhonePageQuestionCountFormat), 2, 2), second, StringComparison.Ordinal);
         Assert.Contains("Ещё?", second, StringComparison.Ordinal);
@@ -586,7 +586,7 @@ public class PhoneLookTests
         // ⚠️ ИМЯ ПОЛЯ БЕРЁТСЯ ИЗ САМОЙ РАЗМЕТКИ, а не подставляется проверкой: так мутация
         // «поле переименовали» роняет проверку, а не проходит мимо неё. Раньше поле называлось
         // здесь литералом — и переименование в продукте осталось бы незамеченным (дыра F5).
-        var page = Markup((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        var page = Markup((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
         var field = OwnFieldName(page);
 
         Assert.Equal("q0-own", field);
@@ -655,7 +655,7 @@ public class PhoneLookTests
 
         Ready(stand); stand.Events.Emit(Waterfall(Choice("q1", "Делать?", "Да", "Нет")));
 
-        var html = (await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body;
+        var html = (await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body;
         var markup = Markup(html);
 
         // ГРУППА ВОПРОСА: `<fieldset>` с `<legend>`, и вопрос в нём ОДИН.
@@ -751,7 +751,7 @@ public class PhoneLookTests
 
         var cookie = await Pair(stand);
 
-        var card = await Send(stand.Http, HttpMethod.Get, "/?part=card", cookie: cookie);
+        var card = await Send(stand.Http, HttpMethod.Get, "/ask?part=card", cookie: cookie);
 
         Assert.Equal(200, card.Status);
         Assert.DoesNotContain("<style", card.Body, StringComparison.Ordinal);
@@ -765,7 +765,7 @@ public class PhoneLookTests
         Assert.Contains("<a class=\"ghost narrow\" href=\"/\">", card.Body, StringComparison.Ordinal);
 
         // И ЧУЖАЯ СТРОКА ЗАПРОСА КАРТОЧКУ НЕ ОТДАЁТ: `part=cardx` — это целая страница.
-        var whole = await Send(stand.Http, HttpMethod.Get, "/?part=cardx", cookie: cookie);
+        var whole = await Send(stand.Http, HttpMethod.Get, "/ask?part=cardx", cookie: cookie);
 
         Assert.Equal(200, whole.Status);
         Assert.Contains("<!DOCTYPE html>", whole.Body, StringComparison.Ordinal);
@@ -774,7 +774,7 @@ public class PhoneLookTests
         // А БЕЗ COOKIE КАРТОЧКА НЕ ОТДАЁТСЯ ВОВСЕ: за дверью никого нет — там СТРАНИЦА ВХОДА.
         // ⚠️ Маршрут `?part=card` разбирается ДО проверки пропуска, но ответ на него без пропуска
         // — это тот же вход: карточки телефону без пропуска не бывает.
-        var anon = await Send(stand.Http, HttpMethod.Get, "/?part=card");
+        var anon = await Send(stand.Http, HttpMethod.Get, "/ask?part=card");
 
         Assert.Equal(200, anon.Status);
         Assert.Contains("action=\"/pair\"", anon.Body, StringComparison.Ordinal);
@@ -805,14 +805,14 @@ public class PhoneLookTests
         var cookie = await Pair(stand);
 
         // ОЖИДАНИЕ: «Проверить» есть.
-        var waiting = Markup((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        var waiting = Markup((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         Assert.Contains("<a class=\"ghost narrow\" href=\"/\">", waiting, StringComparison.Ordinal);
 
         // ВОПРОС: форма ответа И отмена.
         Ready(stand); stand.Events.Emit(Waterfall(Choice("q1", "Делать?", "Да", "Нет")));
 
-        var asked = Markup((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        var asked = Markup((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         Assert.Contains("action=\"/answer\"", asked, StringComparison.Ordinal);
         Assert.Contains("action=\"/cancel\"", asked, StringComparison.Ordinal);
@@ -821,7 +821,7 @@ public class PhoneLookTests
         // БЕДА: «Повторить» — и это ссылка, а не орган без скрипта.
         // ⚠️ Формой шлётся ТОЛЬКО СВОЙ `eventId` (`PhoneAnswer.Field`), поэтому «чужой» приходит
         // машинным путём: им же проверяется, что чужой ход телефоном не снимается.
-        var trouble = await Send(stand.Http, HttpMethod.Post, "/cancel", "{\"eventId\":\"чужой\"}", cookie);
+        var trouble = await Send(stand.Http, HttpMethod.Post, "/cancel", "eventId=чужой", cookie);
 
         Assert.Equal(403, trouble.Status);
 
@@ -848,7 +848,7 @@ public class PhoneLookTests
         Assert.Equal(PhoneDecisions.SessionCancelEndpoint, cancelCall.Endpoint);
 
         // ИСХОД (ход отменён): «Проверить» есть, а кнопок ответа нет.
-        var cancelled = Markup((await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body);
+        var cancelled = Markup((await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body);
 
         Assert.Contains("<a class=\"ghost narrow\" href=\"/\">", cancelled, StringComparison.Ordinal);
         Assert.DoesNotContain("action=\"/answer\"", cancelled, StringComparison.Ordinal);
@@ -883,11 +883,11 @@ public class PhoneLookTests
         Ready(stand);
         stand.Events.Emit(Waterfall(Choice("q1", "Как делать?", "Да", "Нет")));
 
-        var html = (await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body;
+        var html = (await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body;
 
         foreach (var language in new[] { "ru", "en", "zh" })
         {
-            var local = (await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie, language: language)).Body;
+            var local = (await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie, language: language)).Body;
 
             // СЛОВ О НАШЕМ ОПРОСЕ НА СТРАНИЦЕ БОЛЬШЕ НЕТ (живой прогон 13.10.2026, находка владельца).
             // Проверка ПЕРЕВЁРНУТА: она падает, если строку вернут на экран.
@@ -938,7 +938,7 @@ public class PhoneLookTests
         Assert.Equal("Pixel 8", device.Name);
 
         // (2) И ДОЕХАЛО ДО СТРАНИЦЫ — словами, без внутреннего номера.
-        var page = (await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body;
+        var page = (await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body;
 
         Assert.Contains(Ru(nameof(PanelStrings.PhonePageDeviceFormat), "Pixel 8"), page, StringComparison.Ordinal);
         Assert.DoesNotContain(device.Id, page, StringComparison.Ordinal);
@@ -964,7 +964,7 @@ public class PhoneLookTests
 
         Assert.Equal(string.Empty, device.Name);
 
-        var page = (await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie)).Body;
+        var page = (await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie)).Body;
 
         Assert.Contains(
             Ru(nameof(PanelStrings.PhonePageDeviceFormat), Ru(nameof(PanelStrings.PhonePageDeviceFallback))),
@@ -1110,7 +1110,7 @@ public class PhoneLookTests
         Ready(stand);
         stand.Events.Emit(Waterfall(Choice("q1", "Как делать?", "Да", "Нет")));
 
-        var page = await Send(stand.Http, HttpMethod.Get, "/", cookie: cookie);
+        var page = await Send(stand.Http, HttpMethod.Get, "/ask", cookie: cookie);
 
         Assert.Equal(200, page.Status);
 

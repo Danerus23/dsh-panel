@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
 using DshPanel.Files;
@@ -204,7 +204,8 @@ public static class ZipWriter
             // Файловый пропуск — ОТДЕЛЬНЫМ списком, хотя 7-Zip исключает и каталоги, и файлы одним
             // ключом -xr!: списки разные по смыслу, и свалить их в один значило бы однажды
             // «пропустить каталог» там, где просили пропустить файл. Пустые списки 7-Zip не увидит.
-            last = SevenZip.Add(sevenZipPath, archivePath, source, excluded, source.SkipFileNames);
+            last = SevenZip.Add(
+                sevenZipPath, archivePath, source, excluded, source.SkipFileNames, source.SkipRelative);
             if (!last.Ok) return last;
 
             // «Целые» каталоги кладутся ОТДЕЛЬНЫМ запуском 7-Zip, без исключений: исключения
@@ -297,7 +298,9 @@ public static class ZipWriter
                 var skip = Set(source.SkipFor(skipDirectoryNames));
                 var whole = source.Everything ? null : Set(source.WholeDirectoryNames);
 
-                foreach (var file in WalkFiles(root, skip, whole, Set(source.SkipFileNames)))
+                var skipPaths = Set(source.SkipRelative);
+
+                foreach (var file in WalkFiles(root, skip, whole, Set(source.SkipFileNames), skipPaths))
                 {
                     // Архив не кладёт сам себя: без этого правила он читал бы файл, который
                     // в этот самый момент пишет.
@@ -408,9 +411,10 @@ public static class ZipWriter
     /// а не по пути: так умеет и 7-Zip (<c>-xr!</c>), и разойтись эти два способа не должны.
     /// </summary>
     private static IEnumerable<string> WalkFiles(
-        string root, ISet<string>? skip, ISet<string>? whole, ISet<string>? skipFiles = null)
+        string root, ISet<string>? skip, ISet<string>? whole, ISet<string>? skipFiles = null,
+        ISet<string>? skipPaths = null)
     {
-        foreach (var (directory, _) in WalkDirectories(root, skip, whole))
+        foreach (var (directory, _) in WalkDirectories(root, skip, whole, skipPaths: skipPaths))
         {
             string[] files;
             try
@@ -427,6 +431,82 @@ public static class ZipWriter
                 if (skipFiles is not null && skipFiles.Contains(Path.GetFileName(file))) continue;
 
                 yield return file;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Обход каталогов дерева. <paramref name="links"/> — сообщать ли о точках повторной обработки:
+    /// их не обходят никогда, но описи о них знать нужно, поэтому они отдаются отдельными
+    /// элементами и только по запросу.
+    ///
+    /// <paramref name="skipPaths"/> — каталоги, пропускаемые ПО ПУТИ от корня (DEF-095):
+    /// <c>plugins/dsh-better-edit/runtime</c> и подобные. Правило точечное и потому проверяется
+    /// ДО имён: имя «runtime» слишком общее, чтобы выкидывать его на любом уровне дерева.
+    /// </summary>
+    private static IEnumerable<(string Path, bool Link)> WalkDirectories(
+        string root,
+        ISet<string>? skip,
+        ISet<string>? whole,
+        bool links = false,
+        ISet<string>? skipPaths = null)
+    {
+        var stack = new Stack<(string Directory, bool Whole, string Rel)>();
+        stack.Push((root, false, string.Empty));
+
+        while (stack.Count > 0)
+        {
+            var (directory, insideWhole, relative) = stack.Pop();
+            yield return (directory, false);
+
+            string[] subdirectories;
+            try
+            {
+                subdirectories = Directory.GetDirectories(directory);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (var sub in subdirectories)
+            {
+                var name = Path.GetFileName(sub);
+                var wholeHere = false;
+
+                if (!insideWhole)
+                {
+                    // «Целый» каталог главнее списка пропуска — это его смысл: `.git` стоит
+                    // и в пропуске (общее правило мусора), и в «берём целиком».
+                    if (whole is not null && whole.Contains(name)) wholeHere = true;
+                    else if (skip is not null && skip.Contains(name)) continue;
+                }
+
+                // ПУТЁВОЙ ПРОПУСК (DEF-095) — ДО имён и после «целых» каталогов: он задан
+                // конкретным путём и решает ровно то, что решил планировщик копии.
+                var rel = relative.Length == 0 ? name : relative + "/" + name;
+
+                if (skipPaths is not null && skipPaths.Contains(rel)) continue;
+
+                // Точка повторной обработки не обходится никогда — даже внутри «целого» каталога:
+                // именно она и уводит обход на десятки уровней.
+                bool isLink;
+                try
+                {
+                    isLink = (File.GetAttributes(sub) & FileAttributes.ReparsePoint) != 0;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (isLink)
+                {
+                    if (links) yield return (sub, true);
+                    continue;
+                }
+
+                stack.Push((sub, insideWhole || wholeHere, rel));
             }
         }
     }
@@ -462,6 +542,11 @@ public static class ZipWriter
             if (link) yield return path;
     }
 
+    /// <summary>
+    /// Обход дерева корня ОДИН на три читателя (файлы, каталоги, ссылки): правила пропуска
+    /// не должны разойтись между ними. Путёвой пропуск (DEF-095) передаётся и здесь — иначе
+    /// опись перечислила бы ссылки, которых в копии нет.
+    /// </summary>
     private static IEnumerable<(string Path, bool Link)> WalkTree(BackupSource source, IReadOnlyList<string>? runSkip)
     {
         var root = Path.GetFullPath(source.Directory);
@@ -470,73 +555,10 @@ public static class ZipWriter
         var skip = Set(source.SkipFor(runSkip));
         var whole = source.Everything ? null : Set(source.WholeDirectoryNames);
 
-        foreach (var item in WalkDirectories(root, skip, whole, links: true)) yield return item;
+        foreach (var item in WalkDirectories(root, skip, whole, links: true, skipPaths: Set(source.SkipRelative)))
+            yield return item;
     }
 
-    /// <summary>
-    /// Обход каталогов дерева. <paramref name="links"/> — сообщать ли о точках повторной обработки:
-    /// их не обходят никогда, но описи о них знать нужно, поэтому они отдаются отдельными
-    /// элементами и только по запросу.
-    /// </summary>
-    private static IEnumerable<(string Path, bool Link)> WalkDirectories(
-        string root,
-        ISet<string>? skip,
-        ISet<string>? whole,
-        bool links = false)
-    {
-        var stack = new Stack<(string Directory, bool Whole)>();
-        stack.Push((root, false));
-
-        while (stack.Count > 0)
-        {
-            var (directory, insideWhole) = stack.Pop();
-            yield return (directory, false);
-
-            string[] subdirectories;
-            try
-            {
-                subdirectories = Directory.GetDirectories(directory);
-            }
-            catch
-            {
-                continue;
-            }
-
-            foreach (var sub in subdirectories)
-            {
-                var name = Path.GetFileName(sub);
-                var wholeHere = false;
-
-                if (!insideWhole)
-                {
-                    // «Целый» каталог главнее списка пропуска — это его смысл: `.git` стоит
-                    // и в пропуске (общее правило мусора), и в «берём целиком».
-                    if (whole is not null && whole.Contains(name)) wholeHere = true;
-                    else if (skip is not null && skip.Contains(name)) continue;
-                }
-
-                // Точка повторной обработки не обходится никогда — даже внутри «целого» каталога:
-                // именно она и уводит обход на десятки уровней.
-                bool isLink;
-                try
-                {
-                    isLink = (File.GetAttributes(sub) & FileAttributes.ReparsePoint) != 0;
-                }
-                catch
-                {
-                    continue;
-                }
-
-                if (isLink)
-                {
-                    if (links) yield return (sub, true);
-                    continue;
-                }
-
-                stack.Push((sub, insideWhole || wholeHere));
-            }
-        }
-    }
 
     /// <summary>
     /// Каталоги, которые берутся целиком и лежат на диске, — путями ОТНОСИТЕЛЬНО корня,
@@ -615,7 +637,7 @@ public static class ZipWriter
             var skip = Set(source.SkipFor(skipDirectoryNames));
             var whole = source.Everything ? null : Set(source.WholeDirectoryNames);
 
-            foreach (var file in WalkFiles(root, skip, whole, Set(source.SkipFileNames)))
+            foreach (var file in WalkFiles(root, skip, whole, Set(source.SkipFileNames), Set(source.SkipRelative)))
             {
                 if (archivePath is not null && string.Equals(file, archivePath, StringComparison.OrdinalIgnoreCase))
                     continue;

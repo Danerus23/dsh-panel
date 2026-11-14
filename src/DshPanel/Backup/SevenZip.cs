@@ -197,6 +197,7 @@ public static class SevenZip
         BackupSource source,
         IReadOnlyList<string>? excludeDirectoryNames = null,
         IReadOnlyList<string>? excludeFileNames = null,
+        IReadOnlyList<string>? excludeRelativePaths = null,
         int timeoutMs = 15 * 60 * 1000)
     {
         var leaf = ZipLayout.Leaf(source.Directory);
@@ -205,7 +206,9 @@ public static class SevenZip
         var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(Path.GetFullPath(source.Directory)));
         if (string.IsNullOrEmpty(parent)) return SevenZipRun.Failed(PanelStrings.SevenZipRootHasNoParent);
 
-        return AddRelative(sevenZipPath, archivePath, parent, leaf, excludeDirectoryNames, excludeFileNames, timeoutMs);
+        return AddRelative(
+            sevenZipPath, archivePath, parent, leaf, excludeDirectoryNames, excludeFileNames,
+            excludeRelativePaths, timeoutMs);
     }
 
     /// <summary>
@@ -233,6 +236,7 @@ public static class SevenZip
         string relativePath,
         IReadOnlyList<string>? excludeDirectoryNames = null,
         IReadOnlyList<string>? excludeFileNames = null,
+        IReadOnlyList<string>? excludeRelativePaths = null,
         int timeoutMs = 15 * 60 * 1000)
     {
         if (string.IsNullOrWhiteSpace(relativePath)) return SevenZipRun.Failed(PanelStrings.SevenZipNothingToAdd);
@@ -247,6 +251,21 @@ public static class SevenZip
 
         foreach (var excluded in excludeFileNames ?? Array.Empty<string>())
             arguments += $" -xr!\"{excluded}\"";
+
+        // ПУТЁВОЙ ПРОПУСК (DEF-095): каталог плагина, названный ПУТЁМ, а не именем. 7-Zip умеет это
+        // тем же ключом: шаблон с разделителями сравнивается с путём записи (замер 31.10.2026:
+        // `-xr!".dsh\plugins\p1\runtime"` исключил ровно этот каталог, соседние остались).
+        // Путь берётся ВМЕСТЕ с именем корня: рабочий каталог 7-Zip — родитель корня.
+        foreach (var excluded in excludeRelativePaths ?? Array.Empty<string>())
+        {
+            if (string.IsNullOrWhiteSpace(excluded)) continue;
+
+            var pattern = relativePath.Replace('/', Path.DirectorySeparatorChar)
+                          + Path.DirectorySeparatorChar
+                          + excluded.Replace('/', Path.DirectorySeparatorChar);
+
+            arguments += $" -xr!\"{pattern}\"";
+        }
 
         return Run(sevenZipPath, arguments, workingDirectory, timeoutMs);
     }

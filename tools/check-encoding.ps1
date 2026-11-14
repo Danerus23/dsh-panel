@@ -83,7 +83,7 @@ if (-not (Test-Path -LiteralPath $Root)) {
 $root = (Resolve-Path -LiteralPath $Root).Path
 
 # Папки сборки и лаборатории: там лежат копии исходников, и вердикт по ним ничего не значит.
-$excluded = '\\(bin|obj|dist|upd-build|_lab[^\\]*|\.git|\.vs|\.nuget)\\'
+$excluded = '\\(bin|obj|dist|upd-build|_lab[^\\]*|\.git|\.vs|\.nuget|node_modules|test-results)\\'
 $withBom = @('.ps1', '.iss')
 $withoutBom = @('.json', '.csproj', '.props', '.targets', '.slnx', '.config')
 $crlfOnly = @('.ps1', '.iss', '.cmd', '.bat', '.json')

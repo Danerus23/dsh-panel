@@ -1,0 +1,18 @@
+<!doctype html>
+<!--
+  ЭТО ТОЛЬКО ДЛЯ `npm run dev`. В сборке страницу собирает калитка из `shell.html`
+  (у неё boot, язык и слова), поэтому этот файл в WebAssets не попадает.
+  `data-boot` здесь пустой по словам: `npm run dev` показывает ИМЕНА КЛЮЧЕЙ, а не переводы —
+  слова приходят из панели, а не из веба.
+-->
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>DSH Panel — телефон (dev)</title>
+  </head>
+  <body>
+    <div id="root" data-boot='{"lang":"ru","authed":true,"device":"телефон","words":{}}'></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

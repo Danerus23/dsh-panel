@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -524,6 +524,148 @@ public class BackupTests
             Assert.Equal(ZipWriterKind.BuiltIn, result.Writer);
             Assert.Contains("не справился", result.Reason);
             Assert.Equal(4, result.Files);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+    // ---- DEF-095: кэши плагинов в копию не идут ----------------------------------------------
+
+    /// <summary>
+    /// ДЕРЕВО ДОМАШНЕГО КАТАЛОГА ДВИЖКА с кэшами плагинов: то, на чём падала автокопия.
+    /// `runtime/<профиль>/hash-store.sqlite` держит живой процесс плагина.
+    /// </summary>
+    private static string CreateEngineHome()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "dsh-def095-" + Guid.NewGuid().ToString("N")[..8]);
+        var dsh = Path.Combine(root, "dsh-home");
+
+        Directory.CreateDirectory(Path.Combine(dsh, "plugins", "p1", "runtime", "default"));
+        Directory.CreateDirectory(Path.Combine(dsh, "plugins", "p2"));
+        Directory.CreateDirectory(Path.Combine(dsh, "sessions", "s1"));
+
+        File.WriteAllText(Path.Combine(dsh, "plugins", "p1", "runtime", "default", "hash-store.sqlite"), "LOCKED");
+        File.WriteAllText(Path.Combine(dsh, "plugins", "p1", "config.json"), "{}");
+        File.WriteAllText(Path.Combine(dsh, "plugins", "p2", "notes.txt"), "keep");
+        File.WriteAllText(Path.Combine(dsh, "sessions", "s1", "log.txt"), "keep");
+
+        return root;
+    }
+
+    /// <summary>
+    /// ПЛАНИРОВЩИК НАЗЫВАЕТ КЭШИ ПЛАГИНОВ: `plugins/<плагин>/runtime` — и только те, что есть.
+    ///
+    /// Мутации: вернуть список пустым · исключать по имени `runtime` (тогда правило задело бы
+    /// любой `runtime` в домашнем каталоге движка, а не только кэш плагина).
+    /// </summary>
+    [Fact]
+    public void Планировщик_исключает_кэши_плагинов()
+    {
+        var root = CreateEngineHome();
+        try
+        {
+            var dsh = Path.Combine(root, "dsh-home");
+
+            var skips = BackupPlanner.PluginRuntimeSkips(dsh);
+
+            // РОВНО ОДИН путь: у p1 кэш есть, у p2 его нет — и выдумывать его нельзя.
+            Assert.Equal(new[] { "plugins/p1/runtime" }, skips);
+
+            // Нет каталога плагинов или нет корня — пусто, а не исключение.
+            Assert.Empty(BackupPlanner.PluginRuntimeSkips(Path.Combine(root, "нет-такого")));
+            Assert.Empty(BackupPlanner.PluginRuntimeSkips(null));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    /// <summary>
+    /// DEF-095: КОПИЯ НЕ ПАДАЕТ НА ЗАНЯТОМ ФАЙЛЕ ПЛАГИНА.
+    ///
+    /// **Что было.** Автокопия падала на `~/.dsh/plugins/dsh-better-edit/runtime/<профиль>/
+    /// hash-store.sqlite`: файл держит живой процесс плагина, и чтение под блокировкой — отказ
+    /// ВСЕЙ копии. Это кэш, а не данные: плагин строит его заново.
+    ///
+    /// **Чем доказано.** Файл держится ОТКРЫТЫМ с `FileShare.None` всё время копии: попытка его
+    /// прочитать не «вернула бы мусор», а уронила бы копию — то есть успех и есть доказательство,
+    /// что обход в него не заходил. Копия снимается, в ней — остальные файлы плагина и сессии.
+    /// Мутация «снять путёвой пропуск» — красная (копия отказывает).
+    /// </summary>
+    [Fact]
+    public void Занятый_файл_плагина_не_роняет_копию()
+    {
+        var root = CreateEngineHome();
+        try
+        {
+            var dsh = Path.Combine(root, "dsh-home");
+            var locked = Path.Combine(dsh, "plugins", "p1", "runtime", "default", "hash-store.sqlite");
+            var archive = Path.Combine(root, "engine.zip");
+
+            // ДЕРЖИМ ФАЙЛ ЗАПЕРТЫМ, как это делает живой плагин.
+            using (var hold = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                var source = new BackupSource(
+                    dsh, "dsh-home", SkipRelativePaths: BackupPlanner.PluginRuntimeSkips(dsh));
+
+                var result = ZipWriter.Write(archive, new[] { source });
+
+                Assert.True(result.Ok, result.Error);
+
+                var names = FilesInside(archive);
+
+                Assert.Contains("dsh-home/plugins/p1/config.json", names);
+                Assert.Contains("dsh-home/plugins/p2/notes.txt", names);
+                Assert.Contains("dsh-home/sessions/s1/log.txt", names);
+                Assert.DoesNotContain(names, name => name.Contains("runtime", StringComparison.Ordinal));
+                Assert.DoesNotContain(names, name => name.Contains("hash-store", StringComparison.Ordinal));
+
+                hold.Dispose();
+            }
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+    /// <summary>
+    /// DEF-095 НА БЫСТРОМ ПУТИ: 7-Zip тоже не заходит в кэш плагина.
+    ///
+    /// Проверка отдельная, потому что путь ДРУГОЙ: свой обход читает файлы сам, а 7-Zip получает
+    /// список исключений ключом <c>-xr!</c>. Пропуск задан ПУТЁМ (`dsh-home\plugins\p1\runtime`) —
+    /// и это замер: шаблон с разделителями 7-Zip сравнивает с путём записи (31.10.2026).
+    /// Без 7-Zip на машине — `SkipWhen`, а не зелёное «ничего не проверили».
+    /// </summary>
+    [Fact]
+    public void Быстрый_путь_тоже_не_берёт_кэш_плагина()
+    {
+        var sevenZip = SevenZip.Find();
+        Assert.SkipWhen(sevenZip is null, "7-Zip на этой машине не найден — быстрый путь проверить нечем");
+
+        var root = CreateEngineHome();
+        try
+        {
+            var dsh = Path.Combine(root, "dsh-home");
+            var archive = Path.Combine(root, "engine-fast.zip");
+            var locked = Path.Combine(dsh, "plugins", "p1", "runtime", "default", "hash-store.sqlite");
+
+            using var hold = new FileStream(locked, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+            var source = new BackupSource(
+                dsh, "dsh-home", SkipRelativePaths: BackupPlanner.PluginRuntimeSkips(dsh));
+
+            var result = ZipWriter.Write(archive, new[] { source }, sevenZipPath: sevenZip);
+
+            Assert.True(result.Ok, result.Error);
+            Assert.Equal(ZipWriterKind.SevenZip, result.Writer);
+
+            var names = FilesInside(archive);
+
+            Assert.Contains("dsh-home/plugins/p1/config.json", names);
+            Assert.Contains("dsh-home/sessions/s1/log.txt", names);
+            Assert.DoesNotContain(names, name => name.Contains("runtime", StringComparison.Ordinal));
         }
         finally
         {

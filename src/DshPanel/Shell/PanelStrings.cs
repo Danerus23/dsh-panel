@@ -1309,15 +1309,18 @@ public static class PanelStrings
     public static string PhoneSectionSubtitle => Loc.T(nameof(PhoneSectionSubtitle));
 
     /// <summary>
-    /// СЛОВА-ОГРАНИЧИТЕЛЬ ТЕЛЕФОНА (решение владельца 17.10.2026, дословно): «работает в своей
-    /// сети: вход по QR и ответ на вопрос агента; постановка задачи и управление агентами —
-    /// в разработке; наружу не выходит».
+    /// СЛОВА-ОГРАНИЧИТЕЛЬ ТЕЛЕФОНА (решение владельца 17.10.2026; формулировка 2.5.0 — t22/t23,
+    /// 14.11.2026): «работает в своей сети: вход по коду и QR; список сессий, лента, вопросы,
+    /// задачи, очередь; наружу не выходит, трафик по HTTP без шифрования».
     ///
     /// ⚠️ ОДНА строка на ДВА места — раздел «Телефон» в настройках И страницу телефона (вход по QR
     /// и страница вопроса): это одна и та же мысль, и разными словами в двух местах она разошлась бы.
-    /// Чего нельзя терять при переводе (все четыре ограничения): (а) только своя сеть; (б) вход по
-    /// QR и ответ на вопрос агента; (в) постановка задачи и управление агентами — в разработке;
-    /// (г) наружу не выходит. Ослабить или усилить любое из них — соврать человеку.
+    /// Чего нельзя терять при переводе (все пять фактов): (а) только своя сеть; (б) вход по коду
+    /// и QR; (в) список сессий, лента, вопросы, задачи и очередь; (г) наружу не выходит;
+    /// (д) трафик по HTTP без шифрования. Ослабить или усилить любое из них — соврать человеку.
+    ///
+    /// ⚠️ Прежняя редакция говорила «постановка задачи и управление агентами — в разработке»;
+    /// после 2.5.0 это НЕПРАВДА (телефон эти задачи умеет), и слово снято вместе со строкой.
     /// </summary>
     public static string PhoneLimits => Loc.T(nameof(PhoneLimits));
 
@@ -4198,7 +4201,12 @@ public static class PanelStrings
     /// <summary>Журнал: сколько подчинённых сессий убрано из списка телефона (и из скольких).</summary>
     public static string PhoneSessionsHiddenLogFormat => Loc.T(nameof(PhoneSessionsHiddenLogFormat));
 
-    /// <summary>Журнал: ответ `session/list` не той формы — отдан как есть, фильтра не было.</summary>
+    /// <summary>
+    /// Журнал: ответ `session/list` не той формы — телефону отказ 502, ответ движка наружу не отдан.
+    ///
+    /// ⚠️ Прежний текст обещал «отдан телефону как есть, подчинённые не отфильтрованы» — это было
+    /// НЕПРАВДОЙ: путь при такой форме отвечает `502` и ничего не отдаёт (находка t7, N-3).
+    /// </summary>
     public static string PhoneSessionsShapeLogFormat => Loc.T(nameof(PhoneSessionsShapeLogFormat));
 
     /// <summary>Отказ запуска: порт «{0}» занят, а молчаливого переезда у панели нет.</summary>
@@ -4340,6 +4348,215 @@ public static class PanelStrings
 
     /// <summary>Отказ: поток одиночным запросом не зовётся — названо имя («{0}»).</summary>
     public static string PhoneGateStreamRefusedFormat => Loc.T(nameof(PhoneGateStreamRefusedFormat));
+
+    /// <summary>Отказ списку: ответ движка не прочитался (код — только в журнал, не телефону).</summary>
+    public static string PhoneWebListUnreadable => Loc.T(nameof(PhoneWebListUnreadable));
+
+    /// <summary>Отказ живому потоку: открыто больше четырёх экранов.</summary>
+    public static string PhoneWebTooManyScreens => Loc.T(nameof(PhoneWebTooManyScreens));
+
+    /// <summary>Отказ живому потоку: адрес сессии пуст или не той формы.</summary>
+    public static string PhoneWebSessionMissing => Loc.T(nameof(PhoneWebSessionMissing));
+
+    /// <summary>Живой поток оборвался: телефону говорят это СЛОВАМИ и он переподключается сам.</summary>
+    public static string PhoneWebLiveLost => Loc.T(nameof(PhoneWebLiveLost));
+
+    /// <summary>
+    /// Кнопка «Переподключиться» — СЛОВО ВЛАДЕЛЬЦА (D1, `d1-slova-vid.md` §2). Показывается только
+    /// при живом статусе <c>lost|error</c>: там, где связь есть, кнопки нет.
+    /// </summary>
+    public static string PhoneWebReconnect => Loc.T(nameof(PhoneWebReconnect));
+
+    /// <summary>Заголовок панели «Ждут ответа» (D1 §2) — h2 панели, не колокольчик.</summary>
+    public static string PhoneWebWaitingTitle => Loc.T(nameof(PhoneWebWaitingTitle));
+
+    /// <summary>Панель «Ждут ответа» пуста: никого не ждёт — сказано словами, а не пустотой.</summary>
+    public static string PhoneWebWaitingEmpty => Loc.T(nameof(PhoneWebWaitingEmpty));
+
+    /// <summary>Доступное имя колокольчика «Ждут ответа: {0}» (D1 §2) — печатается цифра, не фраза.</summary>
+    public static string PhoneWebWaitingCountFormat => Loc.T(nameof(PhoneWebWaitingCountFormat));
+
+    /// <summary>
+    /// Доступное имя органа «к последнему сообщению» при счёте 0 (хвост S4a, P2 §2): видимого слова
+    /// на кнопке нет — имя несёт только иконка, и оно обязано быть словом, а не именем ключа.
+    /// </summary>
+    public static string PhoneWebToLast => Loc.T(nameof(PhoneWebToLast));
+
+    /// <summary>
+    /// Имя того же органа при новых сообщениях («{0}» — их число) и текст строки <c>role="status"</c>:
+    /// цифра в значке <c>aria-hidden</c>, поэтому счёт обязан прозвучать словами.
+    /// </summary>
+    public static string PhoneWebToLastCountFormat => Loc.T(nameof(PhoneWebToLastCountFormat));
+
+    /// <summary>
+    /// Доступное имя органа «к началу разговора» (D1 §1, §9). Новый ключ 11.11.2026: видимого слова
+    /// на кнопке нет — имя несёт только иконка, и оно обязано быть словом, а не именем ключа.
+    /// Печатает его веб-пульт (пара «вверх/вниз», W2); член нужен, чтобы у записи словаря был хозяин.
+    /// </summary>
+    public static string PhoneWebToTop => Loc.T(nameof(PhoneWebToTop));
+
+    /// <summary>Журнал: список сессий не прочитан («{0}» — код движка, без тела и путей).</summary>
+    public static string PhoneListFailedLogFormat => Loc.T(nameof(PhoneListFailedLogFormat));
+
+    /// <summary>Журнал: телефону не показаны записи («{0}» из «{1}») — белый список отбросил.</summary>
+    public static string PhoneRecordsDroppedLogFormat => Loc.T(nameof(PhoneRecordsDroppedLogFormat));
+
+    /// <summary>
+    /// Журнал: телефону не показаны АРХИВНЫЕ сессии («{0}» из «{1}»). Только счёт: ни имён, ни
+    /// путей — архив приходит из `workspace/follow` набором адресов, и наружу уходит лишь число
+    /// (слово владельца 11.11.2026, R1 §3.2).
+    /// </summary>
+    public static string PhoneSessionsArchivedLogFormat => Loc.T(nameof(PhoneSessionsArchivedLogFormat));
+
+    /// <summary>
+    /// Журнал: архив не прочитан («{0}» — машинная причина без имён и путей) — СПИСОК ОТДАН БЕЗ
+    /// ФИЛЬТРА. Молчать об этом нельзя: человек увидел бы архивные строки, не зная почему (R1 §3.2).
+    /// </summary>
+    public static string PhoneWorkspaceFailedLogFormat => Loc.T(nameof(PhoneWorkspaceFailedLogFormat));
+
+    /// <summary>
+    /// Журнал: живая очередь молчит («{0}» — машинная причина) — лента работает без неё. Один раз
+    /// на причину: поток `session/control` мог не открыться, и обещать очередь было бы ложью.
+    /// </summary>
+    public static string PhoneLiveQueueSilentLogFormat => Loc.T(nameof(PhoneLiveQueueSilentLogFormat));
+
+    /// <summary>
+    /// Журнал: живая очередь отбросила чужие кадры («{0}») — чужая сессия или чужая проекция.
+    /// Считается числом и БЕЗ имён: в кадре мог быть `workingDirectory` (путь) и тексты ходов.
+    /// </summary>
+    public static string PhoneLiveQueueDroppedLogFormat => Loc.T(nameof(PhoneLiveQueueDroppedLogFormat));
+
+    /// <summary>Журнал: список сессий урезан под размер ответа («{0}» урезано, показано «{1}»).</summary>
+    public static string PhoneListTrimmedLogFormat => Loc.T(nameof(PhoneListTrimmedLogFormat));
+
+    /// <summary>Отказ: телефону открыты только обычные сессии (подчинённую не открываем).</summary>
+    public static string PhoneWebSubagentRefused => Loc.T(nameof(PhoneWebSubagentRefused));
+
+    /// <summary>Отказ догону: страница движка не прочиталась или не уложилась в пределы.</summary>
+    public static string PhoneWebOlderFailed => Loc.T(nameof(PhoneWebOlderFailed));
+
+    /// <summary>Журнал: вопрос агента не показан телефону («{0}» — почему, без текста вопроса).</summary>
+    public static string PhoneQuestionUnreadableLogFormat => Loc.T(nameof(PhoneQuestionUnreadableLogFormat));
+
+    /// <summary>Журнал: доводы догона не приняты («{0}» — что именно не так, без тела).</summary>
+    public static string PhoneOlderArgsLogFormat => Loc.T(nameof(PhoneOlderArgsLogFormat));
+
+    // ---- СЛОВА ПУЛЬТА S1+S2 (t11): члены по именам словарей -------------------------------------------------
+    //
+    // ⚠️ Их зовёт не C#-окно, а `PhoneWebWords` (boot.words пульта): тексты живут в JSON, здесь —
+    // только имена. Без члена `--lang-selftest` говорит «записей словаря без члена», а пульт
+    // показывает имя ключа вместо слов (так было с t5 до t11).
+
+    /// <summary>Пульт: заголовок списка сессий.</summary>
+    public static string PhoneWebListTitle => Loc.T(nameof(PhoneWebListTitle));
+
+    /// <summary>Пульт: число сессий («Сессий: {0}»).</summary>
+    public static string PhoneWebListCountFormat => Loc.T(nameof(PhoneWebListCountFormat));
+
+    /// <summary>Пульт: «показаны последние {0} из {1}».</summary>
+    public static string PhoneWebListShownFormat => Loc.T(nameof(PhoneWebListShownFormat));
+
+    /// <summary>Пульт: заголовок пустого списка.</summary>
+    public static string PhoneWebListEmptyTitle => Loc.T(nameof(PhoneWebListEmptyTitle));
+
+    /// <summary>Пульт: объяснение пустого списка.</summary>
+    public static string PhoneWebListEmpty => Loc.T(nameof(PhoneWebListEmpty));
+
+    /// <summary>Пульт: состояние строки — ждёт ответа.</summary>
+    public static string PhoneWebStateWaiting => Loc.T(nameof(PhoneWebStateWaiting));
+
+    /// <summary>Пульт: состояние строки — работает.</summary>
+    public static string PhoneWebStateRunning => Loc.T(nameof(PhoneWebStateRunning));
+
+    /// <summary>Пульт: состояние строки — закончила.</summary>
+    public static string PhoneWebStateDone => Loc.T(nameof(PhoneWebStateDone));
+
+    /// <summary>Пульт: состояние строки — ещё не было задачи.</summary>
+    public static string PhoneWebStateBlank => Loc.T(nameof(PhoneWebStateBlank));
+
+    /// <summary>Пульт: сессия без названия.</summary>
+    public static string PhoneWebUntitled => Loc.T(nameof(PhoneWebUntitled));
+
+    /// <summary>Пульт: «в очереди: {0}».</summary>
+    public static string PhoneWebInboxFormat => Loc.T(nameof(PhoneWebInboxFormat));
+
+    /// <summary>Пульт: «ходов: {0}».</summary>
+    public static string PhoneWebStatsFormat => Loc.T(nameof(PhoneWebStatsFormat));
+
+    /// <summary>Пульт: к списку сессий.</summary>
+    public static string PhoneWebBackToList => Loc.T(nameof(PhoneWebBackToList));
+
+    /// <summary>Пульт: обновить.</summary>
+    public static string PhoneWebRefresh => Loc.T(nameof(PhoneWebRefresh));
+
+    /// <summary>Пульт: заголовок «сессия не открылась».</summary>
+    public static string PhoneWebSessionMissingTitle => Loc.T(nameof(PhoneWebSessionMissingTitle));
+
+    /// <summary>Пульт: заголовок «пока пусто» в сессии.</summary>
+    public static string PhoneWebSessionEmptyTitle => Loc.T(nameof(PhoneWebSessionEmptyTitle));
+
+    /// <summary>Пульт: объяснение «в сессии ещё нет переписки».</summary>
+    public static string PhoneWebSessionEmpty => Loc.T(nameof(PhoneWebSessionEmpty));
+
+    /// <summary>Пульт: «подключаюсь к сессии…».</summary>
+    public static string PhoneWebLiveConnecting => Loc.T(nameof(PhoneWebLiveConnecting));
+
+    /// <summary>Пульт: кнопка «показать раньше».</summary>
+    public static string PhoneWebShowEarlier => Loc.T(nameof(PhoneWebShowEarlier));
+
+    /// <summary>Пульт: разделитель хода «ход {0}».</summary>
+    public static string PhoneWebTurnFormat => Loc.T(nameof(PhoneWebTurnFormat));
+
+    /// <summary>Пульт: «ход закончился ошибкой».</summary>
+    public static string PhoneWebTurnError => Loc.T(nameof(PhoneWebTurnError));
+
+    /// <summary>Пульт: «выполняет: {0}».</summary>
+    public static string PhoneWebToolRunningFormat => Loc.T(nameof(PhoneWebToolRunningFormat));
+
+    /// <summary>Пульт: «{0} — готово».</summary>
+    public static string PhoneWebToolDoneFormat => Loc.T(nameof(PhoneWebToolDoneFormat));
+
+    /// <summary>Пульт: «{0} — не вышло».</summary>
+    public static string PhoneWebToolFailedFormat => Loc.T(nameof(PhoneWebToolFailedFormat));
+
+    /// <summary>Пульт: «вложение — посмотрите на компьютере».</summary>
+    public static string PhoneWebAttachmentNote => Loc.T(nameof(PhoneWebAttachmentNote));
+
+    /// <summary>Пульт: «другой агент ждёт ответа».</summary>
+    public static string PhoneWebQuestionElsewhere => Loc.T(nameof(PhoneWebQuestionElsewhere));
+
+    /// <summary>Пульт: кнопка «открыть».</summary>
+    public static string PhoneWebOpen => Loc.T(nameof(PhoneWebOpen));
+
+    /// <summary>Пульт: «спрашивает подчинённый агент».</summary>
+    public static string PhoneWebFromSubagent => Loc.T(nameof(PhoneWebFromSubagent));
+
+    /// <summary>Пульт: «отправляю ответ…».</summary>
+    public static string PhoneWebAnswerSending => Loc.T(nameof(PhoneWebAnswerSending));
+
+    /// <summary>Пульт: заголовок «нужен JavaScript».</summary>
+    public static string PhoneWebNoScriptTitle => Loc.T(nameof(PhoneWebNoScriptTitle));
+
+    /// <summary>Пульт: объяснение без JavaScript.</summary>
+    public static string PhoneWebNoScript => Loc.T(nameof(PhoneWebNoScript));
+
+    /// <summary>Пульт: «если это сообщение не исчезло — обновите страницу».</summary>
+    public static string PhoneWebBootFallback => Loc.T(nameof(PhoneWebBootFallback));
+
+    /// <summary>Пульт: «загружаю пульт…».</summary>
+    public static string PhoneWebLoading => Loc.T(nameof(PhoneWebLoading));
+
+    /// <summary>Пульт: «пульт не запустился».</summary>
+    public static string PhoneWebCrash => Loc.T(nameof(PhoneWebCrash));
+
+    /// <summary>Пульт: кнопка «да, отменить ход».</summary>
+    public static string PhonePageCancelYes => Loc.T(nameof(PhonePageCancelYes));
+
+    /// <summary>Пульт: кнопка «нет, оставить».</summary>
+    public static string PhonePageCancelNo => Loc.T(nameof(PhonePageCancelNo));
+
+    /// <summary>Пульт: подпись «свой ответ», когда вариантов нет.</summary>
+    public static string PhonePageOwnLabelRequired => Loc.T(nameof(PhonePageOwnLabelRequired));
 
     /// <summary>Отказ: это служебная дверь движка — телефон отвечает своей дверью.</summary>
     public static string PhoneGateInternalRefused => Loc.T(nameof(PhoneGateInternalRefused));
@@ -4579,6 +4796,12 @@ public static class PanelStrings
     /// <summary>Страница телефона: кнопка ответа.</summary>
     public static string PhonePageAnswerButton => Loc.T(nameof(PhonePageAnswerButton));
 
+    /// <summary>
+    /// Страница телефона: главная кнопка многошагового вопроса, пока есть неотвеченные (D11 §5.2,
+    /// DEF-146). Когда отвечено всё, кнопка снова зовётся <see cref="PhonePageAnswerButton"/>.
+    /// </summary>
+    public static string PhonePageNextButton => Loc.T(nameof(PhonePageNextButton));
+
     /// <summary>Страница телефона: просьба ответить на каждый вопрос.</summary>
     public static string PhonePageChooseAll => Loc.T(nameof(PhonePageChooseAll));
 
@@ -4685,4 +4908,158 @@ public static class PanelStrings
 
     /// <summary>Что дальше, когда ход отменён.</summary>
     public static string PhonePageCancelledNext => Loc.T(nameof(PhonePageCancelledNext));
+
+    /// <summary>Слова D1: задача принята.</summary>
+    public static string PhoneTaskAccepted => Loc.T(nameof(PhoneTaskAccepted));
+
+    /// <summary>Слова D2: задача создана и принята.</summary>
+    public static string PhoneTaskNewAccepted => Loc.T(nameof(PhoneTaskNewAccepted));
+
+    /// <summary>Отказ D1/D2: отправка уже идёт (защёлка).</summary>
+    public static string PhoneTaskBusy => Loc.T(nameof(PhoneTaskBusy));
+
+    /// <summary>Отказ D1/D2: пустой текст задачи.</summary>
+    public static string PhoneTaskEmpty => Loc.T(nameof(PhoneTaskEmpty));
+
+    /// <summary>Отказ D1/D2: текст длиннее {0} знаков.</summary>
+    public static string PhoneTaskTooLongFormat => Loc.T(nameof(PhoneTaskTooLongFormat));
+
+    /// <summary>Отказ D1/D2/D5: тело не разобрано.</summary>
+    public static string PhoneTaskBadRequest => Loc.T(nameof(PhoneTaskBadRequest));
+
+    /// <summary>Отказ D1–D5: адрес сессии не по форме.</summary>
+    public static string PhoneTaskBadSession => Loc.T(nameof(PhoneTaskBadSession));
+
+    /// <summary>Отказ D1/D2: сессии больше нет.</summary>
+    public static string PhoneTaskSessionGone => Loc.T(nameof(PhoneTaskSessionGone));
+
+    /// <summary>Отказ D1/D2: движок не принял задачу ({0} — причина словами).</summary>
+    public static string PhoneTaskNotTakenFormat => Loc.T(nameof(PhoneTaskNotTakenFormat));
+
+    /// <summary>Отказ D2: разговор не создался ({0} — причина словами).</summary>
+    public static string PhoneTaskNewFailedFormat => Loc.T(nameof(PhoneTaskNewFailedFormat));
+
+    /// <summary>Слова D3: ход остановлен, задачи в очереди остались.</summary>
+    public static string PhoneStopDone => Loc.T(nameof(PhoneStopDone));
+
+    /// <summary>Слова D3: останавливать нечего.</summary>
+    public static string PhoneStopIdle => Loc.T(nameof(PhoneStopIdle));
+
+    /// <summary>Отказ D3: остановить не удалось ({0} — причина словами).</summary>
+    public static string PhoneStopFailedFormat => Loc.T(nameof(PhoneStopFailedFormat));
+
+    /// <summary>Отказ D4: очередь не прочиталась.</summary>
+    public static string PhoneQueueUnreadable => Loc.T(nameof(PhoneQueueUnreadable));
+
+    /// <summary>D4: сессия не открыта — очередь неизвестна.</summary>
+    public static string PhoneQueueNoLive => Loc.T(nameof(PhoneQueueNoLive));
+
+    /// <summary>Отказ D4 (429): слишком частые обновления.</summary>
+    public static string PhoneQueueBusy => Loc.T(nameof(PhoneQueueBusy));
+
+    /// <summary>Слова D5: пункт убран.</summary>
+    public static string PhoneQueueRemoved => Loc.T(nameof(PhoneQueueRemoved));
+
+    /// <summary>Слова D5: пункта уже нет (это не ошибка).</summary>
+    public static string PhoneQueueAlreadyGone => Loc.T(nameof(PhoneQueueAlreadyGone));
+
+    /// <summary>Отказ D5: убрать не удалось ({0} — причина словами).</summary>
+    public static string PhoneQueueRemoveFailedFormat => Loc.T(nameof(PhoneQueueRemoveFailedFormat));
+
+    /// <summary>Отказ S3 (401): телефон не сопряжён (F-1: полная фраза, а не обрывок входа).</summary>
+    public static string PhoneTaskUnauthorized => Loc.T(nameof(PhoneTaskUnauthorized));
+
+    /// <summary>Отказ S3 (403): чужая дверь (F-1: полная фраза).</summary>
+    public static string PhoneTaskForeignDoor => Loc.T(nameof(PhoneTaskForeignDoor));
+
+    /// <summary>Отказ S3 (413): тело больше предела (F-1: без «КиБ» и без «запроса»).</summary>
+    public static string PhoneTaskTooBig => Loc.T(nameof(PhoneTaskTooBig));
+
+    /// <summary>Отказ S3 (405): действие не принято — обновить страницу (F-1: полная фраза).</summary>
+    public static string PhoneTaskNotAccepted => Loc.T(nameof(PhoneTaskNotAccepted));
+
+    /// <summary>Причина для {0}: сервер не ответил вовремя (F-2: без числа).</summary>
+    public static string PhoneTaskReasonTimeout => Loc.T(nameof(PhoneTaskReasonTimeout));
+
+    /// <summary>Причина для {0}: сервер отказал в приёме (F-2: без числа).</summary>
+    public static string PhoneTaskReasonRefused => Loc.T(nameof(PhoneTaskReasonRefused));
+
+    /// <summary>Причина для {0}: связи нет (F-2: без числа).</summary>
+    public static string PhoneTaskReasonNoConnection => Loc.T(nameof(PhoneTaskReasonNoConnection));
+
+    /// <summary>Журнал: действие с телефона «{0}», текста {1} знаков, ответ {2}, исход {3}.</summary>
+    public static string PhoneTaskLogFormat => Loc.T(nameof(PhoneTaskLogFormat));
+
+    /// <summary>Журнал: очередь прочитана — живых сессий {0}, пунктов {1}, отброшено {2}.</summary>
+    public static string PhoneQueueReadLogFormat => Loc.T(nameof(PhoneQueueReadLogFormat));
+
+    /// <summary>Журнал: текст в событии ленты урезан до потолка 64 КиБ — событий {0} (DEF-071).</summary>
+    public static string PhoneLiveTrimmedLogFormat => Loc.T(nameof(PhoneLiveTrimmedLogFormat));
+
+    /// <summary>Экран задачи: заголовок раздела.</summary>
+    public static string PhoneWebTaskTitle => Loc.T(nameof(PhoneWebTaskTitle));
+
+    /// <summary>Подпись поля задачи.</summary>
+    public static string PhoneWebTaskLabel => Loc.T(nameof(PhoneWebTaskLabel));
+
+    /// <summary>Что уходит с телефона: текст уйдёт на компьютер.</summary>
+    public static string PhoneWebTaskHint => Loc.T(nameof(PhoneWebTaskHint));
+
+    /// <summary>Счётчик поля задачи: {0} из 4000.</summary>
+    public static string PhoneWebTaskCounterFormat => Loc.T(nameof(PhoneWebTaskCounterFormat));
+
+    /// <summary>Кнопка отправки задачи.</summary>
+    public static string PhoneWebTaskSend => Loc.T(nameof(PhoneWebTaskSend));
+
+    /// <summary>Кнопка «Новая задача» в списке.</summary>
+    public static string PhoneWebTaskNew => Loc.T(nameof(PhoneWebTaskNew));
+
+    /// <summary>Что произойдёт: новый разговор, папку выбирают на компьютере.</summary>
+    public static string PhoneWebTaskNewNote => Loc.T(nameof(PhoneWebTaskNewNote));
+
+    /// <summary>Черновик восстановлен (без точки — стоит в ряду с кнопкой).</summary>
+    public static string PhoneWebDraftRestored => Loc.T(nameof(PhoneWebDraftRestored));
+
+    /// <summary>Кнопка «Убрать черновик».</summary>
+    public static string PhoneWebDraftDiscard => Loc.T(nameof(PhoneWebDraftDiscard));
+
+    /// <summary>Хранилище недоступно: черновик не сохранится, отправка работает.</summary>
+    public static string PhoneWebDraftUnavailable => Loc.T(nameof(PhoneWebDraftUnavailable));
+
+    /// <summary>Раздел «Очередь».</summary>
+    public static string PhoneWebQueueTitle => Loc.T(nameof(PhoneWebQueueTitle));
+
+    /// <summary>Очередь пуста.</summary>
+    public static string PhoneWebQueueEmpty => Loc.T(nameof(PhoneWebQueueEmpty));
+
+    /// <summary>Показаны первые {0} из {1}.</summary>
+    public static string PhoneWebQueueMoreFormat => Loc.T(nameof(PhoneWebQueueMoreFormat));
+
+    /// <summary>Кнопка «Убрать» у пункта.</summary>
+    public static string PhoneWebQueueRemove => Loc.T(nameof(PhoneWebQueueRemove));
+
+    /// <summary>Вопрос подтверждения: убрать задачу из очереди?</summary>
+    public static string PhoneWebQueueRemoveAsk => Loc.T(nameof(PhoneWebQueueRemoveAsk));
+
+    /// <summary>Цена ответа: задача не начнётся, вернуть нельзя.</summary>
+    public static string PhoneWebQueueRemoveCost => Loc.T(nameof(PhoneWebQueueRemoveCost));
+
+    /// <summary>Безопасный ответ подтверждения.</summary>
+    public static string PhoneWebQueueKeep => Loc.T(nameof(PhoneWebQueueKeep));
+
+    /// <summary>Необратимый ответ подтверждения.</summary>
+    public static string PhoneWebQueueRemoveYes => Loc.T(nameof(PhoneWebQueueRemoveYes));
+
+    /// <summary>Место пункта: ждёт следующего хода.</summary>
+    public static string PhoneWebPlacementQueued => Loc.T(nameof(PhoneWebPlacementQueued));
+
+    /// <summary>Место пункта: пойдёт в текущий ход.</summary>
+    public static string PhoneWebPlacementSteering => Loc.T(nameof(PhoneWebPlacementSteering));
+
+    /// <summary>Кнопка «Остановить».</summary>
+    public static string PhoneWebStop => Loc.T(nameof(PhoneWebStop));
+
+    /// <summary>Предупреждение до остановки: очередь останется.</summary>
+    public static string PhoneWebStopWarning => Loc.T(nameof(PhoneWebStopWarning));
+
 }

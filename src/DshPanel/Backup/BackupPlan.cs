@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using DshPanel.Isolation;
 using DshPanel.Server;
@@ -182,6 +182,47 @@ public sealed record BackupPlan(IReadOnlyList<BackupRoot> Roots, IReadOnlyList<s
 /// </summary>
 public static class BackupPlanner
 {
+    /// <summary>
+    /// КАТАЛОГИ-КЭШИ ПЛАГИНОВ, КОТОРЫЕ В КОПИЮ НЕ ИДУТ (DEF-095): `plugins/<плагин>/runtime`.
+    ///
+    /// **От какого случая.** Автокопия падала на
+    /// `~/.dsh/plugins/dsh-better-edit/runtime/<профиль>/hash-store.sqlite`: файл держит живой
+    /// процесс плагина, и чтение под блокировкой — отказ ВСЕЙ копии. Это КЭШ, а не данные:
+    /// плагин строит его заново при следующем запуске.
+    ///
+    /// **Почему путём, а не именем.** Имя `runtime` слишком общее, чтобы выбрасывать его на любом
+    /// уровне домашнего каталога движка: рядом лежит остальное, и правило по имени однажды выбросило
+    /// бы чужое. Здесь перечисляются ровно существующие каталоги `plugins/*/runtime`.
+    ///
+    /// **Отказ доступа не роняет копию:** список тогда пуст, копия снимается как раньше, а «runtime
+    /// не исключён» видно по самой копии (файл снова попадёт в обход). Это названо в отчёте t23.
+    /// </summary>
+    public static IReadOnlyList<string> PluginRuntimeSkips(string? dshHome)
+    {
+        if (string.IsNullOrWhiteSpace(dshHome)) return Array.Empty<string>();
+
+        try
+        {
+            var plugins = Path.Combine(dshHome, "plugins");
+            if (!Directory.Exists(plugins)) return Array.Empty<string>();
+
+            var result = new List<string>();
+
+            foreach (var plugin in Directory.GetDirectories(plugins))
+            {
+                if (!Directory.Exists(Path.Combine(plugin, "runtime"))) continue;
+
+                result.Add("plugins/" + Path.GetFileName(plugin) + "/runtime");
+            }
+
+            return result;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
     /// <summary>
     /// ОТКАЗ ОТ СОЧЕТАНИЯ «приватные ключи + копия для передачи» — или пусто, когда сочетание
     /// допустимо. Решение владельца 29.09.2026 (п. 12 <c>docs\DESIGN.md</c>): такой архив унёс бы
@@ -403,7 +444,8 @@ public static class BackupPlanner
         Add(roots, notes, paths.DshHome, BackupRootKind.DshHome,
             PanelStrings.BackupRootDshHome,
             everything: full, skip: Skip(KeepModulesTrash), whole: full ? null : WholeGit,
-            files: WithoutLiveLog(Restricted(paths.DshHome), paths.DshHome));
+            files: WithoutLiveLog(Restricted(paths.DshHome), paths.DshHome),
+            skipRelative: PluginRuntimeSkips(paths.DshHome));
 
         if (shareable)
         {
@@ -821,7 +863,8 @@ public static class BackupPlanner
         IReadOnlyList<string>? skip,
         IReadOnlyList<string>? whole,
         IReadOnlyList<string>? files = null,
-        string? groupName = null)
+        string? groupName = null,
+        IReadOnlyList<string>? skipRelative = null)
     {
         if (string.IsNullOrWhiteSpace(directory)) return;
 
@@ -844,7 +887,7 @@ public static class BackupPlanner
         }
 
         roots.Add(new BackupRoot(
-            new BackupSource(Path.GetFullPath(directory), prefix, everything, skip, whole, files),
+            new BackupSource(Path.GetFullPath(directory), prefix, everything, skip, whole, files, skipRelative),
             kind,
             purpose));
     }

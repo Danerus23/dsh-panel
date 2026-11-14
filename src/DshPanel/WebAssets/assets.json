@@ -1,0 +1,16 @@
+{
+  "shell": "shell.html",
+  "js": "/assets/main-BfcvGEKA.js",
+  "css": "/assets/main-BgjINtN_.css",
+  "placeholders": [
+    "__LANG__",
+    "__TITLE__",
+    "__BOOT__",
+    "__LOADING__",
+    "__BOOT_FALLBACK__",
+    "__NOSCRIPT_TITLE__",
+    "__NOSCRIPT_TEXT__",
+    "__JS__",
+    "__CSS__"
+  ]
+}

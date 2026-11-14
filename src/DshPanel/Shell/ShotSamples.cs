@@ -60,7 +60,7 @@ public static class ShotSamples
     public const string BackupFolder = "~\\DshBackups";
 
     /// <summary>Каталог движка — под маской; версия настоящая, потому что она — не личное.</summary>
-    public const string EngineDir = "~\\AppData\\Local\\DshPanel2\\engine\\0.1.5-rc.2";
+    public const string EngineDir = "~\\AppData\\Local\\DshPanel2\\engine\\0.2.1-rc.2";
 
     /// <summary>
     /// ПУТЬ ЗАПИСИ АВТОЗАПУСКА НА КАДРЕ — под маской, как его показывает панель человеку
@@ -70,7 +70,7 @@ public static class ShotSamples
     public const string AutostartPath = "~\\AppData\\Local\\DshPanel2\\DshPanel.exe";
 
     /// <summary>Версия движка — та, что панель ставит: «проверена» она по замеру, а не по вкусу.</summary>
-    public const string EngineVersion = "0.1.5-rc.2";
+    public const string EngineVersion = "0.2.1-rc.2";
 
     /// <summary>Версия Node: выдуманная, но правдоподобная (порог замка — 22.19.0).</summary>
     public const string NodeVersion = "22.11.0";
@@ -91,61 +91,55 @@ public static class ShotSamples
     public const string Currency = "USD";
 
     /// <summary>Когда «проверяли» баланс — выдуманное, но правдоподобное время.</summary>
-    public static readonly DateTimeOffset CheckedAt = new(2026, 10, 12, 12, 40, 0, TimeSpan.FromHours(3));
+    public static readonly DateTimeOffset CheckedAt = new(2026, 11, 14, 12, 40, 0, TimeSpan.FromHours(3));
 
     /// <summary>
-    /// ДАТА ОБРАЗЦОВОГО ВЫПУСКА НА КАДРЕ — 17.10.2026, И ЭТО ОДИН ИСТОЧНИК ДЛЯ ВСЕХ КАДРОВ (t13, 18.10.2026).
+    /// ДАТА ОБРАЗЦОВОГО ВЫПУСКА НА КАДРЕ — 14.11.2026, И ЭТО ОДИН ИСТОЧНИК ДЛЯ ВСЕХ КАДРОВ.
     ///
-    /// **От какого случая.** Владелец увидел на кадре «Обновление» строку «Выпущен: 27.09.2026»
-    /// и «проверено 28.09.2026», а выпуск 2.1.0 вышел **17.10.2026**. Кадр витрины называл дату,
-    /// которой у выпуска нет: читатель сверил бы её со страницей релиза и решил, что панель не
-    /// знает собственного выпуска. Сценарий кадра при этом верен (есть версия новее установленной,
-    /// есть дата проверки) — менялись ТОЛЬКО даты, и меняются они здесь, в образцовой двери,
-    /// а не текстом окна: окно обязано показывать то, что ему дали.
+    /// **От какого случая.** Кадр «Обновление» обязан называть ту дату, которая есть у выпуска.
+    /// Прежде здесь стояли даты прошлых циклов, и витрина называла дату, которой у выпуска нет
+    /// (так было с 27.09.2026 при выпуске 2.1.0 — t13, 18.10.2026). Меняется дата здесь,
+    /// в образцовой двери, а не текстом окна: окно обязано показывать то, что ему дали.
     ///
     /// Значение — строка в том виде, в каком её отдаёт GitHub (`published_at`): её разбирает
     /// и печатает ОДНО место (<see cref="DshPanel.Update.UpdateLines.PublishedLine"/>).
-    /// Время — 10:00 UTC, чтобы при любом поясе от −9 до +13 местная дата оставалась 17.10.2026
-    /// (полночь по UTC показала бы 18.10 у нас — и кадр снова соврал бы).
+    /// Время — 10:00 UTC, чтобы при любом поясе от −9 до +13 местная дата оставалась 14.11.2026
+    /// (полночь по UTC показала бы 15.11 у нас — и кадр снова соврал бы).
     /// </summary>
-    public const string ReleasePublished = "2026-10-24T10:00:00Z";
+    public const string ReleasePublished = "2026-11-14T10:00:00Z";
 
     /// <summary>
     /// ВЕРСИЯ ОБРАЗЦОВОГО ВЫПУСКА — ОДИН ИСТОЧНИК ДЛЯ КАДРОВ ОБНОВЛЕНИЯ (DEF-009, 2.4.1).
     ///
-    /// **Зачем отдельным значением, когда версия уже стоит строкой в `ShotUpdateControl`.** Кадр
-    /// «подготовлено» называет её ДВАЖДЫ: в решении раздела («доступна версия v2.4.0») и в пути
-    /// подготовленной сборки («Сборка: …\state\update\2.4.0»). Две копии одного номера однажды
-    /// разошлись бы — и кадр показал бы сборку версии, которой у выпуска нет. Поэтому номер живёт
-    /// здесь, а обе стороны его берут отсюда.
+    /// **Зачем отдельным значением.** Кадр «подготовлено» называет номер ДВАЖДЫ: в решении
+    /// раздела и в пути подготовленной сборки. Две копии одного номера однажды разошлись бы —
+    /// и кадр показал бы сборку версии, которой у выпуска нет. Поэтому номер живёт здесь,
+    /// а обе стороны берут его отсюда.
     ///
     /// ⚠️ Значение — БЕЗ `v`: так версия выглядит в имени папки подготовки. Приставку `v` дописывает
     /// тот, кто говорит о выпуске (`ShotUpdateControl`).
     /// </summary>
-    public const string UpdateVersion = "2.4.0";
+    public const string UpdateVersion = "2.5.0";
 
     /// <summary>
-    /// УСТАНОВЛЕННАЯ ВЕРСИЯ НА КАДРАХ ОБНОВЛЕНИЯ — **2.3.2**, РЕАЛЬНО ВЫПУЩЕННАЯ 22.10.2026
-    /// (решение капитана 24.10.2026, остаток DEF-009).
+    /// УСТАНОВЛЕННАЯ ВЕРСИЯ НА КАДРАХ ОБНОВЛЕНИЯ — **2.5.0**, ТА ЖЕ, ЧТО ОБРАЗЦОВЫЙ ВЫПУСК
+    /// (решение капитана 14.11.2026, остаток DEF-009).
     ///
-    /// **От какого случая.** До этой правки на кадре стояла версия самой панели (`AboutInfo.PanelVersion`),
-    /// и после выпуска 2.4.0 она СОВПАЛА с образцовым выпуском: над готовой сборкой вставали
-    /// «У вас последняя версия 2.4.0 — обновляться не нужно» и «Обновляться некуда», то есть кадр
-    /// противоречил сам себе и учил неправде. Теперь на кадре — БОЛЕЕ СТАРАЯ версия, чем выпуск,
-    /// и оба кадра («settings-update» и «settings-update-prepared») показывают настоящее «есть новее».
+    /// **От какого случая.** Прежде здесь стояла версия СТАРЕЕ выпуска, чтобы кадр показывал
+    /// «есть новее». Для витрины 2.5.0 это неверно: на кадре «Обновление» и на кадре «О программе»
+    /// обязан стоять ОДИН номер, иначе один витринный ряд противоречит сам себе (`about` говорит
+    /// 2.5.0, а `update` называет другую установленную версию). Поэтому обе версии равны,
+    /// и кадр честно говорит: у вас последняя.
     ///
-    /// ⚠️ Обе версии — **реально выпущенные** (2.3.2 — 22.10.2026, 2.4.0 — 24.10.2026): кадр не имеет
-    /// права называть версию, которой нет (`_team\241\d1-normy.md` §2). Поэтому 2.4.1 здесь НЕ стоит:
-    /// она ещё не выпущена.
+    /// ⚠️ Значение — **реально выпущенная** версия (2.5.0 вышла 14.11.2026): кадр не имеет
+    /// права называть версию, которой нет (`_team\241\d1-normy.md` §2).
     /// </summary>
-    public const string UpdateInstalled = "2.3.2";
+    public const string UpdateInstalled = "2.5.0";
 
     /// <summary>
-    /// КОГДА ПРОВЕРЯЛИ ОБРАЗЦОВЫЙ ВЫПУСК — 18.10.2026, время то же, что стояло в образце
-    /// (12:00 UTC, то есть 15:00 по машине владельца). Дата выпуска — 17.10, проверка — на
-    /// следующий день: ровно так и было в цикле 2.1.0.
+    /// КОГДА ПРОВЕРЯЛИ ОБРАЗЦОВЫЙ ВЫПУСК — 14.11.2026, день выпуска, 12:00 UTC (15:00 по машине).
     /// </summary>
-    public static readonly DateTimeOffset ReleaseCheckedAt = new(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+    public static readonly DateTimeOffset ReleaseCheckedAt = new(2026, 11, 14, 12, 0, 0, TimeSpan.Zero);
 
     /// <summary>
     /// СНИМОК ЦЕН ДЛЯ КАДРА «ПИКИ И ТАРИФЫ» — ЧИСЛА СТРАНИЦЫ ЦЕН (U16, 2.4.0).
@@ -308,13 +302,14 @@ public static class ShotSamples
                 Skill(PanelStrings.EnvSkillTaskCancel, PanelStrings.EnvSkillNotDeclared, EnvLineState.Error, PanelStrings.EnvSkillTaskCancelNo),
                 Skill(PanelStrings.EnvSkillModelKey, PanelStrings.EnvSkillChecked, EnvLineState.Ok, PanelStrings.EnvSkillHowFile),
                 Skill(PanelStrings.EnvSkillBackupLayout, PanelStrings.EnvSkillChecked, EnvLineState.Ok, PanelStrings.EnvSkillHowFile),
-                Skill(PanelStrings.EnvSkillEngineVersion, PanelStrings.EnvSkillVersionUnread, EnvLineState.Warning, PanelStrings.EnvSkillEngineVersionNo),
-                new EnvironmentLine(PanelStrings.EnvSkillsProbe)
-                {
-                    State = EnvLineState.Grey,
-                    Word = PanelStrings.EnvSkillNotChecked,
-                    Detail = PanelStrings.EnvSkillsMomentNotAsked,
-                },
+                // ВЕРСИЯ ДВИЖКА НА КАДРЕ ПРОЧИТАНА (t23, 14.11.2026): образцовая дверь знает ту версию,
+                // которую ставит панель (`EngineVersion`), и кадр витрины не имеет права показывать
+                // плейсхолдер «не прочитана» — человек читает это как «панель не смогла».
+                Skill(PanelStrings.EnvSkillEngineVersion, PanelStrings.EnvSkillChecked, EnvLineState.Ok, PanelStrings.EnvSkillHowFile),
+                // СТРОКА «ЖИВАЯ ПРОБА УМЕНИЙ — НЕ ПРОВЕРЯЛАСЬ» СНЯТА ИЗ ОБРАЗЦА (t23, 14.11.2026):
+                // она ничего не проверяла (у съёмки нет живого сервера) и занимала одну из десяти строк
+                // карточки — из-за неё в кадр 1080×900 не влезали версии Node/npm/pnpm, которые заказ
+                // требует видеть. Живой прогон рисует эту строку сам и её не теряет.
             },
             PanelStrings.EnvSkillsSubtitle),
 
@@ -385,21 +380,21 @@ public static class ShotSamples
     public static string PricingHistoryText()
     {
         var anchor = Snapshot(
-            new DateTimeOffset(2026, 10, 8, 9, 0, 0, TimeSpan.FromHours(3)),
+            new DateTimeOffset(2026, 11, 8, 9, 0, 0, TimeSpan.FromHours(3)),
             ("1M INPUT TOKENS (CACHE HIT)", "$0.004", "$0.008"),
             ("1M INPUT TOKENS (CACHE MISS)", "$0.20", "$0.40"),
             ("1M OUTPUT TOKENS", "$0.80", "$1.60"));
 
         var first = Change(
-            new DateTimeOffset(2026, 10, 10, 9, 0, 0, TimeSpan.FromHours(3)),
+            new DateTimeOffset(2026, 11, 10, 9, 0, 0, TimeSpan.FromHours(3)),
             new[] { new PriceChangeRow("1M INPUT TOKENS (CACHE HIT)", "$0.004", "$0.003", "$0.008", "$0.006") });
 
         var second = Change(
-            new DateTimeOffset(2026, 10, 11, 9, 0, 0, TimeSpan.FromHours(3)),
+            new DateTimeOffset(2026, 11, 13, 9, 0, 0, TimeSpan.FromHours(3)),
             new[] { new PriceChangeRow("1M INPUT TOKENS (CACHE MISS)", "$0.20", "$0.15", "$0.40", "$0.3") });
 
         var third = Change(
-            new DateTimeOffset(2026, 10, 12, 9, 0, 0, TimeSpan.FromHours(3)),
+            new DateTimeOffset(2026, 11, 14, 9, 0, 0, TimeSpan.FromHours(3)),
             new[] { new PriceChangeRow("1M OUTPUT TOKENS", "$0.80", "$0.6", "$1.60", "$1.2") });
 
         return PricingHistoryStore.Encode(new PricingHistory(anchor, new[] { first, second, third }, 0));

@@ -173,7 +173,8 @@ public class EngineSurfaceRegressionTests
     /// <summary>
     /// СНЯТЫЕ С НАДОБНОСТИ НЕ ЗОВУТСЯ ЖИВЬЁМ И НЕ ПОПАДАЮТ В ТЕЛЕФОН: они живут только в каталоге.
     /// Проверка держит границу блока A — «проба зовёт 77, а не 84» — и заодно не даёт вернуть снятое
-    /// имя в белый список телефона (там ровно 13 своих вызовов, и семь снятых — не среди них).
+    /// имя в белый список телефона (там ровно 14 своих вызовов — 13 прежних и 14-е `workspace/follow`
+    /// по слову владельца 11.11.2026, и семь снятых — не среди них).
     /// </summary>
     [Fact]
     public void Снятые_имена_не_зовутся_пробой_и_не_попали_в_телефон()
@@ -182,8 +183,8 @@ public class EngineSurfaceRegressionTests
 
         Assert.All(EngineRpcSurface.Retired, name => Assert.DoesNotContain(name, probeCalls, StringComparer.Ordinal));
 
-        // Белый список телефона — ровно 13 имён, и ни одного снятого среди них.
-        Assert.Equal(13, DshPanel.Server.PhoneDecisions.Allowed.Count);
+        // Белый список телефона — ровно 14 имён, и ни одного снятого среди них.
+        Assert.Equal(14, DshPanel.Server.PhoneDecisions.Allowed.Count);
         Assert.All(
             EngineRpcSurface.Retired,
             name => Assert.DoesNotContain(name, DshPanel.Server.PhoneDecisions.Allowed.Select(c => c.Endpoint), StringComparer.Ordinal));

@@ -1,0 +1,1756 @@
+/* Вид телефонного пульта. Все цвета — `var(--dp-*)`, все размеры — из чисел банка:
+   одна колонка ≤ 60ch, основной текст 16px/1,5, цель ≥ 44px (пол 24), фокус 2px, перенос длинных
+   слов. Ни одного внешнего ресурса: шрифты — системный стек. */
+
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+  /* Внизу — ЗАЦЕП ШТОРКИ ВВОДА (шарика больше нет, D11 §2.2), и это ОДНО число на все состояния
+     (`60-forms` §7): `--dp-bottom-reserve` — столько занимает нижний стек (зацеп, а над ним вопрос и
+     очередь). Его пишет `useBottomReserve` (фактическая высота стека), а запасной путь — 52 =
+     44 зацепа + 8 зазора; то же число берёт автоскролл (`config.ts`, «меняешь число — меняешь проверку»).
+     Что скажет браузер сам (фокус, scrollIntoView), тоже обязано оставить это место свободным
+     (WCAG 2.2 SC 2.4.11, C43 / F110; вердикт t10 §1б). */
+  scroll-padding-bottom: var(--dp-bottom-reserve, 52px);
+}
+
+/* ЗАПАС СНИЗУ — ОДНО число на все состояния (`60-forms` §7: страница не прыгает; D11 §1.2).
+   Запасной путь — 52: зацеп 44 + зазор 8. Живое значение ставит `useBottomReserve` на эту же
+   переменную: когда в стеке появляется вопрос или очередь, лента не уходит под них. */
+:root {
+  --dp-bottom-reserve: 52px;
+}
+
+body {
+  margin: 0;
+  background: var(--dp-page);
+  color: var(--dp-ink);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans",
+    "Noto Sans SC", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-text-size-adjust: 100%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--dp-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* D16 (13.11.2026): ШИРИНА ПОВЕРХНОСТИ живёт в px и тянется за экраном до 720, а ДЛИНА СТРОКИ —
+   в `ch` у самих текстовых блоков (`.dp-md`, легенда, пункт очереди, подпись варианта). Прежние
+   `60ch` на странице означали «вся рамка ≈ 517,5 px» и зажимали карточку на Fold3 (657 не росла).
+   Число 720 — наше (нормы для планшетов в банке нет, `_team\fixes\d16-adaptive.md` §2/§3);
+   media queries нет: ниже 720 колонка = vw, выше — 720, пересчёт делает сам CSS. */
+.dp-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 16px 40px;
+}
+
+/* На экране с зацепом нижний отступ страницы = запас снизу: лента не уходит под зацеп (и под
+   поверхности стека), и живой конец виден целиком (`60-forms` §7). */
+.dp-page.dp-page-composer {
+  padding-bottom: var(--dp-bottom-reserve, 52px);
+}
+
+/* ── шапка ─────────────────────────────────────────────────────────────────────────────────── */
+
+.dp-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+/* ЛИПКАЯ ШАПКА СЕССИИ (R2, слово владельца 11.11.2026). Шапка прилипает к верху окна: возврат к списку
+   виден всегда, а лента уезжает под неё. Фон — цвет страницы, иначе текст ленты просвечивает;
+   нижняя волосяная граница отделяет шапку от содержимого. Слева — кнопка-иконка 44×44. */
+.dp-head-session {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  margin-inline: -16px;
+  padding: 8px 16px;
+  background: var(--dp-page);
+  border-bottom: 1px solid var(--dp-line-soft);
+}
+
+.dp-head-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dp-head-session-row h1 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.dp-head-back {
+  flex: none;
+}
+
+/* «Назад» на «Новой задаче» — прямая ветка колонки `.dp-head` (у неё `align-items: stretch`,
+   и ссылка растягивалась на всю ширину: 328×44 при 360, 288×44 при 320 — находка L1 F2).
+   В шапке сессии та же кнопка живёт в строке `.dp-head-session-row`, поэтому этим правилом
+   не задета: она остаётся 44×44, как и была (D1 §8 — один орган на оба экрана). */
+.dp-head > .dp-head-back {
+  align-self: flex-start;
+  inline-size: 44px;
+  block-size: 44px;
+}
+/* Ряд органов липкой шапки: путь повторения стоит СРАЗУ под словами обрыва (D2 F-05). */
+.dp-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dp-head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+h1 {
+  font-size: 22px;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.dp-meta {
+  margin: 0;
+  color: var(--dp-ink-2);
+  font-size: 14px;
+}
+
+.dp-note {
+  margin: 0;
+  color: var(--dp-ink-2);
+  font-size: 14px;
+}
+
+/* ── органы ───────────────────────────────────────────────────────────────────────────────── */
+
+.dp-actions {
+  display: flex;
+  /* Ряд действий переносится ЦЕЛИКОМ (R2): подпись кнопки не рвётся внутри слова, поэтому
+     кнопка шире своей подписи и на узком экране уходит целиком на строку ниже. */
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ПОДПИСИ КНОПОК НЕ РВУТСЯ ВНУТРИ СЛОВА (R2, живая проверка 11.11.2026: «Остановит|ь» на 320).
+   Переносится ряд, а не слово; ширина кнопки — по самой длинной подписи; цель 44 — ниже. */
+button,
+.dp-link-button,
+a.dp-primary,
+a.dp-quiet {
+  white-space: nowrap;
+  hyphens: none;
+  overflow-wrap: normal;
+}
+
+.dp-composer-actions > button {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+button.dp-primary,
+a.dp-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 10px 20px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--dp-accent);
+  color: var(--dp-accent-ink);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+button.dp-primary:disabled {
+  background: var(--dp-line-soft);
+  color: var(--dp-ink-2);
+  cursor: not-allowed;
+}
+
+/* Тихие действия: рамка — носитель границы (3:1), а не декоративный волосок. */
+button.dp-quiet,
+a.dp-quiet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dp-ink);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+button.dp-quiet:disabled {
+  color: var(--dp-ink-2);
+  border-color: var(--dp-line-soft);
+  cursor: progress;
+}
+/* Semi-кнопка «тихого» действия: размеры и цвета наши (Semi даёт поведение и фокус).
+   Цель ≥ 44, граница органа 3:1 — числа банка 30 §3 / 31 §3. */
+.semi-button.dp-semi-quiet {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dp-ink);
+  font-size: 16px;
+}
+
+.semi-button.dp-semi-quiet:hover {
+  background: var(--dp-accent-wash);
+}
+
+.semi-button.dp-semi-quiet:disabled {
+  color: var(--dp-ink-2);
+  border-color: var(--dp-line-soft);
+}
+
+a.dp-link {
+  color: var(--dp-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── список ───────────────────────────────────────────────────────────────────────────────── */
+
+.dp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dp-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--dp-line-soft);
+  color: var(--dp-ink);
+  text-decoration: none;
+}
+
+.dp-row:hover {
+  background: var(--dp-accent-wash);
+}
+
+.dp-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dp-row-title {
+  font-weight: 600;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dp-row-meta {
+  color: var(--dp-ink-2);
+  font-size: 14px;
+}
+
+.dp-row-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  color: var(--dp-ink-2);
+  font-size: 14px;
+  text-align: right;
+  flex-shrink: 0;
+  max-width: 45%;
+}
+
+.dp-badge {
+  border: 1px solid var(--dp-line);
+  border-radius: 9999px;
+  padding: 1px 8px;
+  color: var(--dp-ink);
+  font-size: 13px;
+}
+
+/* ── лента ─────────────────────────────────────────────────────────────────────────────────── */
+
+/* ЛЕНТА КАК В МЕССЕНДЖЕРЕ (R4, слово владельца 11.11.2026): реплика человека — СПРАВА, пузырём
+   ограниченной ширины; ответ агента — СЛЕВА, без пузыря, обычным текстом на фоне страницы.
+   Подложка пузыря — токен `--dp-user` из банка (светлая тема #eef4ff, тёмная #1f2a36); цвет текста
+   `--dp-ink` — пара проверяется contrast.test.ts, своих цветов здесь нет. Длинные слова не вылезают:
+   `overflow-wrap: anywhere`; переносы обычные (hyphens: none). Вложенные блоки (код, цитаты, вложения)
+   внутри пузыря не ломаются: они ограничены шириной пузыря и скроллятся сами, если не влезли. */
+.dp-feed {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+  /* R4 (V4c §6): якорь вставки старших страниц держим СВОИМ кодом (`SessionScreen` — по дельте
+     высоты ленты), а не эвристикой браузера: её поправка молча пропадала, когда React пересоздавал
+     узлы строк, и видимая строка уезжала ровно на высоту батча (200 px). С выключенной авто-привязкой
+     компенсация одна и та же в любом исходе. */
+  overflow-anchor: none;
+}
+
+/* Своё сообщение человека: справа, пузырь ≤ 85 % колонки И ≤ 60ch (D16: длина строки важнее ширины
+   поверхности), скругление как у мессенджера. */
+.dp-msg.dp-user {
+  align-self: flex-end;
+  max-width: min(85%, 60ch);
+  padding: 10px 12px;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--dp-user);
+  color: var(--dp-ink);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* Ответ агента: слева, БЕЗ пузыря — текст на фоне страницы. */
+.dp-msg.dp-agent {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--dp-ink);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* Недописанный ответ агента: тот же текстовый столбец, помечен пунктиром слева. */
+.dp-msg.dp-draft {
+  border-left: 2px dashed var(--dp-line-soft);
+  padding-left: 8px;
+  color: var(--dp-ink);
+}
+
+/* Вложенное внутри пузыря (код, цитата, вложение) не выходит за его ширину и скроллится само. */
+.dp-msg > * {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.dp-msg pre,
+.dp-msg code {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* ── РАЗМЕТКА РЕПЛИКИ АГЕНТА (S3c; правила вида — D1 `_team\s3c\d1-vid.md` §2) ──────────────
+   Лента остаётся ОДНОЙ колонкой текста: разметка меняет форму слов ВНУТРИ неё, а не ширину
+   и не положение. Числа — только ссылками на `31` (§1.3 отступы, §1.4 кегли, §1.5 радиусы)
+   и на уже принятые элементы пульта; своих чисел здесь нет. Шрифт кода — системный моно,
+   без сети (`31` §6). Подсветки синтаксиса нет: `class="language-*"` санитайзер сохраняет,
+   но НИ ОДНО правило CSS на него не опирается (D1 §2, §7). */
+.dp-md {
+  /* Сброс `white-space: pre-wrap` у `.dp-msg`: в разметке переводы строк — служебные. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  /* D16: текст реплики остаётся читаемым на широком экране: 60ch — предел длины строки, а не поверхности. */
+  max-width: 60ch;
+}
+/* Первый/последний ребёнок без внешней отбивки: реплика не «отклеивается» от своей строки. */
+.dp-md > :first-child {
+  margin-top: 0;
+}
+.dp-md > :last-child {
+  margin-bottom: 0;
+}
+.dp-md p {
+  margin: 0 0 8px;
+}
+/* Заголовки разметки — УЖЕ опущенные рендерером до h4–h6 (D1 §3): здесь только кегль. */
+.dp-md h4 {
+  margin: 12px 0 4px;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+}
+.dp-md h5 {
+  margin: 12px 0 4px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.dp-md h6 {
+  margin: 12px 0 4px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--dp-ink-2);
+}
+.dp-md ul,
+.dp-md ol {
+  margin: 0 0 8px;
+  padding-left: 24px;
+}
+.dp-md li + li {
+  margin-top: 4px;
+}
+/* Вложенный список — ещё на 16 (D1 §2); глубже двух уровней считает не CSS, а автор текста. */
+.dp-md li > ul,
+.dp-md li > ol {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+.dp-md strong {
+  font-weight: 600;
+}
+.dp-md em {
+  font-style: italic;
+}
+.dp-md del {
+  text-decoration: line-through;
+}
+/* Инлайн-код: моно, КЕГЛЬ КАК У ТЕКСТА ВОКРУГ, подложка `--dp-line-soft`, радиус 3, поля 1/4. */
+.dp-md code {
+  display: inline;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--dp-line-soft);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  font-size: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Блок кода — 14/20, поля 8, радиус 8, прокрутка ВБОК ВНУТРИ блока (страница остаётся узкой).
+   `overflow-y` не ставим: вертикальную прокрутку держит страница, иначе в ленте вторая полоса. */
+.dp-md pre {
+  display: block;
+  margin: 0 0 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--dp-line-soft);
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  white-space: pre;
+}
+/* Код ВНУТРИ блока — ИНЛАЙН, а не блок: только тогда браузер отдаёт переполнение блоку `pre`,
+   и вбок прокручивается он (проверено: display:block/inline-block — `pre.scrollWidth` = ширине
+   блока, и строка просто обрезается без прокрутки). */
+.dp-md pre code {
+  display: inline;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+/* Цитата — полоса слева, текст тише, подложки нет. */
+.dp-md blockquote {
+  margin: 0 0 8px;
+  padding-left: 12px;
+  border-left: 3px solid var(--dp-line);
+  color: var(--dp-ink-2);
+}
+/* Ссылка: та же вкладка (`target` нет), посещение цвет не меняет (GOV.UK links). */
+.dp-md a[href] {
+  color: var(--dp-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dp-md a[href]:visited {
+  color: var(--dp-accent);
+}
+/* Не-http схему санитайзер оставил БЕЗ href — это текст, а не «ссылка без нажатия» (D1 §5). */
+.dp-md a:not([href]) {
+  color: inherit;
+  text-decoration: none;
+}
+.dp-md hr {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--dp-line-soft);
+}
+
+/* Отказ догруза «раньше» (R4): ТОНКАЯ строка, а не блок — место в ленте не занимает,
+   рядом «Повторить» (цель 44 держится). */
+.dp-earlier-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 8px 0 0;
+  color: var(--dp-danger);
+  font-size: 14px;
+}
+
+.dp-earlier-error .dp-link-button {
+  margin-left: 0;
+}
+
+.dp-turn {
+  text-align: center;
+  color: var(--dp-ink-2);
+  font-size: 14px;
+  border-top: 1px solid var(--dp-line-soft);
+  padding-top: 8px;
+}
+
+.dp-tool {
+  color: var(--dp-ink-2);
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.dp-error {
+  color: var(--dp-danger);
+  background: var(--dp-danger-wash);
+  border-left: 3px solid var(--dp-danger);
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+
+.dp-attachment {
+  margin: 6px 0 0;
+  color: var(--dp-ink-2);
+  font-size: 14px;
+}
+
+.dp-status {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--dp-accent-wash);
+  color: var(--dp-ink);
+}
+
+.dp-error-block {
+  margin: 0 0 16px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--dp-danger-wash);
+  color: var(--dp-ink);
+  border-left: 3px solid var(--dp-danger);
+}
+
+.dp-empty {
+  padding: 24px 0;
+  color: var(--dp-ink-2);
+}
+
+.dp-skeleton {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dp-skeleton li {
+  height: 44px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: var(--dp-line-soft);
+}
+
+/* ── вход ──────────────────────────────────────────────────────────────────────────────────── */
+
+.dp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+label {
+  font-weight: 600;
+}
+
+input[type="tel"] {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  background: var(--dp-card);
+  color: var(--dp-ink);
+  font: inherit;
+  font-size: 22px;
+  letter-spacing: 0.2em;
+}
+
+input[type="tel"][aria-invalid="true"] {
+  border-color: var(--dp-danger);
+}
+
+.dp-alert {
+  margin: 0;
+  color: var(--dp-danger);
+  font-weight: 600;
+}
+
+.dp-device {
+  margin-top: 32px;
+  color: var(--dp-ink-2);
+  font-size: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Заголовок получает фокус программно (точка входа читалки), но это не орган:
+   кольцо вокруг неинтерактивного заголовка читается как «нажми меня». */
+h1:focus-visible {
+  outline: none;
+}
+
+/* ── карточка вопроса (S2) ─────────────────────────────────────────────────────────────────── */
+
+/* НА СПИСКЕ вопрос остаётся карточкой В ПОТОКЕ (D11 §4.2: «плавающая поверхность — только сессия»),
+   поэтому базовые правила — прежние, а вид поверхности живёт в `.dp-bottom .dp-question` ниже. */
+.dp-question {
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  background: var(--dp-accent-wash);
+}
+
+/* ПОВЕРХНОСТЬ ВОПРОСА В СЕССИИ (D11 §4.2, DEF-145): непрозрачная карточка над лентой, с тенью;
+   внутри — голова (h2 + пейджер) и ПРОКРУЧИВАЕМОЕ тело, ряд действий — ВНЕ прокрутки (`60` §7).
+   Модальности нет: ни скрима, ни `inert`, ни ловушки фокуса — лента живёт и листается за ней. */
+.dp-bottom .dp-question {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 12px;
+  /* Карточка не выпускает своих детей наружу: при сжатии стека (вопрос + раскрытая очередь)
+     кнопки не рисуются поверх соседа (D13-2). */
+  overflow: hidden;
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  /* Непрозрачный фон — под поверхностью текст ленты, он не должен просвечивать. */
+  background: var(--dp-card);
+  /* Нормы тени нет (`10` §3.5) — число наше, из принятого ряда 2/8 → 4/12 → 6/24. */
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  /* Весь экран одним взглядом: вопрос не съедает ленту и не упирается в кромки (`30` §1, `60` §7).
+     ⚠️ V4/F2 (R1): здесь стояло `max-height: none` — тогда на 360×800 карточка выросла до 508 px
+     при пределе 440, и D11 §4.2 («не больше `min(55dvh,480px)`») нарушалось. */
+  /* R6 (живая находка 13.11.2026): третий член — ВИДИМАЯ область над клавиатурой. Стек поднят на
+     `--dp-vv-inset` (ниже), но потолок считался только по `dvh` (layout-вьюпорт, клавиатурой не
+     меняется): на 320×603 с клавиатурой верх карточки уезжал за кромку (замер: top −20).
+     60 = зацеп 44 + зазор 8 + 8 запаса. */
+  max-height: min(55dvh, 480px, calc(100dvh - var(--dp-vv-inset, 0px) - 60px));
+}
+@media (max-height: 700px) {
+  .dp-bottom .dp-question {
+    max-height: min(45dvh, 420px, calc(100dvh - var(--dp-vv-inset, 0px) - 60px));
+  }
+}
+
+/* Голова и ряд действий не сжимаются и не прокручиваются: действие видно без прокрутки. */
+.dp-question-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+}
+.dp-question-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+.dp-bottom .dp-question-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+.dp-bottom .dp-ask {
+  margin-bottom: 0;
+}
+/* Ряд действий — ВНЕ прокрутки и с НАЗВАННОЙ границей: без неё прокрутка тела режет вариант
+   вплотную к кнопкам, и это читается как «карточка сломалась», а не «дальше есть прокрутка»
+   (D13-8/F-D). Цена — 9 px телу; на 320 она учтена в ветке D13-1. */
+.dp-question-actions {
+  flex: none;
+  padding-top: 8px;
+  border-top: 1px solid var(--dp-line);
+}
+
+.dp-question-done {
+  background: var(--dp-card);
+}
+
+.dp-question-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.dp-ask {
+  border: 0;
+  margin: 0 0 16px;
+  padding: 0;
+  min-width: 0;
+}
+
+.dp-ask legend {
+  padding: 0;
+  font-weight: 600;
+  font-size: 16px;
+  /* D16: легенда вопроса — текст: предел 60ch (карточка при этом растёт до 720). */
+  max-width: 60ch;
+}
+
+.dp-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+/* Подпись варианта — часть цели: нажать можно в любом месте строки (≥ 44). */
+.dp-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid var(--dp-line-soft);
+  border-radius: 8px;
+  background: var(--dp-card);
+  cursor: pointer;
+}
+
+/* D16: подпись варианта — текст, значит длина строки ≤ 60ch независимо от ширины карточки. */
+.dp-choice span {
+  max-width: 60ch;
+}
+
+.dp-choice:focus-within {
+  outline: 2px solid var(--dp-focus);
+  outline-offset: 2px;
+}
+
+.dp-choice input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 2px 0 0;
+  accent-color: var(--dp-accent);
+}
+
+.dp-choice-note {
+  display: block;
+  color: var(--dp-ink-2);
+  font-size: 14px;
+}
+
+.dp-textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  background: var(--dp-card);
+  color: var(--dp-ink);
+  font: inherit;
+  resize: vertical;
+}
+
+/* R6 (живая находка 13.11.2026): ПОЛЕ СВОЕГО ОТВЕТА — не меньше ДВУХ СТРОК и не сжимается как
+   flex-элемент. `min-height: 44px` выше — ровно одна строка, и в сжатом теле карточки (клавиатура
+   отняла высоту) поле складывалось в неё: после закрытия клавиатуры так и оставалось одной строкой.
+   57 = 2 × 19.5 строки + отбивка 16 + две рамки. Шире — только карточка вопроса: у поля задачи свой
+   авто-рост (`dp-composer-input`) со своими числами. */
+/* R6: пока клавиатура поднята, ШАПКА КАРТОЧКИ УСТУПАЕТ ТЕЛУ. Без этого на 320×603 с клавиатурой
+   300 px телу остаётся 0 (замер: head 91 + действия 55 + отбивки 24 = 170 при 163 у карточки), и
+   поле своего ответа НЕ ВИДНО ВОВСЕ — человек печатает в невидимое поле. Заголовок и пейджер вернутся
+   в тот же кадр, как только клавиатура уйдёт. Цена названа: пока печатаешь, «Вопрос N из M» не виден. */
+[data-keyboard="on"] .dp-bottom .dp-question-head {
+  display: none;
+}
+.dp-question .dp-textarea {
+  min-height: 57px;
+  flex-shrink: 0;
+}
+
+/* Поле ввода задачи РАСТЁТ САМО (R2): ручную ручку убираем, высоту ставит скрипт по содержимому
+   до потолка в 6 строк; CSS-потолок — только страховка. */
+.dp-composer-input {
+  resize: none;
+  max-height: 168px;
+}
+
+.dp-cancel {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--dp-line-soft);
+}
+
+.dp-danger-action {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--dp-danger);
+  color: var(--dp-danger-ink);
+}
+
+/* «Погашено» — состояние ОРГАНА, а не `<button disabled>` (вердикт t10 §2 п. 11): кнопка
+   остаётся на месте, держит 44 и не меняет ширину — меняется только вид. */
+button[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+/* Тихая текстовая кнопка в одном ряду со строкой («Убрать черновик»): цель ≥ 44, вид — ссылка. */
+.dp-link-button {
+  min-height: 44px;
+  min-width: 44px;
+  margin-left: auto;
+  padding: 8px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--dp-accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.dp-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── S3: полоса задачи (вердикт t10 §1.3) ──────────────────────────────────────────────────── */
+
+/* Полоса — часть ПОТОКА: `sticky`, не `fixed` (`30-mobile-web.md` §1). Последний ребёнок
+   `.dp-page`: она прилипает к низу окна и не скроллится вместе с лентой, а `scroll-padding-bottom`
+   выше оставляет под неё место, чтобы орган в фокусе не оказался закрыт (WCAG 2.2 SC 2.4.11).
+   Отбивка 12, фон карточки, верхняя граница — из вердикта; шаг между строками 6: полоса входит
+   в бюджет 200 px при 360 («не больше четверти экрана»). */
+/* На экране сессии полоса идёт во всю ширину страницы: у `.dp-page` уже есть отбивка 16,
+   и вторая такая же съедала 32 px текста слота (на 320 оставалось 256 — цена стопа в две
+   строки не влезала). Отсюда отрицательные поля и своя отбивка. */
+.dp-page-composer .dp-composer {
+  margin-inline: -16px;
+  padding-inline: 16px;
+}
+
+/* Полоса липнет к низу LAYOUT-вьюпорта, а клавиатура уменьшает ВИЗУАЛЬНЫЙ: без поправки поле
+   уезжает под клавиатуру, и браузер сам прокручивает страницу к каретке (замер 31.10.2026:
+   +300 px при 800→500). `--dp-keyboard-inset` считает `useKeyboardInset` из visualViewport. */
+.dp-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  bottom: var(--dp-keyboard-inset, 0px);
+  z-index: 2;
+  margin-top: 16px;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--dp-card);
+  border-top: 1px solid var(--dp-line);
+}
+
+/* Подпись поля и счётчик — одной строкой: предел «4000» обязан быть виден до набора. */
+.dp-composer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0;
+  /* Подпись поля не нуждается в полуторном интерлиньяже: строка 20 px вместо 24 —
+     4 px запаса к бюджету 200 (рат. §8 п. 2). */
+  line-height: 1.25;
+}
+
+.dp-composer-label {
+  font-weight: 600;
+}
+
+/* Счётчик и ряд действий — одной строкой: предел 4000 виден всегда, а кнопка под рукой. */
+.dp-composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dp-composer-counter {
+  color: var(--dp-ink-2);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Строки-подсказки «что уходит» больше НЕТ (слово владельца 10.11.2026: пояснение лишнее;
+   карточка 32a, 05a/05b). Правило снято вместе со строкой — мёртвого стиля не держим. */
+
+/* Цена стопа живёт в строке цены/исхода — она стоит в разметке ДО кнопки (`60-states.md` §4а). */
+.dp-composer-warning {
+  margin: 0;
+}
+
+/* Ровно ОДИН ряд: стоп + отправка. Перенос сделал бы второй ряд (+44 к высоте) —
+   поэтому `nowrap`, а «Повторить» живёт строкой в слоте. */
+.dp-composer-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
+/* Стоп прижат влево: его коробка не зависит от ширины ярлыка отправки. */
+.dp-composer-stop-button {
+  margin-right: auto;
+}
+
+/* Высота кнопок ровно 44: ряд действий не смеет расти из-за отбивки. */
+.dp-composer .dp-primary,
+.dp-composer .dp-quiet {
+  min-height: 44px;
+  /* Отбивка уже, чем у обычной кнопки: иначе «Остановить» и «Отправить задачу» не встают
+     в один ряд на 320 (288 px содержимого) и полоса растёт на ряд. Цель 44 держится. */
+  padding: 8px;
+}
+
+/* «Черновик восстановлен · Убрать черновик» — ОДНА строка (рат. §8 п. 3: ≤60 px):
+   кнопка 44 держится справа, текст переносится внутри своей колонки, ряд не растёт. */
+.dp-composer-draft {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.dp-composer-draft > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dp-composer-draft > .dp-link-button {
+  flex: none;
+  margin-left: 0;
+  min-height: 44px;
+}
+
+/* Слот строки исхода: ВЫСОТА ФИКСИРОВАНА (ремонт t13). Содержимое МЕНЯЕТСЯ, число строк — нет:
+   две строки по 12 × 1,4 = 33,6 px плюс запас 8 px — итого 42. Число выведено замером на 320
+   (ширина слота 288 px): в 14 px цена стопа (84 знака) занимает ТРИ строки и полоса едет на 21 px,
+   в 13 px — тоже три, в 12,5 px — ДВЕ, но английский отказ с «Retry» всё равно просил третью;
+   в 12 px — ДВЕ во всех трёх языках (ru/en/zh), и отказ с «Повторить» тоже.
+   `overflow: hidden` — только страховка: проверка требует, чтобы текст НЕ обрезался
+   (scrollHeight ≤ clientHeight) во всех трёх состояниях. */
+/* Строка цены/исхода — 14 px (рат. §8 п. 1) и НЕ ФИКСИРОВАННАЯ высота: две строки в спокойных
+   состояниях (37 px), три — в «ход идёт»/«отказ» на 320 (55 px, допущено 218 px полосы).
+   Обрезки нет: высота растёт по содержимому, проверка требует scrollHeight ≤ clientHeight. */
+.dp-composer-slot {
+  min-height: 37px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--dp-ink-2);
+}
+
+.dp-composer-slot-danger {
+  color: var(--dp-danger);
+}
+
+.dp-composer-inbox {
+  color: var(--dp-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── S3: ОЧЕРЕДЬ — ДОК НИЖНЕГО СТЕКА (D11 §3, DEF-149) ──────────────────────────────────────── */
+/* Карточка «Очередь» стоит в нижнем стеке НАД ЗАЦЕПОМ ввода (`.dp-bottom`): снизу — строка
+   «В очереди: N» высотой 44, над ней — панель, которая раскрывается ВВЕРХ (список в разметке ДО
+   строки). Своего `z-index` внутри стека нет: порядок задаёт разметка, поэтому раскрытие поднимает
+   вопрос, а не накрывает его (D11 §1.1). Ширина — одна колонка ≤ 60ch, как у вопроса; зацеп и лист
+   остаются во всю ширину (до 720, D16). */
+/* D13-2 (R3): карточка — FLEX-КОЛОНКА, и сжимается в ней СПИСОК, а не строка. Раньше это был
+   блок: когда в стеке одновременно стояли вопрос и раскрытая очередь, стек упирался в предел,
+   `overflow: hidden` обрезал карточку по низу — и вместе с ней исчезала строка «В очереди: N»
+   с шевроном, единственный орган сворачивания (`60` §7: орган не исчезает). */
+.dp-queue {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 720px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--dp-card);
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+/* Свёрнутая строка — единственный видимый орган: счёт словами и шеврон справа. Цель 44 (`30` §3),
+   цифры `tabular-nums` — число меняется, ширина не пляшет. */
+.dp-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  /* Строка не сжимается никогда: это цель 44 и дверь сворачивания (D13-2). */
+  flex: none;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--dp-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* D13-3 (R3): кольцо фокуса — ВНУТРИ кнопки. Строка лежит вплотную к кромкам карточки, и общее
+   кольцо с `offset: 2` рисовалось СНАРУЖИ её рамки и обрезалось `overflow: hidden`: от кольца
+   оставалась верхняя дуга, и было не видно, где фокус (`80-accessibility`, SC 2.4.7/2.4.13). */
+.dp-queue-row:focus-visible {
+  outline-offset: -2px;
+}
+.dp-queue-count {
+  font-variant-numeric: tabular-nums;
+}
+.dp-queue-chevron {
+  margin-left: auto;
+  color: var(--dp-ink-2);
+  /* Размер 18×18 — общим правилом `.dp-handle .dp-handle-chevron, .dp-queue-row .dp-queue-chevron`
+     ниже: Semi перебивал одиночный `font-size` (L3 F2). */
+}
+
+/* Раскрытая панель: предел высоты и СВОЯ прокрутка списка — раскрытая очередь не съедает экран и
+   не тянет за собой страницу. Движения высоты НЕТ: она меняется мгновенно (иначе поедет лента). */
+/* Раскрытая панель: предел высоты и СВОЯ прокрутка списка — раскрытая очередь не съедает экран и
+   не тянет за собой страницу. Движения высоты НЕТ: она меняется мгновенно (иначе поедет лента).
+   D13-2: панель СЖИМАЕТСЯ (flex 0 1 auto) — при тесном стеке высоту отдаёт список, а не строка. */
+.dp-queue-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 12px 8px;
+}
+
+.dp-queue-title {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.3;
+}
+/* Список живёт в СВОЁМ пределе и со своей прокруткой: раскрытая очередь не съедает экран и не тянет
+   за собой страницу (`60` §7 — раскладка не прыгает). */
+
+/* Кнопки «Обновить» в успехе НЕТ: состав приезжает кадром `queue` (S4a). */
+.dp-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: min(40dvh, 320px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Пункт — БЕЗ своей подложки (фон панели уже `--dp-card`), отделяется волосяной линией сверху:
+   состояние не меняет меру (`10` §1.11). */
+/* Пункт очереди — КАРТОЧКА (слово владельца 13.11.2026: «пункты сливаются»): своя подложка и
+   своя граница, поэтому пункты читаются по отдельности, а не одной простынёй. Цвета — те же
+   `--dp-line-soft` / `--dp-ink`, что у остальных тихих плоскостей (новых не заводим; в тёмной
+   теме переменные меняются вместе со всей палитрой). Зазор между пунктами даёт `.dp-queue-list`. */
+.dp-queue-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  color: var(--dp-ink);
+  background: var(--dp-line-soft);
+  border: 1px solid var(--dp-line-soft);
+  border-radius: 8px;
+}
+
+/* Превью не обрезаем НИ ЧЕМ: ни `line-clamp`, ни `ellipsis` — калитка уже дала ≤ 300 знаков
+   с «…» на конце, и человек обязан видеть, где кончается его текст (`50-lists-navigation.md` §9). */
+.dp-queue-text {
+  margin: 0;
+  white-space: pre-wrap;
+  /* D16: пункт очереди — текст: предел 60ch; сама карточка тянется до 720. */
+  max-width: 60ch;
+}
+
+.dp-queue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.dp-queue-placement {
+  color: var(--dp-ink-2);
+  font-size: 14px;
+}
+
+.dp-queue-remove {
+  margin-left: auto;
+}
+
+.dp-queue-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--dp-line-soft);
+}
+
+.dp-queue-ask-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* Дверь «Новая задача» в списке: одна строка действия над списком (паспорт §3.1). */
+.dp-list-new {
+  margin-bottom: 8px;
+}
+
+/* ── S3e: вид по образцам 32a (состояние, список, вопрос, очередь, ввод) ─────────────────────── */
+
+/* Значок состояния: часть меты, не орган нажатия. Цвет — ВТОРОЙ носитель, слово остаётся рядом. */
+.dp-state-mark {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  font-size: 16px;
+  line-height: 1;
+}
+.dp-state-good {
+  color: var(--dp-good);
+}
+.dp-state-warn {
+  color: var(--dp-warn);
+}
+.dp-state-accent {
+  color: var(--dp-accent);
+}
+.dp-state-neutral {
+  color: var(--dp-line);
+}
+
+/* Мета строки/сессии — одной линией: значок, слово, время. */
+.dp-row-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Примета нажимаемости ДО касания (антипример А-1): число задач и тонкая стрелка перехода.
+   Сама цель — вся строка-ссылка (44), поэтому стрелка — украшение (`aria-hidden`). */
+.dp-row-side {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.dp-row-chevron {
+  color: var(--dp-ink-2);
+  font-size: 16px;
+}
+
+/* Иконка-орган: та же цель 44 и та же граница 3:1, что у тихих кнопок. Ссылка с тем же классом
+   (кнопка «назад» на «Новой задаче» сохраняет `href="/"`, D1 §8) — тот же вид и та же цель. */
+button.dp-icon-button,
+a.dp-icon-button {
+  padding: 0;
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 18px;
+}
+
+/* Пейджер вопроса: «Вопрос N из M» между двумя стрелками (карточка 32a §4 п. 2). */
+.dp-question-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.dp-question-count {
+  flex: 1;
+  margin: 0;
+  color: var(--dp-ink-2);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* УЗКИЙ ЭКРАН (ниже 360 — пол WCAG SC 1.4.10) — ВЕТКА D13-1 (R3). На 320 ряд действий не влезал
+   в 278 px (88 + 8 + 186 = 282) и уходил на вторую строку, отнимая у тела 52 px: тело было 40,4,
+   а вариантов ответа не видно вовсе (кадр l3-07). Здесь: ряд действий в ОДНУ строку (gap 6,
+   padding 10 у тихих) и голова без двойных отступов (у заголовка и пейджера свои margin'ы плюс
+   зазор — на узком экране они и есть те 20 px, которых не хватает телу).
+   ⚠️ Стоит ПОСЛЕ базовых правил намеренно: те же селекторы, специфичность равна — решает порядок.
+   На 360 ничего не меняется: ветка начинается с ширины ≤ 340. */
+@media (max-width: 340px) {
+  .dp-question-head {
+    gap: 4px;
+  }
+  .dp-question-title,
+  .dp-question-pager {
+    margin-bottom: 0;
+  }
+  .dp-question-actions {
+    gap: 6px;
+  }
+  .dp-question-actions .dp-quiet {
+    padding-inline: 10px;
+  }
+}
+
+/* ── НИЖНИЙ СТЕК: зацеп шторки и строка исхода (D11 §1.1, §2.2, §2.4) ──────────────────────────
+   ШАРИКА БОЛЬШЕ НЕТ: свёрнутое состояние — полоса-зацеп во всю ширину, 44 высотой. Она —
+   единственный ребёнок стека, пока нет вопроса/очереди (их добавят W10/W12 тем же стеком).
+   Стек растёт ВВЕРХ сам (прибит низом), поэтому раскрытие очереди поднимает вопрос, а не накрывает
+   его: своего `z-index` внутри стека нет ни у кого — порядок задаёт разметка.
+   `pointer-events: none` на стеке — чтобы его отбивка/пустое место не ели нажатия по ленте;
+   органы включают их себе обратно. Слой 10 — между парой (2) и листом (40). */
+.dp-bottom {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--dp-vv-inset, 0px);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* 8 сверху — тот самый зазор: запас стека вместе с ним равен 52 (44 зацепа + 8). */
+  padding: 8px 8px 0;
+  /* R6: стек поднят на `--dp-vv-inset` — значит и потолок обязан уменьшиться на него же, иначе
+     с клавиатурой стек выше видимой области и его верх уходит за кромку. */
+  max-height: calc(100dvh - var(--dp-vv-inset, 0px) - 80px);
+  pointer-events: none;
+}
+
+/* ЗАЦЕП: полоса во всю ширину экрана, 44 высотой (цель пальца, `30` §3). Тап и свайп вверх ≥ 24
+   открывают лист; `touch-action: none` — только здесь (44 px у самого низа, прокручивать там нечего).
+   Видимого слова нет: имя несёт `aria-label`. Ручка 40×4 и шеврон 18 — знаки «это тянется».
+   Тень вверх отделяет полосу от ленты, фон — карточка (та же пара контраста, что у пары и листа). */
+.dp-handle {
+  /* Безопасная зона снизу — ОДНОЙ переменной: `env()` нужен дважды (высота и отступ), а проверке
+     надо уметь подставить значение живого телефона (в Edge `env()` = 0). */
+  --dp-safe-bottom: env(safe-area-inset-bottom, 0px);
+  flex: none;
+  /* D16: полоса во всю ширину ЭКРАНА до 720 px и по центру выше. Стек даёт боковые поля 8 — на
+     телефоне полоса их забирает себе (320/360 не меняются: 100% + 16), а на широком экране margin
+     становится ((100% − 720)/2) и сжимает полосу ровно до 720 по центру страницы. Это одна
+     непрерывная формула — media query не нужен, перезагрузки при повороте нет. */
+  margin-inline: max(-8px, calc((100% - 720px) / 2));
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  /* ВИДИМАЯ полоса НАД безопасной зоной — 44 (D11 §2.2). ⚠️ L3 F1 (R2): здесь стояло
+     `min-height: 44px`, и при `box-sizing: border-box` в эти 44 входили `padding-bottom: 4 + env(24)` —
+     на телефоне видно было 33, а центр элемента попадал в системную зону жеста «домой»: свайп оттуда
+     уводил Chrome на рабочий стол. Теперь 44 — это полоса, а safe-area прибавляется СВЕРХ неё. */
+  min-height: calc(44px + var(--dp-safe-bottom));
+  padding: 4px 0 calc(4px + var(--dp-safe-bottom));
+  border-top: 1px solid var(--dp-line);
+  border-radius: 8px 8px 0 0;
+  background: var(--dp-card);
+  color: var(--dp-ink);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.18);
+  font: inherit;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: pointer;
+}
+.dp-handle-grip {
+  display: block;
+  width: 40px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--dp-line);
+}
+/* ШЕВРОНЫ зацепа и строки очереди — 18×18 (D11 §2.2/§3). ⚠️ L3 F2 (R2): стоявшее `font-size: 18px`
+   перебивало правило Semi (`.semi-icon` = 16 px), и шеврон был 16×16. Поэтому размер задан ЯВНО тремя
+   числами и с большей силой селектора (класс + родитель), а у самого `<svg>` — ещё и в пикселях:
+   проверка мерит и обёртку, и картинку. */
+.dp-handle .dp-handle-chevron,
+.dp-queue-row .dp-queue-chevron {
+  font-size: 18px;
+  width: 18px;
+  height: 18px;
+}
+.dp-handle .dp-handle-chevron svg,
+.dp-queue-row .dp-queue-chevron svg {
+  width: 18px;
+  height: 18px;
+}
+.dp-handle-chevron {
+  line-height: 18px;
+}
+
+/* СТРОКА ИСХОДА у ввода (D11 §2.4) — НАД стеком, вне потока: она не двигает ленту и не меняет
+   запас снизу (он остаётся один на все состояния). Успех и счёт гаснут за 5 с, отказ — нет.
+   ⚠️ Справа стоит пара «вверх/вниз»: строка исхода НЕ смеет её накрыть — иначе карточка слоя 10
+   (стек) рисовалась бы поверх кнопки слоя 2, и «вниз» стала бы ненажимаемой. Поэтому отступ
+   строки СЛЕДУЕТ за парой, а не за краем экрана (D16/REV-1): right строки = right пары + 44
+   кнопки + 8 зазора. На телефоне пара у края (right 8) → right 60, как было; на 853/1024 пара
+   уехала внутрь колонки (74,5/160) → right 126,5/212, зазор до кнопки остаётся 8. */
+.dp-handle-note {
+  position: absolute;
+  right: calc(max(8px, (100vw - 720px) / 2 + 8px) + 52px);
+  /* Строка стоит НАД стеком: `100%` — его верх (44 зацепа + 8 зазора = 52 от низа экрана). */
+  bottom: 100%;
+  max-width: min(240px, calc(100vw - 76px));
+  margin: 0;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: var(--dp-card);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+  color: var(--dp-ink);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.dp-handle-note-ok {
+  color: var(--dp-good);
+}
+.dp-handle-note-danger,
+.dp-handle-note-warn {
+  color: var(--dp-danger);
+}
+.dp-handle-note-quiet {
+  color: var(--dp-ink-2);
+}
+
+/* ── «К последнему сообщению» (хвост S4a, P2 §3) ──────────────────────────────────────────────── */
+/* ПАРА «ВВЕРХ/ВНИЗ» (D1 §1–§2, слово владельца 11.11.2026): обе 44×44, слой 2 — НИЖЕ нижнего стека (10)
+   и листа (40), поэтому стек их не накрывает (а накрыть больше нечему: шар убран, кламп `pairZone` снят).
+   `bottom` считается от ВИДИМОЙ области (`--dp-vv-inset`, D1 §3.2): адресная строка и клавиатура не
+   уводят органы за край. Число одно — запас снизу (D11 §1.3): нижняя на `запас + 8` = 60, верхняя —
+   на `запас + 60` = 112 от низа (формула D1 §1.2 удержана: кнопки не двигаются относительно того, что
+   под ними; выросло под ними — выросли и они).
+   Подложка карточки и рамка — не прозрачный фон: значок не должен читаться поверх текста.
+   Движения нет (ни `transition`, ни `scroll-behavior: smooth`) — прыжок мгновенный, поэтому
+   `prefers-reduced-motion` выключать нечего. Контраст: значок `--dp-ink` на `--dp-card` (4,5:1),
+   рамка `--dp-line` к странице — 5,07 светлая / 5,54 тёмная (пол 3:1, contrast.test.ts). */
+.dp-tolast,
+.dp-toup {
+  position: fixed;
+  /* D16: пара стоит у края КОЛОНКИ, а не вьюпорта: на телефоне остаётся 8, на планшете — 8 px
+     внутри края колонки. max() — то самое одно место, где без него не обойтись. */
+  right: max(8px, calc((100vw - 720px) / 2 + 8px));
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  background: var(--dp-card);
+  color: var(--dp-ink);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+/* Нижняя — запас снизу (52) + 8 = 60 от видимого низа: над зацепом через его зазор. */
+.dp-tolast {
+  bottom: calc(var(--dp-vv-inset, 0px) + var(--dp-bottom-reserve, 52px) + 8px);
+}
+
+/* Верхняя — над нижней через зазор 8: 52 + 8 + 44 + 8 = 112 (D1 §1.2). Знак — `IconArrowUp`:
+   шевроны уже значат «раскрыть/свернуть ввод», третьего значения у них не заводим. */
+.dp-toup {
+  bottom: calc(var(--dp-vv-inset, 0px) + var(--dp-bottom-reserve, 52px) + 60px);
+}
+/* Цифра — примета, слова — в доступном имени и в `role="status"` (`60` §8; «0» не печатается). */
+.dp-tolast-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 18px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* Поднятый лист — нижняя поверхность со скримом. `100dvh` и `--dp-keyboard-inset` — потому что
+   DEF-089: `bottom: 0` layout-вьюпорта уводил поле под клавиатуру (замер 31.10.2026). */
+.dp-sheet-root {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.dp-sheet-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+.dp-sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* D16: лист — поверхность: до 720 px тянется за экраном, выше 720 центруется. `left/right: 0`
+     с `max-width` и `margin-inline: auto` даёт ровно min(vw, 720) без media query; `width: 100%`
+     держит ширину независимой от содержимого листа (иначе `width: auto` — shrink-to-fit). */
+  max-width: 720px;
+  width: 100%;
+  margin-inline: auto;
+  bottom: var(--dp-keyboard-inset, 0px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 100dvh;
+  overflow-y: auto;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--dp-card);
+  border-top: 1px solid var(--dp-line);
+  border-radius: 16px 16px 0 0;
+}
+/* Верхняя полоса листа: «свернуть» и единственная ручка свайпа вниз (D11 §2.2): от 64 px лист
+   закрывается, меньше — возвращается тем же выездом 150 мс. `touch-action: none` — иначе браузер
+   заберёт вертикальный жест себе и страница поедет вместо листа. */
+.dp-sheet-collapse {
+  align-self: flex-end;
+  touch-action: none;
+  cursor: grab;
+}
+
+/* Пока лист поднят, страница НЕ блокируется по прокрутке: её делает недействующей `inert`,
+   а `scroll-padding` выше отдаёт листу место (иначе живой конец и поле уезжают под лист). */
+
+:root.dp-sheet-open {
+  scroll-padding-bottom: calc(var(--dp-bottom-reserve, 52px) + var(--dp-sheet-h, 0px));
+}
+
+/* ШАРИКА ВВОДА БОЛЬШЕ НЕТ (D11 §2.3, DEF-148): ни слоя `.dp-ball-layer`, ни самого круга, ни его
+   ручки/шеврона. Свёрнутое состояние — зацеп `.dp-handle` в нижнем стеке, и его вид описан выше
+   вместе со стеком. Мёртвых правил не держим: вернуть шарик нельзя, не написав компонент заново. */
+
+/* ── колокольчик «Ждут ответа» и его панель (S4a, D1 §4) ───────────────────────────────────────── */
+
+/* Колокольчик — постоянный орган шапки списка: виден и при 0, «0» не печатается (значок
+   со счётом есть только при count > 0). Цель 44×44 — как у остальных иконок-органов. */
+.dp-waiting {
+  position: relative;
+  display: inline-flex;
+  align-self: center;
+}
+.dp-waiting-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Цифра — примета, слова — в доступном имени и в role="status" (60 §8). */
+.dp-waiting-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 18px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* Панель — поверхность с рамкой и БЕЗ тени (30 §9): скрима нет, страница не инертна,
+   ловушки фокуса нет — это не модальное окно. */
+.dp-waiting-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 5;
+  width: min(320px, calc(100vw - 32px));
+  padding: 8px;
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  background: var(--dp-card);
+}
+.dp-waiting-title {
+  margin: 0;
+  padding: 4px 8px 8px;
+  color: var(--dp-ink-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+.dp-waiting-empty {
+  padding: 0 8px 4px;
+}
+/* Строка панели: название → обрывок вопроса → стрелка; цель ≥ 44 (D1 §4). */
+.dp-waiting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dp-ink);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.dp-waiting-row:hover {
+  background: var(--dp-accent-wash);
+}
+.dp-waiting-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dp-waiting-name,
+.dp-waiting-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dp-waiting-text {
+  color: var(--dp-ink-2);
+  font-size: 14px;
+}
+
+/* ══ ДВИЖЕНИЕ МОБИЛЬНОГО СЛОЯ (D4, отступление `90` №31) ══════════════════════════════════
+   Одна кривая и два числа: экран 200 мс, орган 150 мс. Экран — ОДНА поверхность (у шапки,
+   зацепа, листа и ленты нет своих `view-transition-name`), поэтому внутри ничто не отстаёт.
+   Запасной путь (API нет) — только входящий экран: проявление + 8 px, 150 мс. */
+:root {
+  --dp-ease: cubic-bezier(0.215, 0.61, 0.355, 1);
+  /* Направление перехода: вперёд — новый экран справа, назад — слева. */
+  --dp-vt-in: dp-screen-in-forward;
+  --dp-vt-out: dp-screen-out-forward;
+}
+:root[data-nav="back"] {
+  --dp-vt-in: dp-screen-in-back;
+  --dp-vt-out: dp-screen-out-back;
+}
+
+::view-transition-group(root) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--dp-ease);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--dp-ease);
+}
+::view-transition-old(root) {
+  animation-name: var(--dp-vt-out);
+}
+::view-transition-new(root) {
+  animation-name: var(--dp-vt-in);
+}
+
+@keyframes dp-screen-in-forward {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes dp-screen-out-forward {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+@keyframes dp-screen-in-back {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes dp-screen-out-back {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+/* Запасной путь без API: только входящий экран. */
+main.dp-enter {
+  animation: dp-enter 150ms var(--dp-ease) both;
+}
+:root[data-nav="back"] main.dp-enter {
+  --dp-enter-x: -8px;
+}
+@keyframes dp-enter {
+  from {
+    opacity: 0;
+    transform: translateX(var(--dp-enter-x, 8px));
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Лист ввода: въезд 200 мс / выезд 150 мс, скрим 150 мс. Движется `transform`, а не `bottom`:
+   иначе анимация спорила бы с пересчётом клавиатуры (`--dp-keyboard-inset`, DEF-089). */
+.dp-sheet:not(.dp-sheet-closing) {
+  animation: dp-sheet-in 200ms var(--dp-ease) both;
+}
+.dp-sheet-scrim {
+  animation: dp-scrim-in 150ms var(--dp-ease) both;
+}
+.dp-sheet.dp-sheet-closing {
+  animation: dp-sheet-out 150ms var(--dp-ease) both;
+}
+.dp-sheet-root:has(.dp-sheet-closing) .dp-sheet-scrim {
+  animation: dp-scrim-out 150ms var(--dp-ease) both;
+}
+@keyframes dp-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes dp-sheet-out {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+@keyframes dp-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes dp-scrim-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Плавающие органы, очередь, ПОВЕРХНОСТЬ ВОПРОСА, ЗАЦЕП и строка исхода — ТОЛЬКО прозрачность
+   150 мс: без сдвига (слово владельца «вниз не двигать») и без анимации высоты (иначе лента
+   поедет, `90` №31). Вопрос приезжает сам и высоту НЕ анимирует (D11 §4.2), а `prefers-reduced-motion`
+   снимает и это (ниже по файлу). */
+.dp-tolast,
+.dp-toup,
+.dp-queue,
+.dp-bottom .dp-question,
+.dp-handle,
+.dp-handle-note {
+  animation: dp-fade-in 150ms var(--dp-ease) both;
+}
+@keyframes dp-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* В reduce API не вызываем вовсе, а запасные анимации гасит общий сторож `*`; здесь — только
+   те селекторы, которые `*` не ловит (псевдоэлементы перехода). */
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(root),
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none !important;
+  }
+}

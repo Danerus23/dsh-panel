@@ -7,8 +7,8 @@
 <p align="center">
   A control panel for the local <b>DeepSeek Harness</b> server on Windows:<br>
   it runs the server and watches it from the tray, installs and updates DSH itself from a verified
-  set of versions, shows balance and peak windows, makes and restores copies, answers the agent's
-  question from your phone, and updates itself.
+  set of versions, shows balance and peak windows, makes and restores copies, keeps a phone remote —
+  sessions, the agent's questions, tasks and the queue — and updates itself.
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="#whats-new-in-230">What's new in 2.3.0</a> ·
+  <a href="#whats-new-in-250">What's new in 2.5.0</a> ·
   <a href="#how-to-update">How to update</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#what-it-does">What it does</a> ·
@@ -36,12 +36,12 @@
 
 **Your DSH server, under control** — and out of the way in the tray. One file, `DshPanel.exe`:
 installed into your user profile, no administrator rights, no separate .NET install — the runtime is
-inside. This panel version is **2.4.5**.
+inside. This panel version is **2.5.0**.
 
 Start and stop the server, install, update and roll back DSH from a verified set, a tray icon that
-shows its state, your balance, peak windows and price history, copies of your data with restore, the
-agent's question answered from your phone, and the panel updating itself — all of it **in three
-languages: Russian, English and Chinese**.
+shows its state, your balance, peak windows and price history, copies of your data with restore,
+**a phone remote** — sessions, the agent's questions, tasks and the queue — and the panel updating
+itself, all of it **in three languages: Russian, English and Chinese**.
 
 Peak windows are shown in **your local time**, prices come with a history of changes rather than from
 memory, and the sign-in link opens only when you click it.
@@ -49,25 +49,28 @@ memory, and the sign-in link opens only when you click it.
 Nothing to unpack by hand: the panel installs DSH from npm by a verified set of versions, and it
 needs the network for that. What it does not do is in [“What is missing”](#what-is-missing).
 
-Russian is the original. **English and Chinese are machine translations:** the meaning is right, but
-some wording may not sound native.
+Russian is the original. **English and Chinese are translated from the Russian:** the meaning is
+right, but some wording may not sound native.
 
-## What's new in 2.3.0
+## What's new in 2.5.0
 
-* **The default DSH server version is the 0.2.x line: `0.2.1-rc.2`.** The main “Update” button installs
-  it, and installs it from its own set: 683 packages, the file's sum pinned in the build, and the
-  installed tree passes the panel's full probe — **77 of 77** required names and **8 of 8** skills.
-* **The surface adds up:** this version declares **144** names = **77** the panel needs + **67** new
-  in 16 families; seven of our former names are no longer declared, and the panel never calls them —
-  named in a line rather than swallowed.
-* **The phone is checked on this pairing:** in isolation — **74 of 74**, no failures, the allow-list
-  still **13** calls; and a live agent question from a real phone went through — the question was
-  shown, the answer reached the server, the agent's run continued.
-* **The previous verified `0.1.5-rc.2` stays — the rollback returns to it.** But read the caveat
-  before returning: the 0.2.x line's session journal is **v4**, and sessions opened under 0.2.1 are
-  not seen by the old engine and it **does not say so**; the panel names the number before a rollback.
-* **The balance no longer makes you guess the currency:** `USD: topped up … · bonus …` and
-  `CNY: topped up … · bonus …`.
+* **The phone has become a remote control.** It shows the list of live sessions and a session itself;
+  the agent's question arrives there by itself, options are tapped, your own answer is typed in
+  words, and “Answer” sends it once.
+* **You can send a task and stop a run from the phone.** The task field goes into the open session or
+  a new one, the queue is fully visible, a queue item can be removed, and “Stop” stops the current
+  run and says the queued tasks stay.
+* **Live state without manual refreshing.** The session header says “Working” or “Waiting for an
+  answer”, the feed and the queue arrive as a stream, the list re-reads when you open it or come back
+  to the tab, and a bell with a count shows how many questions wait for an answer.
+* **The agent's answer reads as text:** paragraphs, lists, bold and italic, code that scrolls inside
+  its block, quotes. Links open in the same tab and only over `http(s)`.
+* **The layout reaches a tablet and a foldable:** up to 720 points wide the lines stay no longer than
+  60 characters. Success no longer hangs in the task sheet: the outcome line fades.
+
+The details are in the version history ([`CHANGELOG.md`](CHANGELOG.md)). The panel still installs the
+DSH server from a verified set, and the default version is the same — **`0.2.1-rc.2`**: this release
+brings no new engine versions.
 
 ## How to update
 
@@ -98,8 +101,9 @@ If you already have an **earlier panel**, the installer goes over it: both use t
 identity, so the tray keeps one panel, not two. An earlier panel can also update itself — see
 [“How to update”](#how-to-update).
 
-**What it needs:** Windows 10 or 11, x64. No .NET install. It also needs the network: DSH is
-installed from npm by a verified set (see “What is missing”).
+**What it needs:** Windows 10 or 11, x64. No .NET install. It also needs the network and npm: the
+panel installs DSH from npm by a verified set, and takes the system Node when it fits — otherwise it
+downloads its own (see “What is missing”).
 
 ## What it does
 
@@ -160,19 +164,21 @@ address the panel waits on for the phone. Next to it is a **QR code** with the a
 camera opens the phone page straight away, no need to type the code by hand. The tray menu carries a
 “Phone: connected” or “Phone: waiting to connect” line.
 
-The phone page is the agent's question in words, with answer choices: you can answer by choosing or
-in your own words if none of the choices fits, and the answer goes **once**. A separate “Cancel the
-agent's run” button says plainly that the work of that run will not continue. The firewall rule for
-the phone is placed **only when you click**, and it is narrow: private profile only, the panel's
-port only, this program only and your own subnet only.
+The phone page is a remote control: the list of live sessions, a session itself with the feed and
+questions, the task field, the queue and “Stop”. The agent's question is a surface of its own:
+options, “Answer”, the “Your own answer” field and “Cancel the agent's run”, which says plainly that
+the work of that run will not continue. The firewall rule for the phone is placed **only when you
+click**, and it is narrow: private profile only, the panel's port only, this program only and your
+own subnet only.
 
 The phone shows **only root conversations**: a subagent session cannot be opened without the
 parent's address, so it is not in the list, and the panel writes the number of hidden ones into its
 journal. An answer counts as sent only when the server **accepted** it: “not accepted” is shown to
 the phone as a refusal, and the question stays open.
 
-The phone works on your own network and makes no external connections. Setting tasks and managing
-agents from the phone are in development.
+The phone works on your own network and makes no external connections. What it does not have yet —
+attachments, tables and panel data; the full list of limits is in
+[“What is missing”](#what-is-missing).
 
 ### The tray
 
@@ -239,10 +245,13 @@ server, each skill in words.
 
 ## What is missing
 
-* **The phone answers the agent's question and nothing else yet.** Setting tasks and managing agents
-  from the phone are in development. Its traffic goes over your network **unencrypted** — the
-  sign-in is protected by the six-digit code and the device pass — and it makes no external
-  connections.
+* **There are no attachments, tables or panel data on the phone.** A file cannot be sent from the
+  phone; a picture in the agent's answer is shown by its description, a table — as text; the balance,
+  prices and the server journal are not on the phone. Its traffic goes over your network
+  **unencrypted** — the sign-in is protected by the six-digit code and the device pass — and it
+  makes no external connections.
+* **There are no system notifications and no offline work.** While the phone is in your pocket the
+  panel does not ring; without a network the list does not open.
 * **No engine and no Node come with the download.** The installer and the archive carry neither: the
   panel installs DSH **from npm** by a verified set, so the network is needed. The system Node is
   used when it fits; otherwise the panel downloads its own.

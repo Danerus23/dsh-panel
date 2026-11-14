@@ -41,8 +41,22 @@ public sealed record BackupSource(
     bool Everything = false,
     IReadOnlyList<string>? SkipDirectoryNames = null,
     IReadOnlyList<string>? WholeDirectoryNames = null,
-    IReadOnlyList<string>? SkipFileNames = null)
+    IReadOnlyList<string>? SkipFileNames = null,
+    IReadOnlyList<string>? SkipRelativePaths = null)
 {
+    /// <summary>
+    /// Каталоги, которые в этот корень не кладутся, — заданные ПУТЁМ от корня (DEF-095),
+    /// например <c>plugins/dsh-better-edit/runtime</c>. Путь пишется через <c>/</c>, без ведущего
+    /// разделителя; хвостовой разделитель не значим.
+    ///
+    /// **Зачем второй список, если есть имена.** Имя <c>runtime</c> — слишком общее, чтобы выкидывать
+    /// его на любом уровне: в домашнем каталоге движка рядом с кэшами плагинов живёт всё остальное,
+    /// и правило по имени однажды выбросило бы чужое. Список путей задаётся точечно — его считает
+    /// <see cref="BackupPlanner"/> и только для того корня, где пути имеют этот смысл.
+    /// </summary>
+    public IReadOnlyList<string>? SkipRelative =>
+        SkipRelativePaths is { Count: > 0 } paths ? paths : null;
+
     /// <summary>
     /// Действующий список пропуска. Порядок именно такой, и это не мелочь: **свой список главнее
     /// «обходить целиком»**. Иначе правило, дописанное корню движка (например «папка копий внутри

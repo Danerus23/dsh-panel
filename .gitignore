@@ -27,3 +27,11 @@ _lab-*/
 web-url.txt
 settings.json
 *.local.json
+
+# Телефонный пульт (React/Semi): его дерево зависимостей и выводы проверок в репозиторий не идут.
+# ИЗ ИСХОДНИКОВ идёт всё, кроме этого; сборка (`src\DshPanel\WebAssets`) — наоборот, коммитится
+# (её вшивают в один exe, и она должна совпадать с исходниками — сторож `npm run check:assets`).
+src/web/node_modules/
+src/web/test-results/
+src/web/playwright-report/
+src/web/.vite/

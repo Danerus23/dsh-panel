@@ -1,0 +1,89 @@
+/* Смысловые переменные пульта. Значения — из Semi 2.104.0 (`_design-library\31-web-semi.md` §1.2)
+   и наших ролей (§2), с одной поправкой: акцент и «тихий» текст взяты такими, чтобы КОНТРАСТ
+   проходил в обеих темах (банк 31 §3.2: белый текст на `primary #54A9FF` в тёмной — 2,47 и не
+   проходит; поэтому текст на акценте в тёмной теме тёмный, а не белый).
+
+   Единственный источник чисел для проверки `src/test/contrast.test.ts`: она разбирает ЭТОТ файл.
+   Ни один цвет в `app.css` не задаётся литералом — только `var(--dp-*)`. */
+
+:root {
+  /* Светлая тема — по умолчанию, чтобы строка загрузки была читаемой до запуска скрипта. */
+  --dp-page: #ffffff;
+  --dp-card: #ffffff;
+  --dp-ink: #1c1f23;
+  --dp-ink-2: #565a60;
+  --dp-line: #6e7175;
+  --dp-line-soft: rgba(28, 31, 35, 0.12);
+  --dp-accent: #0064fa;
+  --dp-accent-ink: #ffffff;
+  --dp-accent-wash: #eaf5ff;
+  --dp-focus: #0064fa;
+  --dp-danger: #b3261e;
+  --dp-danger-ink: #ffffff;
+  --dp-danger-wash: #fdecea;
+  --dp-warn: #8a6508;
+  /* Тон «хорошо» (10-foundations §3.1) — состояние «закончила». Значения из банка:
+     #14682F: 6,88 на белом (#fff) и 8,09 на карточке (#232429); #6FCF8B — 9,43 на тёмном #16161a.
+     Числа сняты V1 на дереве S3e и сторожатся contrast.test.ts — здесь только для справки. */
+  --dp-good: #14682f;
+  --dp-user: #eef4ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --dp-page: #16161a;
+    --dp-card: #232429;
+    --dp-ink: #f9f9f9;
+    --dp-ink-2: #c9cbcf;
+    --dp-line: #8a8f96;
+    --dp-line-soft: rgba(255, 255, 255, 0.16);
+    --dp-accent: #54a9ff;
+    --dp-accent-ink: #16161a;
+    --dp-accent-wash: #1d2a38;
+    --dp-focus: #54a9ff;
+    --dp-danger: #f08a8a;
+    --dp-danger-ink: #16161a;
+    --dp-danger-wash: #33201f;
+    --dp-warn: #e8b84b;
+    --dp-good: #6fcf8b;
+    --dp-user: #1f2a36;
+  }
+}
+
+:root[data-dp-theme="light"] {
+  --dp-page: #ffffff;
+  --dp-card: #ffffff;
+  --dp-ink: #1c1f23;
+  --dp-ink-2: #565a60;
+  --dp-line: #6e7175;
+  --dp-line-soft: rgba(28, 31, 35, 0.12);
+  --dp-accent: #0064fa;
+  --dp-accent-ink: #ffffff;
+  --dp-accent-wash: #eaf5ff;
+  --dp-focus: #0064fa;
+  --dp-danger: #b3261e;
+  --dp-danger-ink: #ffffff;
+  --dp-danger-wash: #fdecea;
+  --dp-warn: #8a6508;
+  --dp-good: #14682f;
+  --dp-user: #eef4ff;
+}
+
+:root[data-dp-theme="dark"] {
+  --dp-page: #16161a;
+  --dp-card: #232429;
+  --dp-ink: #f9f9f9;
+  --dp-ink-2: #c9cbcf;
+  --dp-line: #8a8f96;
+  --dp-line-soft: rgba(255, 255, 255, 0.16);
+  --dp-accent: #54a9ff;
+  --dp-accent-ink: #16161a;
+  --dp-accent-wash: #1d2a38;
+  --dp-focus: #54a9ff;
+  --dp-danger: #f08a8a;
+  --dp-danger-ink: #16161a;
+  --dp-danger-wash: #33201f;
+  --dp-warn: #e8b84b;
+  --dp-good: #6fcf8b;
+  --dp-user: #1f2a36;
+}

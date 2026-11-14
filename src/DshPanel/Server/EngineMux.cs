@@ -28,8 +28,13 @@ public enum PhoneEventKind
 
     /// <summary>Ошибка кадра или обрыв потока: канал чинить, и об этом говорят словами.</summary>
     Failure,
-}
 
+    /// <summary>
+    /// Агент сменил состояние хода (<c>api-session/status</c>) — «список мог измениться» (S4a, R1 §5.2).
+    /// Из кадра берётся ОДИН бит: ни адрес сессии, ни «идёт ли ход» наружу не идут.
+    /// </summary>
+    Status,
+}
 /// <summary>
 /// РАЗОБРАННЫЙ КАДР. <see cref="ClientId"/> заполняется ТОЛЬКО у <see cref="PhoneEventKind.Ready"/>,
 /// <see cref="EventId"/> и <see cref="QuestionsJson"/> — у вопроса и у снятия.
@@ -67,6 +72,9 @@ public sealed record PhoneEventFrame(
 /// </summary>
 public static class PhoneEventFrames
 {
+    /// <summary>Событие «ход сменил состояние» — уже в открытом <c>$events</c>, новых дверей не нужно.</summary>
+    public const string StatusEvent = "api-session/status";
+
     /// <summary>Имя водопада «агент спрашивает человека». Одно место на панель.</summary>
     public const string QuestionEvent = "user-questions/request";
 
@@ -144,9 +152,16 @@ public static class PhoneEventFrames
                     // (`Questions`), а служебные поля движка телефону не нужны.
                     Text(value, "agentId"));
 
+            case "emit":
+                // ЕДИНСТВЕННОЕ, что калитка берёт из `emit`, — смена состояния хода: по ней список
+                // на телефоне помечается «мог измениться» (R1 §5.2). Всё остальное — чужая жизнь.
+                return string.Equals(Text(value, "event"), StatusEvent, StringComparison.Ordinal)
+                    ? new PhoneEventFrame(PhoneEventKind.Status, string.Empty, string.Empty, "[]", "ход")
+                    : PhoneEventFrame.Other("событие " + Text(value, "event"));
+
             default:
-                // `emit` и всё прочее — не наша работа: калитка их не показывает и о них не молчит
-                // в журнале (иначе журнал панели стал бы потоком чужой жизни).
+                // Остальное (в том числе `api-session/activity`) — не наша работа: калитка его не
+                // показывает и о нём не молчит в журнале (иначе журнал стал бы потоком чужой жизни).
                 return PhoneEventFrame.Other(valueType.Length > 0 ? valueType : "без вида кадра");
         }
     }
@@ -310,7 +325,7 @@ public sealed record PhoneEventDoors(
 /// поднимать заново, и вопрос, заданный в промежуток, калитка НЕ УВИДИТ. Это названо честно —
 /// и в коде, и в отчёте, — а не спрятано за «переподключимся и всё догоним».
 /// </summary>
-public sealed class EngineMux : IPhoneEventLink
+public sealed class EngineMux : IPhoneEventLink, IPhoneFollowLink, IPhoneQueueLink, IPhoneWorkspaceLink
 {
     /// <summary>Путь канала управления. Тот же, каким проверяет умение «ответ на вопрос» проба.</summary>
     public const string MuxPath = "/api/remote.mux";
@@ -327,13 +342,17 @@ public sealed class EngineMux : IPhoneEventLink
     private readonly CancellationTokenSource _stop = new();
     private readonly MuxTextBuffer _buffer = new();
 
+    /// <summary>Говорить ли в журнал об обрыве. Живая лента кончается штатно — ей не говорим.</summary>
+    private readonly bool _announceLoss;
+
     private volatile bool _alive;
 
-    private EngineMux(ClientWebSocket socket, Action<string> onFrame, Action<string> log)
+    private EngineMux(ClientWebSocket socket, Action<string> onFrame, Action<string> log, bool announceLoss)
     {
         _socket = socket;
         _onFrame = onFrame;
         _log = log;
+        _announceLoss = announceLoss;
     }
 
     /// <summary>Жива ли подписка: и сокет открыт, и чтение не закончилось.</summary>
@@ -401,10 +420,36 @@ public sealed class EngineMux : IPhoneEventLink
         string? cookieHeader,
         TimeSpan timeout,
         Action<string> onFrame,
-        Action<string> log)
+        Action<string> log) =>
+        OpenStream(baseUrl, cookieHeader, timeout, StreamId, EventsEndpoint, "{}", onFrame, log);
+
+    /// <summary>
+    /// ОТКРЫТЬ ЛЮБОЙ ПОТОК МУЛЬТИПЛЕКСОРА — тем же рукопожатием и тем же чтением кадров.
+    ///
+    /// **Зачем обобщение.** Живая лента телефона (S1) — тоже поток мультиплексора, только
+    /// с другим именем (<c>session/follow</c>) и своими доводами. Второй клиент сокета был бы
+    /// второй копией рукопожатия, cookie и склейки обрывков — то есть третьим местом, где
+    /// можно разойтись с движком.
+    ///
+    /// <paramref name="announceLoss"/> = <c>false</c> — для потока, который КОНЧАЕТСЯ штатно
+    /// (живая лента кончается вместе с сессией): обрыв там — не беда канала, и писать о нём
+    /// строкой журнала значило бы называть бедой обычный конец.
+    /// </summary>
+    public static EngineMux? OpenStream(
+        string? baseUrl,
+        string? cookieHeader,
+        TimeSpan timeout,
+        string streamId,
+        string endpoint,
+        string argsJson,
+        Action<string> onFrame,
+        Action<string> log,
+        bool announceLoss = true)
     {
         ArgumentNullException.ThrowIfNull(onFrame);
         ArgumentNullException.ThrowIfNull(log);
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
 
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
@@ -426,9 +471,9 @@ public sealed class EngineMux : IPhoneEventLink
             using (var stop = new CancellationTokenSource(timeout))
                 socket.ConnectAsync(Endpoint(baseUrl!), stop.Token).GetAwaiter().GetResult();
 
-            var link = new EngineMux(socket, onFrame, log);
+            var link = new EngineMux(socket, onFrame, log, announceLoss);
 
-            link.Send(EngineMuxFrames.Open(StreamId, EventsEndpoint));
+            link.Send(EngineMuxFrames.Open(streamId, endpoint, argsJson));
             link.Pump();
 
             return link;
@@ -545,7 +590,7 @@ public sealed class EngineMux : IPhoneEventLink
                 var wasAlive = _alive;
                 _alive = false;
 
-                if (wasAlive && !_stop.IsCancellationRequested) _log(PanelStrings.PhoneEventLostLog);
+                if (wasAlive && !_stop.IsCancellationRequested && _announceLoss) _log(PanelStrings.PhoneEventLostLog);
             }
         });
     }

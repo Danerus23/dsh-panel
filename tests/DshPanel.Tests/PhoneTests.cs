@@ -348,8 +348,9 @@ public class PhoneTests
     }
 
     /// <summary>
-    /// РАЗРЕШЕНО РОВНО ПЯТЬ ДЕЙСТВИЙ ТЕЛЕФОНА, и список назван целиком: тринадцать имён, из них
-    /// одиннадцать — обычные вызовы движка и два — служебные имена событий. Ловит правку
+    /// РАЗРЕШЕНО РОВНО ПЯТЬ ДЕЙСТВИЙ ТЕЛЕФОНА, и список назван целиком: четырнадцать имён (слово
+    /// владельца 11.11.2026 добавило `workspace/follow` — только чтение архива), из них двенадцать —
+    /// обычные вызовы движка и два — служебные имена событий. Ловит правку
     /// «в список попал лишний вызов»: молчаливое расширение списка — это ровно тот случай,
     /// ради которого список и закреплён.
     /// </summary>
@@ -362,9 +363,10 @@ public class PhoneTests
             "session/create", "session/prompt", "session/cancel", "session/updateQueue",
             "session/modelCatalog", "directoryPicker/list", "agentPresets/list",
             PhoneDecisions.EventsEndpoint, PhoneDecisions.EventsResultEndpoint,
+            PhoneDecisions.WorkspaceFollowEndpoint,
         };
 
-        Assert.Equal(13, PhoneDecisions.Allowed.Count);
+        Assert.Equal(14, PhoneDecisions.Allowed.Count);
         Assert.Equal(
             expected.OrderBy(name => name, StringComparer.Ordinal),
             PhoneDecisions.Allowed.Select(call => call.Endpoint).OrderBy(name => name, StringComparer.Ordinal));

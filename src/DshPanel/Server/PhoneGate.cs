@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Threading.Channels;
 using DshPanel.Isolation;
 using DshPanel.Localization;
 using DshPanel.Pricing;
@@ -66,8 +67,10 @@ public sealed record PhoneGateDoors(
     Func<DateTimeOffset> Clock,
     Action<string> Log,
     Action<string> Bound,
-    Func<IServerControl?>? Server = null);
-
+    Func<IServerControl?>? Server = null,
+    PhoneFollowDoors? Follow = null,
+    PhoneControlDoors? Control = null,
+    PhoneWorkspaceDoors? Workspace = null);
 /// <summary>
 /// ЧЕМ КОНЧИЛСЯ ЗАПУСК КАЛИТКИ. <see cref="ReasonKey"/> — ИМЯ строки-причины (пусто, когда
 /// открылась), и оно нужно не для красоты: по нему проверка называет, ЧЕМ именно отказано,
@@ -361,7 +364,7 @@ public sealed class PhoneGate : IDisposable
     ///
     /// ⚠️ Разница нужна странице телефона (F2): «вопрос снят» и «вы ответили» — разные слова,
     /// и человек, увидевший вместо кнопок одно и то же «вопроса нет», не понял бы, отправился ли
-    /// его ответ. Проигравший (вопрос взял кто-то другой или агент его снял) обязан прочитать это
+    /// его ответ. Проигравший (вопрос уже отвечен не с телефона) обязан прочитать это
     /// словами — решение владельца 11.10.2026.
     /// </summary>
     private enum QuestionOutcome
@@ -458,8 +461,8 @@ public sealed class PhoneGate : IDisposable
     /// Повторный запуск приходит из РАЗНЫХ мест (сохранение настроек в разделе «Телефон», повторное
     /// открытие двери) и может прийти ОДНОВРЕМЕННО с первым. Без замка два запуска идут связывать
     /// порт вперегонки: проигравший успевает обнулить `_own` уже открытой двери — тот же DEF-069,
-    /// только реже и незаметнее. Запросов этого замка никто не ждёт: он держится на время запуска,
-    /// а не на время работы калитки.
+    /// только реже и незаметнее. Запросы этого замка не ждут: он держится на время запуска, а не
+    /// на время работы калитки.
     /// </summary>
     private readonly object _start = new();
 
@@ -797,6 +800,7 @@ public sealed class PhoneGate : IDisposable
         catch (SocketException)
         {
             listener.Stop();
+
             // ⚠️ ПОРТ ЗАНЯТ — НО ЗАНЯВШИЙ МОЖЕТ БЫТЬ НАМИ ЖЕ (DEF-069). Если на этом адресе и
             // порту уже стоит НАША дверь, повтор идемпотентен: имя двери остаётся, второй
             // accept-цикл, таймер и подписка не заводятся, а человеку говорится «открыто».
@@ -913,10 +917,15 @@ public sealed class PhoneGate : IDisposable
             _clientId = string.Empty;
             _question = null;
             _outcome = QuestionOutcome.None;
+
+            // И СНИМОК КОРНЯ ЗАБЫВАЕТСЯ: он принадлежал вопросу, которого больше нет.
+            _questionRootEvent = string.Empty;
+            _questionRoot = string.Empty;
+            _questionSubagent = false;
             _answering = false;
         }
 
-        _doors.Log(PanelStrings.PhoneGateStoppedLog);
+        _doors.Log(Loc.T(PanelStrings.PhoneGateStoppedLog));
     }
 
     public void Dispose() => Stop();
@@ -1022,7 +1031,7 @@ public sealed class PhoneGate : IDisposable
             // работающий СВОЙ сервер: живой случай владельца, 14.10.2026 23:53:43, первая же
             // секунда запуска. Молчание здесь — не «всё хорошо», а «ещё не знаем»: подписку
             // спросим заново, когда о сервере станет известно (`OnServerStateChanged`).
-            if (ServerKnown) _doors.Log(PanelStrings.PhoneEventDoorsMissing);
+            if (ServerKnown) _doors.Log(Loc.T(PanelStrings.PhoneEventDoorsMissing));
 
             return;
         }
@@ -1219,6 +1228,12 @@ public sealed class PhoneGate : IDisposable
 
                     return;
 
+                case PhoneEventKind.Status:
+                    // АГЕНТ СМЕНИЛ ХОД — «список мог измениться», и только этот бит: адрес сессии
+                    // и «идёт ли ход» телефону не нужны (S4a, R1 §5.2).
+                    _listStale = true;
+                    return;
+
                 case PhoneEventKind.Failure:
                     // Канал сломался — считаем подписку мёртвой, чтобы часы её переоткрыли.
                     _clientId = string.Empty;
@@ -1258,6 +1273,11 @@ public sealed class PhoneGate : IDisposable
             _question = new PendingQuestion(frame.EventId, frame.QuestionsJson, frame.AgentId, _doors.Clock());
             _lastEventId = frame.EventId;
             _outcome = QuestionOutcome.None;
+
+            // НОВЫЙ ВОПРОС — НОВЫЙ КОРЕНЬ: снимок прежнего к нему не относится.
+            _questionRootEvent = string.Empty;
+            _questionRoot = string.Empty;
+            _questionSubagent = false;
             _answering = false;
 
             // НОВЫЙ ВОПРОС — НАЧИНАЕМ С ПЕРВОГО ЭКРАНА И С ЧИСТОГО ЛИСТА: ответы прежнего
@@ -1341,6 +1361,8 @@ public sealed class PhoneGate : IDisposable
     {
         using (client)
         {
+            PhoneHttpResponse? response = null;
+
             try
             {
                 client.NoDelay = true;
@@ -1358,22 +1380,51 @@ public sealed class PhoneGate : IDisposable
                 // 15 068 мс — ровно срок запроса.
                 if (notHttp) return;
 
-                var response = request is null
+                response = request is null
                     ? PhoneHttpResponse.Words(400, false, Loc.T(PanelStrings.PhoneGateBadRequest))
                     : Route(request);
 
-                await WriteAsync(stream, response, timed.Token).ConfigureAwait(false);
+                // ЖИВОЙ ПОТОК ОТВЕЧАЕТ СВОИМ СРОКОМ. Пятнадцатисекундный `timed` — срок ЧТЕНИЯ
+                // запроса; для SSE он остаётся только на запись головы, а сама лента живёт
+                // своим сроком (<see cref="LiveLifetime"/>) и гаснет вместе с калиткой (token).
+                if (response.Sse is not null)
+                {
+                    await WriteSseHeadAsync(stream, timed.Token).ConfigureAwait(false);
+                    await response.Sse(stream, token).ConfigureAwait(false);
+                    return;
+                }
+
+                // СВОЙ СРОК У ОТВЕТА (двери S3, контракт §1.5). Пятнадцать секунд — срок ЧТЕНИЯ
+                // запроса; у D2 два вызова движка (10 + 10), у D4 ожидание baseline — оба в 15 с
+                // НЕ ВЛЕЗАЮТ. Прежний порядок срезал бы готовый ответ молчанием (срок истёк —
+                // писать нечем), и человек прочитал бы «ничего не пришло» вместо «не принято».
+                using var writing = CancellationTokenSource.CreateLinkedTokenSource(token);
+
+                writing.CancelAfter(response.OwnTimeout ?? RequestTimeout);
+
+                // ОТЛОЖЕННЫЙ ОТВЕТ: тело собирается АСИНХРОННО (D4 ждёт baseline). Голова при
+                // этом пишется по-прежнему одна и та же — `WriteAsync`, с Content-Length.
+                if (response.Late is not null)
+                    response = await response.Late(writing.Token).ConfigureAwait(false);
+
+                await WriteAsync(stream, response, writing.Token).ConfigureAwait(false);
 
                 // ВЕЖЛИВОЕ ЗАКРЫТИЕ — и это не украшение. Если закрыть сокет, не дочитав то, что
                 // клиент ещё шлёт, Windows отвечает ему `RST`, и ответ до него НЕ ДОХОДИТ: отказ
                 // «слишком большое тело» превратился бы в «соединение сброшено», то есть в молчание.
                 // Поэтому сначала «я больше не пишу», потом дочитывание остатка с пределом.
-                await LingerAsync(stream, timed.Token).ConfigureAwait(false);
+                await LingerAsync(stream, writing.Token).ConfigureAwait(false);
             }
             catch (Exception)
             {
                 // Клиент ушёл посреди запроса — это его дело, а не беда калитки. Молчать здесь
                 // можно: ответа всё равно некому отдать.
+            }
+            finally
+            {
+                // МЕСТО ЖИВОГО ПОТОКА ВОЗВРАЩАЕТСЯ ВСЕГДА — и когда поток открылся, и когда
+                // голова не записалась: иначе «слишком много экранов» осталось бы навсегда.
+                response?.Lease?.Dispose();
             }
         }
     }
@@ -1508,8 +1559,7 @@ public sealed class PhoneGate : IDisposable
 
             headers++;
 
-            if (headers > MaxHeaders) return (TooBig(AddressOf(client)), false);
-
+            if (headers > MaxHeaders) return (TooBig(AddressOf(client), path, language), false);
             var colon = line.IndexOf(':');
             if (colon <= 0) continue;
 
@@ -1539,7 +1589,7 @@ public sealed class PhoneGate : IDisposable
             }
         }
 
-        if (contentLength < 0 || contentLength > MaxBodyBytes) return (TooBig(AddressOf(client)), false);
+        if (contentLength < 0 || contentLength > MaxBodyBytes) return (TooBig(AddressOf(client), path, language), false);
 
         var body = new byte[contentLength];
         var carried = (int)Math.Min(head.Length - (end + 4), contentLength);
@@ -1570,8 +1620,16 @@ public sealed class PhoneGate : IDisposable
     private static string Twice(string first, string value) =>
         first.Length == 0 ? value : first + ", " + value;
 
-    private static PhoneHttpRequest TooBig(string address) =>
-        new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, address, string.Empty, true,
+    /// <summary>
+    /// СЛИШКОМ БОЛЬШОЙ ЗАПРОС — с ПУТЁМ и ЯЗЫКОМ, когда они уже разобраны.
+    ///
+    /// **Зачем путь у «слишком большого».** У дверей S3 свой текст отказа (F-1), и без пути
+    /// выбор между «задача больше, чем телефон может отправить» и общим обрывком калитки
+    /// был бы невозможен: заголовки читаются раньше тела, а `TooBig` терял уже прочитанное.
+    /// Предел заголовков путь не сохраняет (строки запроса ещё нет) — там он и не нужен.
+    /// </summary>
+    private static PhoneHttpRequest TooBig(string address, string path = "", string language = "") =>
+        new(string.Empty, path, string.Empty, string.Empty, language, address, string.Empty, true,
             string.Empty, string.Empty, string.Empty);
 
     /// <summary>Адрес просящего — для ограничения попыток. Не разобрался — «адрес неизвестен»,
@@ -1786,10 +1844,15 @@ public sealed class PhoneGate : IDisposable
     {
         if (request.TooBig)
         {
-            return PhoneHttpResponse.Words(
-                413, false,
-                string.Format(
-                    CultureInfo.CurrentCulture, PanelStrings.PhoneGateTooBigFormat, MaxBodyBytes / 1024));
+            // СВОЁ СЛОВО У ДВЕРЕЙ S3 (F-1): обрывок калитки говорит «запрос… (64 КиБ)» —
+            // механика и единица, которой человеку нечего делать. Чужие двери остаются как были:
+            // их язык — находка для t9, а не правка S3 (контракт §0.10).
+            return IsTaskDoor(request.Path)
+                ? PhoneHttpResponse.Words(413, false, Loc.TIn(Language(request), nameof(PanelStrings.PhoneTaskTooBig)))
+                : PhoneHttpResponse.Words(
+                    413, false,
+                    string.Format(
+                        CultureInfo.CurrentCulture, PanelStrings.PhoneGateTooBigFormat, MaxBodyBytes / 1024));
         }
 
         // ⚠️ ДВЕРЬ СВЕРЯЕТСЯ ЗДЕСЬ — ДО РАЗБОРА ПУТИ И ДО ЛЮБОГО ДЕЙСТВИЯ (B-03, ASVS 5.0 3.4.2).
@@ -1803,24 +1866,36 @@ public sealed class PhoneGate : IDisposable
         var own = OwnDoorNow();
 
         if (JudgeDoor(request.Host, request.Origin, own?.Address, own?.Port ?? 0) != DoorVerdict.Own)
-            return PhoneHttpResponse.Words(403, false, Loc.T(PanelStrings.PhoneGateForeignDoor));
+            return IsTaskDoor(request.Path)
+                ? PhoneHttpResponse.Words(403, false, Loc.TIn(Language(request), nameof(PanelStrings.PhoneTaskForeignDoor)))
+                : PhoneHttpResponse.Words(403, false, Loc.T(PanelStrings.PhoneGateForeignDoor));
 
+        // КОРЕНЬ КАЛИТКИ — REACT-ОБОЛОЧКА ПУЛЬТА (S1+S2). Она же дверь: кто ещё не сопряжён,
+        // получает оболочку с `authed:false` (экран входа), кто свой — работу. Второго адреса
+        // телефону не заводится: он должен знать ОДИН адрес, и он у него уже есть (QR и слова раздела).
         if (request.Path == "/")
+            return request.Method == "GET" ? Shell(request) : NotAllowed(request);
+
+        // ЗАПАСНОЙ АДРЕС — ПРЕЖНЯЯ СЕРВЕРНАЯ СТРАНИЦА ЦЕЛИКОМ, со своим опросом `?part=card`.
+        // Она остаётся РАБОТАЮЩЕЙ: React-пульт может не запуститься (старый телефон, выключенный
+        // JavaScript, строгая политика) — и тогда прямой адрес это выход, а не обещание.
+        if (request.Path == "/ask")
         {
             if (request.Method != "GET") return NotAllowed(request);
 
-            // ЖИВОЕ ОБНОВЛЕНИЕ ПРОСИТ ТОЛЬКО КАРТОЧКУ: `GET /?part=card`. Это ответ на запрос
-            // САМОЙ ЖЕ страницы (скрипт), и в нём нет ни `<style>`, ни `<script>` — только то,
-            // чем подменяется карточка.
-            //
-            // ⚠️ **ЗА ДВЕРЬЮ — ТО ЖЕ ПРАВИЛО, ЧТО И НА СТРАНИЦЕ:** кто ещё не сопряжён, получает
-            // ВХОД, а не карточку. Иначе «покажи карточку» стало бы вторым адресом работы —
-            // без пропуска, без cookie и без единого слова о том, что ты не свой.
             if (!PhonePage.CardWanted(request.Query)) return Page(request);
 
             return Authorized(request, out var deviceId)
                 ? PhoneHttpResponse.Html(PhonePage.Html(Language(request), View(deviceId), cardOnly: true))
                 : PhoneHttpResponse.Html(PhoneLoginPage.Html(Language(request)));
+        }
+
+        // ФАЙЛЫ ПУЛЬТА: имя берётся из `assets.json` и сверяется с вложенными один в один.
+        if (request.Path.StartsWith(PhoneWeb.AssetPath, StringComparison.Ordinal))
+        {
+            if (request.Method != "GET") return NotAllowed(request);
+
+            return AssetFile(request.Path[PhoneWeb.AssetPath.Length..]);
         }
 
         if (request.Path == "/pair")
@@ -1834,6 +1909,45 @@ public sealed class PhoneGate : IDisposable
 
         if (request.Path == "/cancel")
             return request.Method == "POST" ? Cancel(request) : NotAllowed(request);
+
+        // ДВЕ ДВЕРИ ЧТЕНИЯ S1 (контракт §2.1–§2.2). Это НЕ вызовы движка по имени: имена
+        // `session/list` и `session/follow` остаются в белом списке, а наружу открыты две
+        // адреса калитки — нового имени движка здесь не появляется.
+        if (request.Path == "/api/phone/sessions")
+            return request.Method == "GET" ? SessionsList(request) : NotAllowed(request);
+
+        if (request.Path == "/api/phone/live")
+            return request.Method == "GET" ? Live(request) : NotAllowed(request);
+
+        // ТРЕТЬЯ ДВЕРЬ ЧТЕНИЯ — ЖИВАЯ ПОДСКАЗКА СПИСКА (G1, слово владельца 11.11.2026).
+        // Своего имени движка у неё нет: она слушает тот же `$events`, а наружу отдаёт ОДИН бит.
+        if (request.Path == ListLivePath)
+            return request.Method == "GET" ? ListLive(request) : NotAllowed(request);
+        if (request.Path == "/api/phone/question")
+            return request.Method == "GET" ? PhoneQuestion(request) : NotAllowed(request);
+
+        // ПЯТЬ ДВЕРЕЙ S3 — ЗАПИСЬ И ОЧЕРЕДЬ (слово владельца 30.10.2026, R-01/DEF-022).
+        //
+        // ⚠️ СТОЯТ ДО ОБЩЕЙ ВЕТКИ `/api/`, и это не порядок строк, а условие верного отказа:
+        // общая ветка уводит имя целиком в движок (`phone/prompt`) и дала бы `403 «вне списка»` —
+        // правдоподобный, но неверный ответ на верное действие (контракт §1.3).
+        //
+        // Метод сверяется ЗДЕСЬ и ДО входа — своим словом S3: обрывки калитки на экране задачи
+        // стоят без вводного слова, и сорочка «этот путь не принимает метод …» человеку не читается.
+        if (request.Path == PromptPath)
+            return request.Method == "POST" ? PromptDoor(request) : TaskNotAllowed(request);
+
+        if (request.Path == NewPath)
+            return request.Method == "POST" ? NewDoor(request) : TaskNotAllowed(request);
+
+        if (request.Path == StopPath)
+            return request.Method == "POST" ? StopDoor(request) : TaskNotAllowed(request);
+
+        if (request.Path == QueuePath)
+            return request.Method == "GET" ? QueueDoor(request) : TaskNotAllowed(request);
+
+        if (request.Path == QueueRemovePath)
+            return request.Method == "POST" ? QueueRemoveDoor(request) : TaskNotAllowed(request);
 
         if (request.Path.StartsWith("/api/", StringComparison.Ordinal))
         {
@@ -1853,6 +1967,553 @@ public sealed class PhoneGate : IDisposable
             string.Format(
                 CultureInfo.CurrentCulture, PanelStrings.PhoneGateBadMethodFormat, request.Method, request.Path));
 
+    // ---- двери S3: задача, новая задача, стоп, очередь, «убрать» ---------------------------------
+
+    /// <summary>Адрес D1 — поставить задачу в открытую сессию.</summary>
+    public const string PromptPath = "/api/phone/prompt";
+
+    /// <summary>Адрес D2 — создать разговор и поставить в него задачу.</summary>
+    public const string NewPath = "/api/phone/new";
+
+    /// <summary>Адрес D3 — остановить текущий ход.</summary>
+    public const string StopPath = "/api/phone/stop";
+
+    /// <summary>Адрес D4 — прочитать очередь одной сессии.</summary>
+    public const string QueuePath = "/api/phone/queue";
+
+    /// <summary>Адрес D5 — убрать один пункт очереди.</summary>
+    public const string QueueRemovePath = "/api/phone/queue/remove";
+
+    /// <summary>Срок ответа D1/D3/D5: один вызов движка (10 с) и сборка (контракт §1.5).</summary>
+    public static readonly TimeSpan TaskDoorTimeout = TimeSpan.FromSeconds(12);
+
+    /// <summary>Срок ответа D2: ДВА вызова движка (10 + 10) — поэтому не 15 с общей двери, а 22 (§1.5).</summary>
+    public static readonly TimeSpan NewDoorTimeout = TimeSpan.FromSeconds(22);
+
+    /// <summary>Срок ответа D4: baseline ≤ 3 с и закрытие потока ДО ответа (контракт §5.4).</summary>
+    public static readonly TimeSpan QueueDoorTimeout = TimeSpan.FromSeconds(3.5);
+
+    /// <summary>Сколько ждём первый кадр <c>baseline</c>, прежде чем сказать «не прочиталась».</summary>
+    public static readonly TimeSpan QueueBaselineWait = TimeSpan.FromSeconds(3);
+
+    /// <summary>Сколько чтений очереди идёт одновременно; сверх — <c>429</c> без открытия потока (§5.4).</summary>
+    public const int MaxQueueReads = 4;
+
+    /// <summary>Защёлка «одна отправка в полёте»: D1 — по сессии, D2 — по устройству (§7.2).</summary>
+    private readonly PhoneTaskLatch _taskLatch = new();
+
+    /// <summary>Карта повторов D2: <c>requestId → sessionId</c> (§3.5).</summary>
+    private readonly PhoneNewMap _newMap = new();
+
+    /// <summary>Сколько чтений очереди идёт прямо сейчас. Счёт под <c>Interlocked</c>: двери идут из разных ниток.</summary>
+    private int _queueReads;
+
+    /// <summary>Сколько пунктов очереди отброшено в прошлый раз — по видам, чтобы журнал не повторялся (§9.3).</summary>
+    private int _queueDroppedShape = -1;
+    private int _queueDroppedService = -1;
+
+    /// <summary>Дверь чтения очереди (подстановка проверок — <see cref="PhoneControlDoors.None"/>).</summary>
+    private PhoneControlDoors ControlDoors => _doors.Control ?? PhoneControlDoors.None;
+
+    /// <summary>Это адрес одной из пяти дверей S3 — по нему выбираются ИХ слова, а не общие (§0.10).</summary>
+    public static bool IsTaskDoor(string? path) =>
+        string.Equals(path, PromptPath, StringComparison.Ordinal)
+        || string.Equals(path, NewPath, StringComparison.Ordinal)
+        || string.Equals(path, StopPath, StringComparison.Ordinal)
+        || string.Equals(path, QueuePath, StringComparison.Ordinal)
+        || string.Equals(path, QueueRemovePath, StringComparison.Ordinal);
+
+    /// <summary>
+    /// СЛОВА ДВЕРИ S3 — НА ЯЗЫКЕ ТЕЛЕФОНА (<see cref="Loc.TIn"/>), А НЕ ПАНЕЛИ (контракт §0.10).
+    ///
+    /// **Почему это отдельно от старых дверей.** У S1/S2 отказы отвечают на языке панели — это
+    /// названная находка для t9, а не правка S3. У новой двери своего старого поведения нет: она
+    /// сразу говорит на языке того, кто пришёл.
+    /// </summary>
+    private static string TaskWords(PhoneHttpRequest request, string key, params object[] args)
+    {
+        var words = Loc.TIn(Language(request), key);
+
+        return args.Length == 0 ? words : string.Format(CultureInfo.CurrentCulture, words, args);
+    }
+
+    /// <summary>Отказ двери S3: <c>{"ok":false,"message":…}</c> и СВОЙ срок на запись ответа.</summary>
+    private static PhoneHttpResponse S3Refuse(int status, string words, TimeSpan timeout) =>
+        new(status, "application/json; charset=utf-8",
+            "{\"ok\":false,\"message\":" + Quote(words) + "}", null, OwnTimeout: timeout);
+
+    /// <summary>Успех двери S3: тело уже собрано, срок — свой.</summary>
+    private static PhoneHttpResponse S3Json(int status, string body, TimeSpan timeout) =>
+        new(status, "application/json; charset=utf-8", body, null, OwnTimeout: timeout);
+
+    /// <summary>Отказ МЕТОДА на двери S3 — полной фразой S3, а не обрывком калитки (F-1).</summary>
+    private PhoneHttpResponse TaskNotAllowed(PhoneHttpRequest request) =>
+        S3Refuse(405, Loc.TIn(Language(request), nameof(PanelStrings.PhoneTaskNotAccepted)), TaskDoorTimeout);
+
+    /// <summary>
+    /// РАЗБОР НЕ УДАЛСЯ — <c>400</c> СВОИМ СЛОВОМ ПО ВИДУ БЕДЫ (контракт §2.4, §6.4):
+    /// пустой текст, слишком длинный, плохая сессия, плохой пункт, неразобранное тело.
+    /// </summary>
+    private PhoneHttpResponse TaskBadBody(PhoneHttpRequest request, string problem, TimeSpan timeout)
+    {
+        return problem switch
+        {
+            PhoneTaskBody.ProblemEmpty =>
+                S3Refuse(400, TaskWords(request, nameof(PanelStrings.PhoneTaskEmpty)), timeout),
+
+            PhoneTaskBody.ProblemLong =>
+                S3Refuse(400, TaskWords(request, nameof(PanelStrings.PhoneTaskTooLongFormat), PhoneTaskBody.MaxText), timeout),
+
+            PhoneTaskBody.ProblemSession =>
+                S3Refuse(400, TaskWords(request, nameof(PanelStrings.PhoneTaskBadSession)), timeout),
+
+            _ => S3Refuse(400, TaskWords(request, nameof(PanelStrings.PhoneTaskBadRequest)), timeout),
+        };
+    }
+
+    /// <summary>
+    /// ПОЧЕМУ ДВИЖОК НЕ ПРИНЯЛ — СЛОВАМИ И БЕЗ КОДА (F-2).
+    /// Число вроде «502» человеку ничего не говорит и выдаёт механику; причина называет одно из трёх.
+    /// </summary>
+    private static string TaskReason(PhoneHttpRequest request, PhoneEngineAnswer answer)
+    {
+        var language = Language(request);
+
+        if (answer.Status != 0) return Loc.TIn(language, nameof(PanelStrings.PhoneTaskReasonRefused));
+
+        return string.Equals(answer.Body, PanelStrings.PhoneGateNoEngine, StringComparison.Ordinal)
+            ? Loc.TIn(language, nameof(PanelStrings.PhoneTaskReasonNoConnection))
+            : Loc.TIn(language, nameof(PanelStrings.PhoneTaskReasonTimeout));
+    }
+
+    /// <summary>ЖУРНАЛ ДЕЙСТВИЯ: дверь, длина текста, код ответа и его исход — БЕЗ значений (§9.3).</summary>
+    private void LogTask(string door, int textLength, PhoneEngineAnswer answer, PhoneEngineOutcome outcome)
+    {
+        var result = outcome.Code.Length > 0
+            ? outcome.Code
+            : outcome.Ok
+                ? (outcome.Accepted ? "accepted" : "not-accepted")
+                : answer.Status == 0 ? "silent" : "shape";
+
+        _doors.Log(string.Format(
+            CultureInfo.CurrentCulture, PanelStrings.PhoneTaskLogFormat, door, textLength, answer.Status, result));
+    }
+
+    /// <summary>
+    /// D1 — <c>POST /api/phone/prompt</c>: поставить задачу в СУЩЕСТВУЮЩУЮ сессию (контракт §2).
+    ///
+    /// **Одно действие — один вызов движка.** Доводы собирает калитка и ровно те, что в §9.2;
+    /// <c>requestId</c> идёт в движок КАК ЕСТЬ — на нём держится повтор (движок идемпотентен
+    /// по <c>requestId</c>), а лишнее из тела телефона не уходит вовсе.
+    /// </summary>
+    private PhoneHttpResponse PromptDoor(PhoneHttpRequest request)
+    {
+        if (!Authorized(request, out _))
+            return S3Refuse(401, TaskWords(request, nameof(PanelStrings.PhoneTaskUnauthorized)), TaskDoorTimeout);
+
+        var fields = PhoneTaskBody.Parse(request.Body, session: true, request: true, text: true, item: false);
+
+        if (!fields.Ok) return TaskBadBody(request, fields.Problem, TaskDoorTimeout);
+
+        // ЗАЩЁЛКА ПО СЕССИИ: два человека (или две вкладки) в одну сессию — вторая отправка ждёт.
+        // Движок зовётся ТОЛЬКО после занятия места, иначе защёлка не значила бы ничего (DEF-072).
+        if (!_taskLatch.TryTake(fields.SessionId, _doors.Clock()))
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture, PanelStrings.PhoneTaskLogFormat, "prompt-busy", fields.Text.Length, 0, "busy"));
+
+            return S3Refuse(403, TaskWords(request, nameof(PanelStrings.PhoneTaskBusy)), TaskDoorTimeout);
+        }
+
+        try
+        {
+            var answer = _doors.Engine(
+                PhoneDecisions.SessionPromptEndpoint,
+                PhoneTaskArguments.Prompt(fields.SessionId, fields.RequestId, fields.Text));
+
+            var outcome = PhoneEngineResult.Read(answer);
+
+            LogTask("prompt", fields.Text.Length, answer, outcome);
+
+            if (outcome.SubagentBound)
+                return S3Refuse(403, TaskWords(request, nameof(PanelStrings.PhoneWebSubagentRefused)), TaskDoorTimeout);
+
+            if (outcome.SessionGone)
+                return S3Refuse(403, TaskWords(request, nameof(PanelStrings.PhoneTaskSessionGone)), TaskDoorTimeout);
+
+            if (!outcome.Ok || !outcome.Accepted)
+                return S3Refuse(
+                    502,
+                    TaskWords(request, nameof(PanelStrings.PhoneTaskNotTakenFormat), TaskReason(request, answer)),
+                    TaskDoorTimeout);
+
+            return S3Json(
+                200,
+                "{\"ok\":true,\"accepted\":true,\"sessionId\":" + Quote(fields.SessionId)
+                + ",\"requestId\":" + Quote(fields.RequestId)
+                + ",\"message\":" + Quote(TaskWords(request, nameof(PanelStrings.PhoneTaskAccepted))) + "}",
+                TaskDoorTimeout);
+        }
+        finally
+        {
+            _taskLatch.Release(fields.SessionId);
+        }
+    }
+
+    /// <summary>
+    /// D2 — <c>POST /api/phone/new</c>: создать разговор и поставить в него задачу (контракт §3).
+    ///
+    /// **ДВА вызова движка** (<c>session/create</c> и <c>session/prompt</c>) — отсюда свой срок 22 с.
+    /// **Папка не выбирается и телефону не показывается:** в доводах создания — пустой <c>request</c>,
+    /// и рабочую папку берёт движок по умолчанию.
+    /// </summary>
+    private PhoneHttpResponse NewDoor(PhoneHttpRequest request)
+    {
+        if (!Authorized(request, out var deviceId))
+            return S3Refuse(401, TaskWords(request, nameof(PanelStrings.PhoneTaskUnauthorized)), NewDoorTimeout);
+
+        var fields = PhoneTaskBody.Parse(request.Body, session: false, request: true, text: true, item: false);
+
+        if (!fields.Ok) return TaskBadBody(request, fields.Problem, NewDoorTimeout);
+
+        // ЗАЩЁЛКА ПО УСТРОЙСТВУ: разговора ещё нет, а два разных `requestId` от двойного нажатия
+        // родили бы ДВА разговора (§3.4, §7.2).
+        var latch = "phone:" + deviceId;
+
+        if (!_taskLatch.TryTake(latch, _doors.Clock()))
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture, PanelStrings.PhoneTaskLogFormat, "new-busy", fields.Text.Length, 0, "busy"));
+
+            return S3Refuse(403, TaskWords(request, nameof(PanelStrings.PhoneTaskBusy)), NewDoorTimeout);
+        }
+
+        try
+        {
+            var repeated = _newMap.TryGet(fields.RequestId, _doors.Clock(), out var sessionId);
+
+            if (!repeated)
+            {
+                var created = _doors.Engine(PhoneDecisions.SessionCreateEndpoint, PhoneTaskArguments.Create());
+                var createdOutcome = PhoneEngineResult.Read(created);
+
+                LogTask("new-create", 0, created, createdOutcome);
+
+                if (!createdOutcome.Ok || !PhoneTaskBody.ValidId(createdOutcome.SessionId))
+                    return S3Refuse(
+                        502,
+                        TaskWords(request, nameof(PanelStrings.PhoneTaskNewFailedFormat), TaskReason(request, created)),
+                        NewDoorTimeout);
+
+                sessionId = createdOutcome.SessionId;
+
+                // ЗАПИСЬ СРАЗУ ПОСЛЕ СОЗДАНИЯ, ДО ЗАДАЧИ: если задача не принялась, повтор обязан
+                // уйти в ЭТОТ разговор, а не создать второй (§3.4).
+                _newMap.Put(fields.RequestId, sessionId, _doors.Clock());
+            }
+
+            var answer = _doors.Engine(
+                PhoneDecisions.SessionPromptEndpoint,
+                PhoneTaskArguments.Prompt(sessionId, fields.RequestId, fields.Text));
+
+            var outcome = PhoneEngineResult.Read(answer);
+
+            LogTask("new-prompt", fields.Text.Length, answer, outcome);
+
+            if (outcome.SubagentBound)
+                return S3Refuse(403, TaskWords(request, nameof(PanelStrings.PhoneWebSubagentRefused)), NewDoorTimeout);
+
+            if (outcome.SessionGone)
+                return S3Refuse(403, TaskWords(request, nameof(PanelStrings.PhoneTaskSessionGone)), NewDoorTimeout);
+
+            if (!outcome.Ok || !outcome.Accepted)
+                return S3Refuse(
+                    502,
+                    TaskWords(request, nameof(PanelStrings.PhoneTaskNotTakenFormat), TaskReason(request, answer)),
+                    NewDoorTimeout);
+
+            return S3Json(
+                200,
+                "{\"ok\":true,\"accepted\":true,\"sessionId\":" + Quote(sessionId)
+                + ",\"requestId\":" + Quote(fields.RequestId)
+                + ",\"repeated\":" + (repeated ? "true" : "false")
+                + ",\"message\":" + Quote(TaskWords(request, nameof(PanelStrings.PhoneTaskNewAccepted))) + "}",
+                NewDoorTimeout);
+        }
+        finally
+        {
+            _taskLatch.Release(latch);
+        }
+    }
+
+    /// <summary>
+    /// D3 — <c>POST /api/phone/stop</c>: отменить ТЕКУЩИЙ ХОД сессии (контракт §4).
+    ///
+    /// **Два честных исхода `200`:** <c>stopped</c> (движок сказал <c>accepted</c>) и <c>idle</c>
+    /// («not attached» — останавливать нечего). Второй — НЕ ошибка: повтор нажатия «стоп» даёт
+    /// ровно его, и человек читает «уже не работает», а не «не удалось» (§4.3).
+    /// Очередь при этом сохраняется — это поведение движка (<c>keepInbox</c>), и дверь его не меняет.
+    /// </summary>
+    private PhoneHttpResponse StopDoor(PhoneHttpRequest request)
+    {
+        if (!Authorized(request, out _))
+            return S3Refuse(401, TaskWords(request, nameof(PanelStrings.PhoneTaskUnauthorized)), TaskDoorTimeout);
+
+        var fields = PhoneTaskBody.Parse(request.Body, session: true, request: false, text: false, item: false);
+
+        if (!fields.Ok) return TaskBadBody(request, fields.Problem, TaskDoorTimeout);
+
+        var answer = _doors.Engine(
+            PhoneDecisions.SessionCancelEndpoint, PhoneTaskArguments.Cancel(fields.SessionId));
+
+        var outcome = PhoneEngineResult.Read(answer);
+
+        LogTask("stop", 0, answer, outcome);
+
+        if (outcome.SessionGone)
+            return S3Json(
+                200,
+                "{\"ok\":true,\"stopped\":false,\"state\":\"idle\",\"message\":"
+                + Quote(TaskWords(request, nameof(PanelStrings.PhoneStopIdle))) + "}",
+                TaskDoorTimeout);
+
+        if (outcome.SubagentBound)
+            return S3Refuse(403, TaskWords(request, nameof(PanelStrings.PhoneWebSubagentRefused)), TaskDoorTimeout);
+
+        if (outcome.Ok && outcome.Accepted)
+            return S3Json(
+                200,
+                "{\"ok\":true,\"stopped\":true,\"state\":\"stopped\",\"message\":"
+                + Quote(TaskWords(request, nameof(PanelStrings.PhoneStopDone))) + "}",
+                TaskDoorTimeout);
+
+        return S3Refuse(
+            502,
+            TaskWords(request, nameof(PanelStrings.PhoneStopFailedFormat), TaskReason(request, answer)),
+            TaskDoorTimeout);
+    }
+
+    /// <summary>
+    /// D4 — <c>GET /api/phone/queue?session=…</c>: очередь одной сессии (контракт §5).
+    ///
+    /// **Тело собирается АСИНХРОННО** (<c>Late</c>): очередь лежит в первом кадре потока
+    /// <c>session/control</c>, а блокировать нитку синхронной двери нельзя (§0.10). Поток
+    /// закрывается ДО ответа — он не переживает дверь (§5.4, M9).
+    /// </summary>
+    private PhoneHttpResponse QueueDoor(PhoneHttpRequest request)
+    {
+        if (!Authorized(request, out _))
+            return S3Refuse(401, TaskWords(request, nameof(PanelStrings.PhoneTaskUnauthorized)), QueueDoorTimeout);
+
+        var sessionId = QueryValue(request.Query, "session");
+
+        if (!PhoneLiveFrames.ValidSession(sessionId))
+            return S3Refuse(400, TaskWords(request, nameof(PanelStrings.PhoneTaskBadSession)), QueueDoorTimeout);
+
+        // ПОДЧИНЁННАЯ СЕССИЯ — 403: её переписку показывают только на компьютере (S1, §2.2).
+        if (Sessions().TryRoot(sessionId, out _, out var subagent) && subagent)
+            return S3Refuse(403, TaskWords(request, nameof(PanelStrings.PhoneWebSubagentRefused)), QueueDoorTimeout);
+
+        // МЕСТО ЧТЕНИЯ ЗАНИМАЕТСЯ ЗДЕСЬ И ВОЗВРАЩАЕТСЯ ВСЕГДА (`Lease` в `ServeAsync`):
+        // иначе пятое чтение отняло бы место у себя же.
+        if (Interlocked.Increment(ref _queueReads) > MaxQueueReads)
+        {
+            Interlocked.Decrement(ref _queueReads);
+
+            return S3Refuse(429, TaskWords(request, nameof(PanelStrings.PhoneQueueBusy)), QueueDoorTimeout);
+        }
+
+        var language = Language(request);
+
+        return new PhoneHttpResponse(
+            200, "application/json; charset=utf-8", string.Empty, null,
+            Lease: new QueueRead(this),
+            OwnTimeout: QueueDoorTimeout,
+            Late: token => RunQueueAsync(token, sessionId, language));
+    }
+
+    /// <summary>
+    /// САМО ЧТЕНИЕ ОЧЕРЕДИ: открыть поток, дождаться <c>baseline</c> ≤ 3 с, ЗАКРЫТЬ ПОТОК, собрать ответ.
+    ///
+    /// **Порядок назван не зря:** закрытие потока стоит ДО сборки и ДО ответа (§5.4). Иначе телефон
+    /// получил бы очередь, а калитка продолжала бы держать <c>WS</c> у движка — и «живых потоков после
+    /// ответа: 0» перестало бы быть правдой (M9).
+    /// </summary>
+    private async Task<PhoneHttpResponse> RunQueueAsync(CancellationToken token, string sessionId, string language)
+    {
+        var control = ControlDoors;
+
+        if (!control.Present)
+        {
+            _doors.Log(string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneListFailedLogFormat, "no-door"));
+
+            return S3Json(502, Words(language, nameof(PanelStrings.PhoneQueueUnreadable), 502), QueueDoorTimeout);
+        }
+
+        var frames = Channel.CreateBounded<string>(new BoundedChannelOptions(64)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
+
+        var link = control.Open(frame => frames.Writer.TryWrite(frame));
+
+        if (link is null)
+        {
+            _doors.Log(string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneListFailedLogFormat, "open"));
+
+            return S3Json(502, Words(language, nameof(PanelStrings.PhoneQueueUnreadable), 502), QueueDoorTimeout);
+        }
+
+        string? baseline = null;
+
+        try
+        {
+            using var wait = CancellationTokenSource.CreateLinkedTokenSource(token);
+
+            wait.CancelAfter(QueueBaselineWait);
+
+            while (!wait.IsCancellationRequested)
+            {
+                string frame;
+
+                try
+                {
+                    frame = await frames.Reader.ReadAsync(wait.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (ChannelClosedException)
+                {
+                    break;
+                }
+
+                if (PhoneQueue.IsBaseline(frame))
+                {
+                    baseline = frame;
+
+                    break;
+                }
+
+                if (!link.Alive) break;
+            }
+        }
+        finally
+        {
+            // ПОТОК ЗАКРЫВАЕТСЯ ДО ОТВЕТА — обязанность калитки, а не движка (§5.4).
+            link.Dispose();
+        }
+
+        if (baseline is null)
+        {
+            _doors.Log(string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneListFailedLogFormat, "baseline"));
+
+            return S3Json(502, Words(language, nameof(PanelStrings.PhoneQueueUnreadable), 502), QueueDoorTimeout);
+        }
+
+        var view = PhoneQueue.Read(baseline, sessionId, Loc.TIn(language, nameof(PanelStrings.PhoneQueueNoLive)));
+
+        if (!view.Ok)
+        {
+            _doors.Log(string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneListFailedLogFormat, view.Error));
+
+            return S3Json(502, Words(language, nameof(PanelStrings.PhoneQueueUnreadable), 502), QueueDoorTimeout);
+        }
+
+        _doors.Log(string.Format(
+            CultureInfo.CurrentCulture,
+            PanelStrings.PhoneQueueReadLogFormat,
+            view.LiveSessions,
+            view.Total,
+            view.DroppedShape + view.DroppedService + view.Trimmed));
+
+        if (view.DroppedShape != _queueDroppedShape || view.DroppedService != _queueDroppedService)
+        {
+            _queueDroppedShape = view.DroppedShape;
+            _queueDroppedService = view.DroppedService;
+
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.PhoneRecordsDroppedLogFormat,
+                view.DroppedShape + view.DroppedService,
+                view.Total + view.DroppedShape + view.DroppedService));
+        }
+
+        return S3Json(200, view.Json, QueueDoorTimeout);
+    }
+
+    /// <summary>Слова по ключу на ЯЗЫКЕ ТЕЛЕФОНА — одним местом (для ответов, собранных не из запроса).</summary>
+    private static string Words(string language, string key, params object[] args)
+    {
+        var words = Loc.TIn(language, key);
+
+        return args.Length == 0 ? words : string.Format(CultureInfo.CurrentCulture, words, args);
+    }
+
+    /// <summary>МЕСТО ЧТЕНИЯ ОЧЕРЕДИ: возвращается ровно один раз, когда ответ закончился.</summary>
+    private sealed class QueueRead : IDisposable
+    {
+        private PhoneGate? _gate;
+
+        public QueueRead(PhoneGate gate) => _gate = gate;
+
+        public void Dispose()
+        {
+            var gate = Interlocked.Exchange(ref _gate, null);
+
+            if (gate is not null) Interlocked.Decrement(ref gate._queueReads);
+        }
+    }
+
+    /// <summary>
+    /// D5 — <c>POST /api/phone/queue/remove</c>: убрать ОДИН пункт очереди (контракт §6).
+    ///
+    /// **«Убрано» и «уже нет» одинаково успешны.** Код движка <c>session/queue-item-not-found</c>
+    /// значит «пункта уже нет» (его взяли в работу или убрали на компьютере) — человек хотел, чтобы
+    /// пункта не было, и его нет: <c>200 gone</c>, а не ошибка (§6.3). Код в слова не попадает.
+    /// </summary>
+    private PhoneHttpResponse QueueRemoveDoor(PhoneHttpRequest request)
+    {
+        if (!Authorized(request, out _))
+            return S3Refuse(401, TaskWords(request, nameof(PanelStrings.PhoneTaskUnauthorized)), TaskDoorTimeout);
+
+        var fields = PhoneTaskBody.Parse(request.Body, session: true, request: false, text: false, item: true);
+
+        if (!fields.Ok) return TaskBadBody(request, fields.Problem, TaskDoorTimeout);
+
+        var answer = _doors.Engine(
+            PhoneDecisions.SessionQueueEndpoint, PhoneTaskArguments.Remove(fields.SessionId, fields.ItemId));
+
+        var outcome = PhoneEngineResult.Read(answer);
+
+        LogTask("remove", 0, answer, outcome);
+
+        if (outcome.ItemGone)
+            return S3Json(
+                200,
+                "{\"ok\":true,\"state\":\"gone\",\"message\":"
+                + Quote(TaskWords(request, nameof(PanelStrings.PhoneQueueAlreadyGone))) + "}",
+                TaskDoorTimeout);
+
+        if (outcome.SubagentBound)
+            return S3Refuse(403, TaskWords(request, nameof(PanelStrings.PhoneWebSubagentRefused)), TaskDoorTimeout);
+
+        if (outcome.Ok && outcome.Accepted)
+            return S3Json(
+                200,
+                "{\"ok\":true,\"state\":\"removed\",\"message\":"
+                + Quote(TaskWords(request, nameof(PanelStrings.PhoneQueueRemoved))) + "}",
+                TaskDoorTimeout);
+
+        return S3Refuse(
+            502,
+            TaskWords(request, nameof(PanelStrings.PhoneQueueRemoveFailedFormat), TaskReason(request, answer)),
+            TaskDoorTimeout);
+    }
+
     /// <summary>
     /// КОРЕНЬ КАЛИТКИ — И ЭТО СТРАНИЦА (этап F2).
     ///
@@ -1870,6 +2531,72 @@ public sealed class PhoneGate : IDisposable
         return Authorized(request, out var deviceId)
             ? PhoneHttpResponse.Html(PhonePage.Html(language, View(deviceId)))
             : PhoneHttpResponse.Html(PhoneLoginPage.Html(language));
+    }
+
+    /// <summary>
+    /// ОБОЛОЧКА ПУЛЬТА — ТО, ЧТО ОТДАЁТСЯ НА КОРНЕ (`/`), и это новая поверхность S1+S2.
+    ///
+    /// **Слова и язык — наши:** `boot.words` собирается из словарей панели на языке телефона
+    /// (`Accept-Language`), а `data-boot` уходит в АТРИБУТ, поэтому экранируется как атрибут.
+    /// **Вход — дверью, как раньше:** кто не сопряжён, получает `authed:false` и экран входа;
+    /// сервер ничего не решает за React, кроме правды о входе.
+    /// </summary>
+    private PhoneHttpResponse Shell(PhoneHttpRequest request)
+    {
+        var language = Language(request);
+        var authed = Authorized(request, out var deviceId);
+        var html = PhoneWeb.Shell(language, authed, authed ? DeviceName(deviceId) : string.Empty);
+
+        if (html is null)
+        {
+            // СБОРКА НЕПОЛНА: оболочки нет в exe. Говорим словами и пишем в журнал — пустой
+            // страницы тут быть не должно: человек прочитал бы «тут ничего нет» про свою панель.
+            _doors.Log(Loc.T(PanelStrings.PhoneWebCrash));
+
+            return PhoneHttpResponse.Words(500, false, Loc.T(PanelStrings.PhoneWebCrash));
+        }
+
+        // НОВАЯ ПОВЕРХНОСТЬ — СВОЯ ПОЛИТИКА (не только `frame-ancestors`): скрипты — только свои,
+        // соединения — только свои (fetch/EventSource), внешних ресурсов ноль.
+        return new PhoneHttpResponse(
+            200, "text/html; charset=utf-8", html, null, null,
+            Headers: new[] { ("Content-Security-Policy", PhoneWeb.Csp) });
+    }
+
+    /// <summary>ИМЯ УСТРОЙСТВА ДЛЯ ПУЛЬТА: из записи пропуска по cookie, а не из доводов запроса.</summary>
+    private string DeviceName(string deviceId)
+    {
+        var name = PhonePass.Load(_doors.Pass).SafeDevices
+            .FirstOrDefault(device => string.Equals(device.Id, deviceId, StringComparison.OrdinalIgnoreCase))
+            ?.Name ?? string.Empty;
+
+        return PhoneDecisions.DeviceDisplay(name, Loc.T(PanelStrings.PhonePageDeviceFallback));
+    }
+
+    /// <summary>
+    /// ФАЙЛ ПУЛЬТА — ОДНИМ РЕСУРСОМ СБОРКИ. Имя сверяется с именами вложенных один в один
+    /// (`PhoneWeb.Asset`), поэтому «похожего» файла не ищется и выйти из каталога нечем.
+    /// Кэш — надолго: имя файла содержит хеш содержимого.
+    /// </summary>
+    private PhoneHttpResponse AssetFile(string name)
+    {
+        var body = PhoneWeb.Asset(name, out var contentType);
+
+        if (body is null)
+        {
+            return PhoneHttpResponse.Words(
+                404, false,
+                string.Format(
+                    CultureInfo.CurrentCulture, PanelStrings.PhoneGateNotFoundFormat, PhoneWeb.AssetPath + name));
+        }
+
+        return new PhoneHttpResponse(
+            200, contentType, body, null, null,
+            Headers: new[]
+            {
+                ("Cache-Control", PhoneWeb.AssetCache),
+                ("Content-Security-Policy", PhoneWeb.Csp),
+            });
     }
 
     /// <summary>
@@ -2169,10 +2896,21 @@ public sealed class PhoneGate : IDisposable
         {
             if (_question is not null)
             {
+                // ТОЛЬКО РАЗРЕШЁННЫЕ ПОЛЯ И ЗДЕСЬ (S2, контракт §2.3): сырые вопросы кадра
+                // несут `intent` и служебные поля движка. Эта дверь остаётся для старой страницы
+                // и проверок, но белый список на калитке ОДИН — React ходит в `/api/phone/question`.
+                if (!PhoneQuestionCards.TryBuild(_question.Questions, out var card, out _))
+                {
+                    return PhoneHttpResponse.Json(
+                        200,
+                        "{\"state\":\"unreadable\",\"eventId\":" + Quote(_question.EventId)
+                            + ",\"message\":" + Quote(Loc.T(PanelStrings.PhonePageUnreadable)) + "}");
+                }
+
                 return PhoneHttpResponse.Json(
                     200,
                     "{\"state\":\"question\",\"eventId\":" + Quote(_question.EventId)
-                        + ",\"questions\":" + _question.Questions + "}");
+                        + ",\"questions\":" + card + "}");
             }
 
             // ЧЕМ КОНЧИЛСЯ ПРЕДЫДУЩИЙ — говорится и здесь, машинной дверью (`GET /question`
@@ -2202,6 +2940,132 @@ public sealed class PhoneGate : IDisposable
                 200,
                 "{\"state\":\"none\",\"message\":" + Quote(Loc.T(PanelStrings.PhoneGateNoQuestionNow)) + "}");
         }
+    }
+
+    /// <summary>
+    /// ОЖИДАЮЩИЙ ВОПРОС ДЛЯ ПУЛЬТА — <c>GET /api/phone/question</c> (S2, контракт §2.3).
+    ///
+    /// **Только чтение и только разрешённое.** Наружу уходят `eventId`, карточки вопросов
+    /// (id/question/detail/header/options[{label,description}]/multiSelect), `sessionId`
+    /// (КОРНЕВАЯ сессия — вопрос подчинённого приезжает карточкой в неё, а не отдельным экраном),
+    /// `fromSubagent`, `expiresAt` и `remainingSeconds`. НЕ уходят: `clientId`, cookie движка,
+    /// `agentId` и `intent`.
+    ///
+    /// **Состояние — это ответ, а не ошибка:** вопроса нет — `none`, ответили — `answered`,
+    /// взял другой — `taken`, сняли — `cancelled`, снят по пределу — `no-answer`,
+    /// не уложился в пределы — `unreadable` (контракт §2.3).
+    /// </summary>
+    private PhoneHttpResponse PhoneQuestion(PhoneHttpRequest request)
+    {
+        if (!Authorized(request, out _))
+            return PhoneHttpResponse.Words(401, false, Loc.T(PanelStrings.PhoneGateUnauthorized));
+
+        string eventId, questions, agentId;
+        DateTimeOffset at;
+        QuestionOutcome outcome;
+        string lastEventId;
+
+        lock (_gate)
+        {
+            eventId = _question?.EventId ?? string.Empty;
+            questions = _question?.Questions ?? "[]";
+            agentId = _question?.AgentId ?? string.Empty;
+            at = _question?.At ?? _doors.Clock();
+            outcome = _outcome;
+            lastEventId = _lastEventId;
+        }
+
+        if (eventId.Length == 0)
+        {
+            return outcome switch
+            {
+                QuestionOutcome.Answered => QuestionState(
+                    "answered", lastEventId, Loc.T(PanelStrings.PhonePageAnswered)),
+                QuestionOutcome.Taken => QuestionState(
+                    "taken", lastEventId, Loc.T(PanelStrings.PhonePageTaken)),
+                QuestionOutcome.Cancelled => QuestionState(
+                    "cancelled", lastEventId, Loc.T(PanelStrings.PhonePageCancelled)),
+                QuestionOutcome.NoAnswer => QuestionState("no-answer", lastEventId, NoAnswerWords()),
+                _ => QuestionState("none", string.Empty, Loc.T(PanelStrings.PhoneGateNoQuestionNow)),
+            };
+        }
+
+        if (!PhoneQuestionCards.TryBuild(questions, out var cards, out var problem))
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture, PanelStrings.PhoneQuestionUnreadableLogFormat, problem));
+
+            return QuestionState("unreadable", eventId, Loc.T(PanelStrings.PhonePageUnreadable));
+        }
+
+        var (root, subagent) = ResolveQuestionSession(eventId, agentId);
+
+        var now = _doors.Clock();
+        var left = (int)Math.Max(0, (at + QuestionWaitLimit - now).TotalSeconds);
+
+        var json = new StringBuilder("{\"state\":\"question\",\"eventId\":");
+        json.Append(Quote(eventId));
+        json.Append(",\"sessionId\":").Append(Quote(root));
+        json.Append(",\"fromSubagent\":").Append(subagent ? "true" : "false");
+        json.Append(",\"questions\":").Append(cards);
+        json.Append(",\"expiresAt\":").Append(Quote((at + QuestionWaitLimit).ToString("o", CultureInfo.InvariantCulture)));
+        json.Append(",\"remainingSeconds\":").Append(left.ToString(CultureInfo.InvariantCulture));
+        json.Append('}');
+
+        return PhoneHttpResponse.Json(200, json.ToString());
+    }
+
+    /// <summary>ОТВЕТ-СОСТОЯНИЕ: <c>{state,eventId?,message}</c> — без кода движка и без подсказок.</summary>
+    private static PhoneHttpResponse QuestionState(string state, string eventId, string words)
+    {
+        var json = "{\"state\":" + Quote(state)
+            + (eventId.Length > 0 ? ",\"eventId\":" + Quote(eventId) : string.Empty)
+            + ",\"message\":" + Quote(words) + "}";
+
+        return PhoneHttpResponse.Json(200, json);
+    }
+
+    /// <summary>
+    /// КОРЕНЬ ВОПРОСА — СНИМОК НА ОДИН ВОПРОС. Ответ подчинённого приходит карточкой в КОРНЕВУЮ
+    /// сессию (контракт §2.3); сам `agentId` наружу не уходит никогда. Снимок нужен потому, что
+    /// телефон опрашивает часто, а `session/list` — тяжёлый ответ.
+    /// </summary>
+    private (string Root, bool Subagent) ResolveQuestionSession(string eventId, string agentId)
+    {
+        lock (_gate)
+        {
+            if (string.Equals(_questionRootEvent, eventId, StringComparison.Ordinal))
+                return (_questionRoot, _questionSubagent);
+        }
+
+        var root = string.Empty;
+        var subagent = false;
+
+        if (agentId.Length > 0)
+        {
+            var index = Sessions();
+
+            if (index.TryRoot(agentId, out var found, out var sub))
+            {
+                root = found;
+                subagent = sub;
+            }
+            else
+            {
+                // ЗНАНИЯ НЕ ХВАТИЛО: карточка всё равно показывается, но строку списка не называет
+                // (контракт §2.3: `sessionId:""`, карточка в списке — fallback).
+                subagent = true;
+            }
+        }
+
+        lock (_gate)
+        {
+            _questionRootEvent = eventId;
+            _questionRoot = root;
+            _questionSubagent = subagent;
+        }
+
+        return (root, subagent);
     }
 
     /// <summary>
@@ -2282,14 +3146,28 @@ public sealed class PhoneGate : IDisposable
         }
         else
         {
-            if (!TryAnswer(request.Body, out eventId, out answers))
+            // МАШИННЫЙ ПУТЬ: "answers" СОБИРАЕТСЯ ЗАНОВО (контракт §2.5) — в движок уезжают только
+            // id/selected/custom; всё прочее (и любое поле сверх пределов) — отказ СЛОВАМИ, а не
+            // молчаливая передача того, чего мы не разобрали.
+            if (!TryAnswer(request.Body, out eventId, out var raw)
+                || !PhoneAnswerCards.TryBuild(raw, out answers, out var answerProblem))
+            {
                 return PhoneHttpResponse.Words(400, false, Loc.T(PanelStrings.PhoneGateBadRequest));
+            }
         }
 
         string clientId;
 
         lock (_gate)
         {
+            // ⚠️ «ПЕРВЫЙ ОТВЕТИВШИЙ» — И НА МАШИННОМ ПУТИ (контракт §2.5): два нажатия в React
+            // приходят ДВУМЯ запросами, и второй не должен уйти движку вторым ответом.
+            // Форма сюда приходит уже с поднятым `_answering` (его ставит `AnswerScreen`).
+            if (!form && _answering)
+            {
+                return Say(403, false, Loc.T(PanelStrings.PhonePageAnsweredAgain), "ответ уже отправляется");
+            }
+
             if (_question is null)
             {
                 _answering = false;
@@ -2319,6 +3197,9 @@ public sealed class PhoneGate : IDisposable
                     : string.Format(CultureInfo.CurrentCulture, PanelStrings.PhonePageAnswerFailedFormat, Loc.T(PanelStrings.PhoneGateNoChannel)),
                     "нет канала к движку");
             }
+
+            // ОТВЕТ УЖЕ ОТПРАВЛЯЕТСЯ: второй такой же не уйдёт движку (см. проверку выше).
+            if (!form) _answering = true;
 
             clientId = _clientId;
         }
@@ -2443,7 +3324,14 @@ public sealed class PhoneGate : IDisposable
         // ⚠️ ОТМЕНА — НЕ ОТВЕТ: у неё ОДНО поле (`eventId`), и разбирать её формой ответа нельзя
         // (та требует имени выбора `q0`, которого у отмены нет и быть не должно). «Форма ли это»
         // решается тем же признаком, что и у ответа (<see cref="PhoneAnswer.LooksForm"/>).
-        var form = PhoneAnswer.LooksForm(request.Body);
+        // ⚠️ JSON ИЛИ ФОРМА — ответим ТЕМ ЖЕ, чем спросили: React-пульт не может отличить «отменено»
+        // от HTML-страницы (поправка §0.6 контракта), а форма остаётся: её шлёт старая страница.
+        var json = LooksJson(request.Body);
+        var form = !json && PhoneAnswer.LooksForm(request.Body);
+
+        // ОТКАЗ — ТОЖЕ ТЕМ ЖЕ: JSON-путь получает слова, форма — страницу.
+        PhoneHttpResponse Say(int status, string words) =>
+            json ? PhoneHttpResponse.Words(status, false, words) : Problem(language, status, words);
 
         if (!Authorized(request, out var deviceId))
         {
@@ -2458,18 +3346,18 @@ public sealed class PhoneGate : IDisposable
         lock (_gate)
         {
             if (_question is null)
-                return Problem(language, 403, Loc.T(PanelStrings.PhonePageNoQuestion));
+                return Say(403, Loc.T(PanelStrings.PhonePageNoQuestion));
 
             if (eventId.Length == 0 && !TryCancel(request.Body, out eventId))
-                return Problem(language, 400, Loc.T(PanelStrings.PhonePageNoQuestion));
+                return Say(400, Loc.T(PanelStrings.PhonePageNoQuestion));
 
             if (!string.Equals(_question.EventId, eventId, StringComparison.Ordinal))
-                return Problem(language, 403, Loc.T(PanelStrings.PhonePageTaken));
+                return Say(403, Loc.T(PanelStrings.PhonePageTaken));
 
             if (_question.AgentId.Length == 0)
             {
-                return Problem(
-                    language, 503,
+                return Say(
+                    503,
                     string.Format(
                         CultureInfo.CurrentCulture,
                         PanelStrings.PhonePageCancelFailedFormat,
@@ -2483,8 +3371,7 @@ public sealed class PhoneGate : IDisposable
 
         if (refused.Length > 0)
         {
-            return Problem(
-                language,
+            return Say(
                 502,
                 string.Format(CultureInfo.CurrentCulture, PanelStrings.PhonePageCancelFailedFormat, refused));
         }
@@ -2508,7 +3395,11 @@ public sealed class PhoneGate : IDisposable
 
         // ОТМЕНИВШЕМУ — НА СТРАНИЦУ ЗАНОВО (303 + `Location: /`): сказанное «ход отменён» человек
         // читает уже на странице, а не в теле ответа на POST (F5 не повторяет отмену).
-        return PhoneHttpResponse.Redirect(PhoneGateRoot);
+        // ФОРМЕ — НА СТРАНИЦУ ЗАНОВО (303 + `Location: /`): сказанное «ход отменён» человек
+        // читает уже на странице; JSON-путь получает СЛОВА, как и положено машинной двери.
+        return json
+            ? PhoneHttpResponse.Words(200, true, Loc.T(PanelStrings.PhonePageCancelled))
+            : PhoneHttpResponse.Redirect(PhoneGateRoot);
     }
 
     /// <summary>Корень калитки — одна дверь и для входа, и для страницы телефона.</summary>
@@ -2758,7 +3649,28 @@ public sealed class PhoneGate : IDisposable
         if (string.Equals(endpoint, PhoneDecisions.EventsResultEndpoint, StringComparison.Ordinal))
             return PhoneHttpResponse.Words(403, false, Loc.T(PanelStrings.PhoneGateInternalRefused));
 
-        var args = ArgsOf(request.Body);
+        // ДОВОДЫ — СВОИ, ЗАНОВО. У догона они собираются по белому списку (address/throughSeq/
+        // beforeSeq/maxMessages): всё остальное, что мог прислать телефон, в движок не уйдёт.
+        string? args;
+
+        if (string.Equals(verdict.Endpoint, PhoneDecisions.SessionPageEndpoint, StringComparison.Ordinal))
+        {
+            if (!PhoneOlder.TryArgs(request.Body, out var older, out var problem, out var foreign))
+            {
+                _doors.Log(string.Format(
+                    CultureInfo.CurrentCulture, PanelStrings.PhoneOlderArgsLogFormat, problem));
+
+                return foreign
+                    ? PhoneHttpResponse.Words(403, false, Loc.T(PanelStrings.PhoneWebSubagentRefused))
+                    : PhoneHttpResponse.Words(400, false, Loc.T(PanelStrings.PhoneGateBadRequest));
+            }
+
+            args = older;
+        }
+        else
+        {
+            args = ArgsOf(request.Body);
+        }
 
         if (args is null)
         {
@@ -2786,50 +3698,200 @@ public sealed class PhoneGate : IDisposable
                 string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneGateEngineRefusedFormat, engine.Status));
         }
 
-        // ОТВЕТ ДВИЖКА УХОДИТ ТЕЛЕФОНУ КАК ЕСТЬ — с ОДНИМ исключением, и оно из ЗАМЕРА (блок D
-        // плана 2.2.0): список разговоров чистится от подчинённых сессий. Из 197 сессий владельца
-        // 179 — подчинённые, и `session/page` по ним отвечает «subagent Sessions require their
-        // durable parent address»: телефон увидел бы список, в котором почти нельзя ничего открыть.
+        // ДВА ОТВЕТА, КОТОРЫЕ КАЛИТКА ПЕРЕСОБИРАЕТ (поправки §0.4 и §0.5 контракта): список —
+        // свои строки по allowlist; догон — свои записи по тому же белому списку, что у ленты.
+        // Остальные вызовы по-прежнему уходят телефону без разбора и обрезки.
         if (string.Equals(verdict.Endpoint, PhoneDecisions.SessionListEndpoint, StringComparison.Ordinal))
-            return SessionListAnswer(engine);
+            return ListAnswer(engine);
+
+        if (string.Equals(verdict.Endpoint, PhoneDecisions.SessionPageEndpoint, StringComparison.Ordinal))
+            return OlderAnswer(engine);
 
         return new PhoneHttpResponse(engine.Status, "application/json; charset=utf-8", engine.Body, null);
     }
 
     /// <summary>
-    /// ОТВЕТ НА СПИСОК РАЗГОВОРОВ: тот же ответ движка, но без подчинённых сессий
-    /// (<see cref="PhoneSessions"/>).
+    /// ОТВЕТ НА СПИСОК РАЗГОВОРОВ — СВОИ СТРОКИ ПО БЕЛОМУ СПИСКУ (контракт §2.1), ОДИН НА ДВЕ ДВЕРИ.
     ///
-    /// **Не прячем молча, и это два разных «не молча»:**
-    /// * сколько строк убрано — говорится В ЖУРНАЛ панели числом (и только когда число меняется,
-    ///   иначе открытие списка заливало бы журнал одной и той же строкой);
-    /// * если форма ответа не та, какую мы мерили, ответ уходит телефону **КАК ЕСТЬ**, а причина
-    ///   называется в журнале: отфильтровать наугад хуже, чем не отфильтровать.
+    /// **От какого случая (поправка §0.4 контракта).** Прежняя редакция переносила строки движка
+    /// СЫРЫМ текстом, и телефону уезжали `cwd` и `projections.workingDirectory`. Теперь и старая дверь
+    /// (`POST /api/session/list`), и пульт (`GET /api/phone/sessions`) отдают одно и то же: объекты,
+    /// собранные <see cref="PhoneList"/>.
+    ///
+    /// **Не молча:** сколько подчинённых убрано, сколько строк отброшено и сколько очерков урезано —
+    /// числами в журнал, и только когда число изменилось (иначе открытие списка затопило бы журнал).
+    /// Не та форма — 502 СЛОВАМИ: списка нет, а не «пусто».
     /// </summary>
-    private PhoneHttpResponse SessionListAnswer(PhoneEngineAnswer engine)
+    private PhoneHttpResponse ListAnswer(PhoneEngineAnswer engine, bool stale = false)
     {
-        var filtered = PhoneSessions.Filter(engine.Body);
+        // ИНДЕКС «КТО ЧЕЙ РОДИТЕЛЬ» — из ЭТОГО ЖЕ ответа: он нужен, чтобы пометить строку, в которой
+        // ждёт ответа подчинённый агент (вопрос подчинённого живёт в корневой сессии, контракт §2.3).
+        var index = PhoneSessionIndex.Parse(engine.Body);
+        Publish(index);
 
-        if (filtered.ShapeBroken)
+        var asked = PendingQuestionRoot(index);
+
+        // АРХИВ — ДО СБОРКИ: набор из workspace/follow (кэш 30 с), и только адреса. `null` — не
+        // прочитался, и тогда поведение прежнее байт в байт (R1 §3.2). Набор — из калитки, а не
+        // из строк движка: телефон не должен знать имён архивных сессий вовсе.
+        var archived = Archived();
+
+        var list = PhoneList.Build(
+            engine.Body,
+            id => asked.Length > 0 && string.Equals(id, asked, StringComparison.Ordinal),
+            archived is null ? null : id => archived.Contains(id),
+            stale);
+
+        if (list.Hidden > 0 && list.Hidden != _subordinateSessions)
         {
-            _doors.Log(string.Format(
-                CultureInfo.CurrentCulture, PanelStrings.PhoneSessionsShapeLogFormat, filtered.Shape));
-
-            return new PhoneHttpResponse(engine.Status, "application/json; charset=utf-8", engine.Body, null);
-        }
-
-        if (filtered.Hides && filtered.Dropped != _subordinateSessions)
-        {
-            _subordinateSessions = filtered.Dropped;
+            _subordinateSessions = list.Hidden;
 
             _doors.Log(string.Format(
                 CultureInfo.CurrentCulture,
                 PanelStrings.PhoneSessionsHiddenLogFormat,
-                filtered.Dropped,
-                filtered.Dropped + filtered.Kept));
+                list.Hidden,
+                list.Hidden + list.Total));
         }
 
-        return new PhoneHttpResponse(engine.Status, "application/json; charset=utf-8", filtered.Body, null);
+        if (list.Archived > 0 && list.Archived != _archivedSessions)
+        {
+            _archivedSessions = list.Archived;
+
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.PhoneSessionsArchivedLogFormat,
+                list.Archived,
+                list.Archived + list.Total));
+        }
+
+        if (list.Dropped > 0 && list.Dropped != _listDropped)
+        {
+            _listDropped = list.Dropped;
+
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.PhoneRecordsDroppedLogFormat,
+                list.Dropped,
+                list.Dropped + list.Total));
+        }
+
+        if (list.Trimmed > 0 && list.Trimmed != _listTrimmed)
+        {
+            _listTrimmed = list.Trimmed;
+
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture,
+                PanelStrings.PhoneListTrimmedLogFormat,
+                list.Trimmed,
+                list.Shown));
+        }
+
+        if (list.Error.Length > 0)
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture, PanelStrings.PhoneListFailedLogFormat, list.Error));
+
+            return PhoneHttpResponse.Words(502, false, Loc.T(PanelStrings.PhoneWebListUnreadable));
+        }
+
+        if (list.ShapeBroken)
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture, PanelStrings.PhoneSessionsShapeLogFormat, list.Shape));
+
+            return PhoneHttpResponse.Words(502, false, Loc.T(PanelStrings.PhoneWebListUnreadable));
+        }
+
+        return PhoneHttpResponse.Json(200, list.Json);
+    }
+
+    /// <summary>
+    /// ДОГОН: ПЕРЕСБОРКА ЗАПИСЕЙ ПО БЕЛОМУ СПИСКУ (контракт §2.4). Отказ движка по подчинённой
+    /// (`session/agent-busy`) — это 403 СЛОВАМИ, а не 502: телефону говорят «открыты только обычные
+    /// сессии»; всё остальное — «страница не прочиталась».
+    /// </summary>
+    private PhoneHttpResponse OlderAnswer(PhoneEngineAnswer engine)
+    {
+        var older = PhoneOlder.Build(engine.Body);
+
+        if (!older.Ok)
+        {
+            _doors.Log(string.Format(
+                CultureInfo.CurrentCulture, PanelStrings.PhoneListFailedLogFormat, older.Problem));
+
+            if (string.Equals(older.Problem, "session/agent-busy", StringComparison.Ordinal))
+                return PhoneHttpResponse.Words(403, false, Loc.T(PanelStrings.PhoneWebSubagentRefused));
+
+            return PhoneHttpResponse.Words(502, false, Loc.T(PanelStrings.PhoneWebOlderFailed));
+        }
+
+        return PhoneHttpResponse.Json(200, older.Json);
+    }
+
+    /// <summary>
+    /// СКОЛЬКО ЖИВЁТ ЗНАНИЕ «КТО ЧЕЙ РОДИТЕЛЬ». Тридцать секунд — не «как можно дольше»:
+    /// подчинённых создают и закрывают на ходу, а спрашивать `session/list` на КАЖДЫЙ опрос
+    /// вопроса (телефон опрашивает часто) значило бы гонять полсотни килобайт вхолостую.
+    /// </summary>
+    public static readonly TimeSpan SessionIndexLifetime = TimeSpan.FromSeconds(30);
+
+    private PhoneSessionIndex _sessions = PhoneSessionIndex.Empty;
+    private DateTimeOffset _sessionsAt = DateTimeOffset.MinValue;
+    private bool _sessionsLoaded;
+
+    /// <summary>Корень висящего вопроса — снимок, чтобы не спрашивать движок на каждый опрос.</summary>
+    private string _questionRootEvent = string.Empty;
+    private string _questionRoot = string.Empty;
+    private bool _questionSubagent;
+
+    /// <summary>ДОВОДЫ СПИСКА — одной строкой и одним местом (`_request`, замер §2).</summary>
+    private static readonly string ListArguments =
+        "{\"" + PhoneDecisions.ArgumentSessionList + "\":{}}";
+
+    /// <summary>
+    /// ЗНАНИЕ «КТО ЧЕЙ РОДИТЕЛЬ» — НА ВРЕМЯ, А НЕ НАВСЕГДА, и это важно:
+    /// подчинённая сессия появляется и исчезает, а телефон может спросить сразу после этого.
+    /// </summary>
+    private PhoneSessionIndex Sessions()
+    {
+        lock (_gate)
+        {
+            if (_sessionsLoaded && _doors.Clock() - _sessionsAt < SessionIndexLifetime) return _sessions;
+        }
+
+        var engine = _doors.Engine(PhoneDecisions.SessionListEndpoint, ListArguments);
+        var index = PhoneSessionIndex.Parse(engine.Status is >= 200 and < 300 ? engine.Body : null);
+
+        Publish(index);
+
+        return index;
+    }
+
+    /// <summary>ЗАПОМНИТЬ ИНДЕКС (и когда он прочитан) — под замком, одной парой.</summary>
+    private void Publish(PhoneSessionIndex index)
+    {
+        lock (_gate)
+        {
+            _sessions = index;
+            _sessionsAt = _doors.Clock();
+            _sessionsLoaded = true;
+        }
+    }
+
+    /// <summary>
+    /// КОРЕНЬ ВИСЯЩЕГО ВОПРОСА. Знания нет — считаем корнем саму спросившую сессию: так строка
+    /// помечается «ждёт ответа» хотя бы тогда, когда подъём по родителям не удался (лучше показать
+    /// вопрос, чем спрятать его).
+    /// </summary>
+    private string PendingQuestionRoot(PhoneSessionIndex index)
+    {
+        string agent;
+
+        lock (_gate) agent = _question?.AgentId ?? string.Empty;
+
+        if (agent.Length == 0) return string.Empty;
+
+        return index.TryRoot(agent, out var root, out _) && root.Length > 0 ? root : agent;
     }
 
     /// <summary>
@@ -2840,6 +3902,35 @@ public sealed class PhoneGate : IDisposable
     /// когда число ИЗМЕНИЛОСЬ, — то есть когда у человека действительно что-то поменялось.
     /// </summary>
     private int _subordinateSessions = -1;
+
+    /// <summary>СКОЛЬКО АРХИВНЫХ СЕССИЙ СКРЫТО В ПРОШЛЫЙ РАЗ (-1 — ещё ни разу).</summary>
+    private int _archivedSessions = -1;
+
+    /// <summary>
+    /// СКОЛЬКО ЖИВЁТ ЗНАНИЕ АРХИВА. Тридцать секунд — как у знания «кто чей родитель»: архив
+    /// меняется редко, а поток на КАЖДОЕ открытие списка — это новый <c>WS</c> к движку
+    /// (R1 §1.4: раз в 30 с — честная цена, «на каждый запрос» — нет).
+    /// </summary>
+    public static readonly TimeSpan ArchiveLifetime = TimeSpan.FromSeconds(30);
+
+    /// <summary>Сколько ждём первый кадр архива. Как у чтения очереди, только это ОДИН кадр.</summary>
+    public static readonly TimeSpan ArchiveBaselineWait = TimeSpan.FromSeconds(3);
+
+    private IReadOnlySet<string>? _archived;
+    private DateTimeOffset _archivedAt = DateTimeOffset.MinValue;
+    private bool _archivedLoaded;
+
+    /// <summary>ПОСЛЕДНЯЯ НАЗВАННАЯ ПРИЧИНА «архив не прочитан» — журнал не повторяет одно и то же.</summary>
+    private string _archiveProblem = string.Empty;
+
+    /// <summary>
+    /// «СПИСОК МОГ ИЗМЕНИТЬСЯ» — ОДИН БИТ от <c>api-session/status</c> в уже открытом <c>$events</c>
+    /// (S4a, R1 §5.2). Снимается при выдаче списка; ни адреса сессии, ни «идёт ли ход» в нём нет.
+    /// </summary>
+    private bool _listStale;
+
+    /// <summary>Почему живая очередь молчит — та же дисциплина «один раз на причину».</summary>
+    private string _queueSilent = string.Empty;
 
     /// <summary>Доводы из тела <c>{"args":{…}}</c> — СЫРЫМ текстом объекта и без толкования:
     /// панель не знает, что в них, и знать не должна. <c>null</c> — доводов нет вовсе.</summary>
@@ -2861,6 +3952,779 @@ public sealed class PhoneGate : IDisposable
         {
             return null;
         }
+    }
+
+    // ---- живой поток и список сессий (S1) ----------------------------------------------------
+
+    /// <summary>Сколько экранов живого потока калитка держит ОДНОВРЕМЕННО (контракт §2.2).</summary>
+    public const int MaxLiveScreens = 4;
+
+    /// <summary>Сколько живёт ОДИН живой поток (контракт §2.2): дольше — телефон переподключается сам.</summary>
+    public static readonly TimeSpan LiveLifetime = TimeSpan.FromMinutes(30);
+
+    /// <summary>Как часто живой поток говорит `ping` (контракт §2.2): это событие, а не комментарий.</summary>
+    public static readonly TimeSpan LivePing = TimeSpan.FromSeconds(15);
+
+    /// <summary>Сколько живых потоков открыто СЕЙЧАС. Счёт под `Interlocked`: двери приходят из разных ниток.</summary>
+    private int _liveScreens;
+
+    // ---- живая подсказка списка (G1) ---------------------------------------------------------
+
+    /// <summary>Адрес живой подсказки «список мог измениться» — третья дверь ЧТЕНИЯ.</summary>
+    public const string ListLivePath = "/api/phone/list/live";
+
+    /// <summary>
+    /// СКОЛЬКО ЖИВЫХ ПОДСКАЗОК СПИСКА КАЛИТКА ДЕРЖИТ ОДНОВРЕМЕННО: ДВЕ.
+    ///
+    /// **Почему две, а не четыре, как у экранов.** Каждая подсказка — СВОЙ <c>$events</c> (одно
+    /// SSE — один `WS` к движку, как у живой ленты), а у калитки уже есть своя подписка для
+    /// вопросов. Два телефона в одной сети — это уже край, а пятый сокет — цена без пользы:
+    /// третья подсказка получает `429` теми же словами, что и «слишком много экранов».
+    /// </summary>
+    public const int MaxListLive = 2;
+
+    /// <summary>
+    /// ОКНО СКЛЕЙКИ ЧАСТЫХ СОБЫТИЙ: НЕ ЧАЩЕ ОДНОГО КАДРА `stale` В 250 МС.
+    ///
+    /// **Зачем.** Один ход движка сыплет `api-session/status` десятками кадров, а бит у них ОДИН:
+    /// телефону не нужно перечитывать список на каждый — ему достаточно знать, что «мог
+    /// измениться». Первый кадр уходит сразу (телефон не ждёт), а всё, что пришло в окно, —
+    /// одним кадром в конце окна; потерянного бита здесь не бывает по устройству (бит один).
+    /// </summary>
+    public static readonly TimeSpan ListLiveCoalesce = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Сколько живых подсказок списка открыто СЕЙЧАС (как <see cref="_liveScreens"/>).</summary>
+    private int _listLive;
+
+    /// <summary>Счётчик для проверок: после ухода телефона обязан вернуться к нулю.</summary>
+    internal int ListLiveOpen => Volatile.Read(ref _listLive);
+    /// <summary>Сколько строк прошлый раз не показали / урезали — чтобы журнал не повторял одно и то же.</summary>
+    private int _listDropped = -1;
+
+    /// <summary>Сколько очерков прошлый раз урезали под размер ответа — то же правило.</summary>
+    private int _listTrimmed = -1;
+
+    /// <summary>ДВЕРЬ ЖИВОГО ПОТОКА (подстановка проверок — <see cref="PhoneFollowDoors.None"/>).</summary>
+    private PhoneFollowDoors FollowDoors => _doors.Follow ?? PhoneFollowDoors.None;
+
+    /// <summary>ДВЕРЬ АРХИВА (подстановка проверок — <see cref="PhoneWorkspaceDoors.None"/>).</summary>
+    private PhoneWorkspaceDoors WorkspaceDoors => _doors.Workspace ?? PhoneWorkspaceDoors.None;
+
+    /// <summary>
+    /// НАБОР АРХИВНЫХ СЕССИЙ — ИЗ <c>workspace/follow</c>, С КЭШЕМ НА 30 СЕКУНД (слово владельца
+    /// 11.11.2026, R1 §3.2).
+    ///
+    /// **Что читается:** РОВНО <c>archivedSessionIds</c>. <c>items[].path/title/sessionIds</c> и
+    /// <c>pinnedSessionIds</c> не читаются вовсе — значит не могут уехать ни телефону, ни в журнал (R1 §1.2).
+    ///
+    /// **Не прочиталось — НЕ фильтруем:** <c>null</c>, список отдаётся КАК ЕСТЬ, а причина названа
+    /// в журнале (один раз на причину). Отфильтровать наугад хуже, чем не отфильтровать: человек
+    /// остался бы без списка из-за архива (R1 §3.2, третье правило фазы).
+    ///
+    /// **Поток закрывается здесь же:** одно чтение — один <c>WS</c>, как у D4; поток никогда не
+    /// переживает выдачу списка (R1 §1.4).
+    /// </summary>
+    private IReadOnlySet<string>? Archived()
+    {
+        lock (_gate)
+        {
+            if (_archivedLoaded && _doors.Clock() - _archivedAt < ArchiveLifetime) return _archived;
+        }
+
+        var doors = WorkspaceDoors;
+
+        if (!doors.Present) return ArchiveProblem("no-door");
+
+        // ЖДЁМ ПЕРВЫЙ КАДР ЧЕРЕЗ ЗАДАЧУ, А НЕ ЧЕРЕЗ КАНАЛ: читать `Channel` СИНХРОННО нельзя —
+        // его `ValueTask` при асинхронном завершении бросает «операция не завершена» (найдено
+        // прогоном: список рвался молчанием). Задачу заполняет нитка мультиплексора.
+        var baseline = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var link = doors.Open(frame =>
+        {
+            if (PhoneArchive.IsBaseline(frame)) baseline.TrySetResult(frame);
+        });
+
+        if (link is null) return ArchiveProblem("open");
+
+        try
+        {
+            baseline.Task.Wait(ArchiveBaselineWait);
+        }
+        finally
+        {
+            // ПОТОК ЗАКРЫВАЕТСЯ ДО СБОРКИ СПИСКА: он не должен переживать выдачу (R1 §1.4).
+            link.Dispose();
+        }
+
+        if (!baseline.Task.IsCompletedSuccessfully) return ArchiveProblem("baseline");
+
+        var archive = PhoneArchive.Read(baseline.Task.Result);
+
+        if (!archive.Ok) return ArchiveProblem("shape(" + archive.Error + ")");
+
+        lock (_gate)
+        {
+            _archived = archive.Archived;
+            _archivedAt = _doors.Clock();
+            _archivedLoaded = true;
+            _archiveProblem = string.Empty;
+        }
+
+        return archive.Archived;
+    }
+
+    /// <summary>Запомнить причину «архив не прочитан» — В ЖУРНАЛ ТОЛЬКО ПРИ СМЕНЕ ПРИЧИНЫ.</summary>
+    private IReadOnlySet<string>? ArchiveProblem(string reason)
+    {
+        lock (_gate)
+        {
+            _archived = null;
+            _archivedAt = _doors.Clock();
+            _archivedLoaded = true;
+
+            if (string.Equals(_archiveProblem, reason, StringComparison.Ordinal)) return null;
+
+            _archiveProblem = reason;
+        }
+
+        _doors.Log(string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneWorkspaceFailedLogFormat, reason));
+
+        return null;
+    }
+
+    /// <summary>СНЯТЬ ПРИЗНАК «список мог измениться»: признак одноразовый (R1 §5.2).</summary>
+    private bool TakeStale()
+    {
+        lock (_gate)
+        {
+            var stale = _listStale;
+            _listStale = false;
+            return stale;
+        }
+    }
+
+    /// <summary>ПОЧЕМУ ЖИВАЯ ОЧЕРЕДЬ МОЛЧИТ — в журнал один раз на причину (acceptance S4a).</summary>
+    private void QueueSilent(string reason)
+    {
+        lock (_gate)
+        {
+            if (string.Equals(_queueSilent, reason, StringComparison.Ordinal)) return;
+
+            _queueSilent = reason;
+        }
+
+        _doors.Log(string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneLiveQueueSilentLogFormat, reason));
+    }
+
+    /// <summary>
+    /// СПИСОК СЕССИЙ ДЛЯ ТЕЛЕФОНА — <c>GET /api/phone/sessions</c> (контракт §2.1).
+    ///
+    /// **Своего здесь только сборка:** движок зовётся тем же белым вызовом `session/list`
+    /// с доводами <c>{"_request":{}}</c>, а телефону уходят СВОИ строки по белому списку полей
+    /// (<see cref="PhoneList"/>), а не ответ движка.
+    ///
+    /// **Отказы названы словами:** нет входа — 401; движок молчит/отказал/ответил не той формой /
+    /// прислал ошибку — 502 с ФРАЗОЙ, а код движка уходит в журнал и только туда (контракт §2.11).
+    /// «Пусто» и «не прочитался» — разные ответы: пустая установка даёт 200 и пустой список.
+    /// </summary>
+    private PhoneHttpResponse SessionsList(PhoneHttpRequest request)
+    {
+        if (!Authorized(request, out _))
+            return PhoneHttpResponse.Words(401, false, Loc.T(PanelStrings.PhoneGateUnauthorized));
+
+        var args = "{\"" + PhoneDecisions.ArgumentSessionList + "\":{}}";
+        var engine = _doors.Engine(PhoneDecisions.SessionListEndpoint, args);
+
+        if (engine.Status == 0)
+        {
+            return PhoneHttpResponse.Words(
+                502, false,
+                string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneGateEngineSilentFormat, engine.Body));
+        }
+
+        if (engine.RefusedOurLogin)
+        {
+            return PhoneHttpResponse.Words(
+                502, false,
+                string.Format(CultureInfo.CurrentCulture, PanelStrings.PhoneGateEngineRefusedFormat, engine.Status));
+        }
+
+        // ПРИЗНАК «СПИСОК МОГ ИЗМЕНИТЬСЯ» — СНИМАЕТСЯ ЗДЕСЬ ЖЕ: один кадр api-session/status —
+        // одно перечитывание телефоном, а не вечное «stale: true» на каждой выдаче (R1 §5.2).
+        return ListAnswer(engine, TakeStale());
+    }
+
+    /// <summary>
+    /// ЖИВОЙ ПОТОК СЕССИИ — <c>GET /api/phone/live?session=…</c> (контракт §2.2).
+    ///
+    /// **Одна новая дверь ЧТЕНИЯ.** Новых имён движка нет: открывается уже разрешённый
+    /// <c>session/follow</c> (дверью <see cref="PhoneFollowDoors"/>), и на КАЖДОЕ SSE-соединение —
+    /// одно окно и свой <c>WS</c>. Курсора продолжения у движка нет, поэтому новое подключение —
+    /// это новый <c>snapshot</c> (догон перечитыванием), а не «продолжить с места».
+    ///
+    /// **Отказы ДО заголовков** — обычным JSON: 401 нет входа, 400 плохой адрес, 502 нет входа
+    /// в движок, 429 больше четырёх экранов. После заголовков сказать можно только событием
+    /// <c>error</c> — тела ошибки `EventSource` не читает.
+    /// </summary>
+    private PhoneHttpResponse Live(PhoneHttpRequest request)
+    {
+        if (!Authorized(request, out _))
+            return PhoneHttpResponse.Words(401, false, Loc.T(PanelStrings.PhoneGateUnauthorized));
+
+        var sessionId = QueryValue(request.Query, "session");
+
+        if (!PhoneLiveFrames.ValidSession(sessionId))
+            return PhoneHttpResponse.Words(400, false, Loc.T(PanelStrings.PhoneWebSessionMissing));
+
+        var follow = FollowDoors;
+
+        if (!follow.Present)
+            return PhoneHttpResponse.Words(502, false, Loc.T(PanelStrings.PhoneEventNoEngine));
+
+        // МЕСТО ЭКРАНА ЗАНИМАЕТСЯ ЗДЕСЬ И ВОЗВРАЩАЕТСЯ ВСЕГДА (`finally` в `ServeAsync`):
+        // иначе пятый экран отнял бы место у себя же.
+        if (Interlocked.Increment(ref _liveScreens) > MaxLiveScreens)
+        {
+            Interlocked.Decrement(ref _liveScreens);
+
+            return PhoneHttpResponse.Words(429, false, Loc.T(PanelStrings.PhoneWebTooManyScreens));
+        }
+
+
+        return new PhoneHttpResponse(
+            200, "text/event-stream; charset=utf-8", string.Empty, null, null,
+            Sse: (network, token) => RunLiveAsync(network, token, sessionId, Language(request), follow),
+            Lease: new ScreenLease(() => Interlocked.Decrement(ref _liveScreens)));
+    }
+
+    /// <summary>
+    /// ЖИВАЯ ПОДСКАЗКА СПИСКА — <c>GET /api/phone/list/live</c> (G1, слово владельца 11.11.2026).
+    ///
+    /// **От какого дефекта.** Бит «список мог измениться» ставится из кадра <c>api-session/status</c>,
+    /// а <c>$events</c> открыт только у живой ленты: на экране списка потока НЕТ — и список стоял,
+    /// пока его не перечитают возвратом или перезагрузкой. Теперь телефон держит эту дверь открытой
+    /// и на каждый бит ПЕРЕЧИТЫВАЕТ СПИСОК САМ; таймера и опроса здесь нет.
+    ///
+    /// **Что уходит наружу.** Только имя события <see cref="PhoneListLive.StaleEvent"/> и
+    /// <see cref="PhoneListLive.StaleJson"/> — пустой объект. Ни id сессии, ни «идёт ли ход», ни путей:
+    /// разобранный кадр в цепочку не попадает вовсе (см. <see cref="PhoneListLiveFeed"/>).
+    ///
+    /// **Чего здесь НЕТ.** Калитка не читает <c>session/list</c> на событие: сборка списка остаётся
+    /// на двери <c>/api/phone/sessions</c>, а бит в её ответе — как был.
+    ///
+    /// **Отказы ДО заголовков** — обычным JSON: 401 нет входа, 502 нет входа в движок, 429 больше
+    /// двух подсказок. После заголовков сказать можно только событием <c>error</c>.
+    /// </summary>
+    private PhoneHttpResponse ListLive(PhoneHttpRequest request)
+    {
+        if (!Authorized(request, out _))
+            return PhoneHttpResponse.Words(401, false, Loc.T(PanelStrings.PhoneGateUnauthorized));
+
+        var events = _doors.Events;
+
+        // ВХОДА НЕТ ПРЯМО СЕЙЧАС — тот же отказ и те же слова, что у живой ленты.
+        if (!events.Present)
+            return PhoneHttpResponse.Words(502, false, Loc.T(PanelStrings.PhoneEventNoEngine));
+
+        // МЕСТО ПОДСКАЗКИ ЗАНИМАЕТСЯ ЗДЕСЬ И ВОЗВРАЩАЕТСЯ ВСЕГДА (`finally` в `ServeAsync`).
+        if (Interlocked.Increment(ref _listLive) > MaxListLive)
+        {
+            Interlocked.Decrement(ref _listLive);
+
+            return PhoneHttpResponse.Words(429, false, Loc.T(PanelStrings.PhoneWebTooManyScreens));
+        }
+
+        return new PhoneHttpResponse(
+            200, "text/event-stream; charset=utf-8", string.Empty, null, null,
+            Sse: (network, token) => RunListLiveAsync(network, token, events),
+            Lease: new ScreenLease(() => Interlocked.Decrement(ref _listLive)));
+    }
+
+    /// <summary>
+    /// ОДИН КУСОК ЖИВОЙ ЛЕНТЫ: либо кадр движка (лента), либо УЖЕ СОБРАННОЕ событие очереди.
+    /// Один канал на экран — иначе лента и очередь писали бы в сокет из двух ниток, и порядок
+    /// событий решался бы случаем.
+    /// </summary>
+    private readonly record struct LivePiece(bool Queue, string Json)
+    {
+        public static LivePiece Transcript(string json) => new(false, json);
+
+        public static LivePiece QueueEvent(string json) => new(true, json);
+    }
+
+    /// <summary>
+    /// САМ ПОТОК: заголовки уже ушли, теперь только события. Голова пишется в `ServeAsync`.
+    ///
+    /// **Порядок и сроки:** свежий `snapshot` приходит от движка первым кадром и уезжает как
+    /// `event: snapshot`; затем — `event`/`assistant`; каждые <see cref="LivePing"/> — `ping`;
+    /// через <see cref="LiveLifetime"/> — `end` с причиной. Обрыв у клиента узнаётся ЗАПИСЬЮ
+    /// (следующий кадр или `ping`): тогда поток движка закрывается сразу, а не держится до предела.
+    /// </summary>
+    private async Task RunLiveAsync(
+        NetworkStream stream,
+        CancellationToken token,
+        string sessionId,
+        string language,
+        PhoneFollowDoors follow)
+    {
+        // ОЧЕРЕДЬ МЕЖДУ ДВИЖКОМ И ТЕЛЕФОНОМ: кадры приходят из нитки мультиплексора, пишет их
+        // эта нитка. Ограниченная и с вытеснением старых: медленный телефон не должен копить
+        // память, а потеря кадра на SSE-ленте восполняется переподключением (новый snapshot).
+        var frames = Channel.CreateBounded<LivePiece>(new BoundedChannelOptions(1024)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
+
+        // ПОДЧИНЁННУЮ СЕССИЮ ТЕЛЕФОН НЕ ОТКРЫВАЕТ (контракт §2.2, §2.10): её переписку показывают
+        // только на компьютере. Спрашивается ДО открытия потока движка — незачем его и открывать.
+        // ⚠️ Это не `lost`: слова разные, и человек не должен читать «связь оборвалась» там, где
+        // телефону просто не положено открывать такую сессию.
+        if (Sessions().TryRoot(sessionId, out _, out var subagent) && subagent)
+        {
+            await WriteSseAsync(
+                stream, "error",
+                PhoneSse.Error("subagent", Loc.T(PanelStrings.PhoneWebSubagentRefused)), token).ConfigureAwait(false);
+
+            await FinishSseAsync(stream).ConfigureAwait(false);
+            return;
+        }
+
+        // ⚠️ СРОК ЖИЗНИ СЧИТАЕТСЯ ДО ОТКРЫТИЯ ПОТОКА ДВИЖКА — и это не перестановка ради красоты.
+        // Предел полагается от ПРИНЯТОГО потока (заголовки уже ушли), а не от удачи рукопожатия
+        // с движком; и проверка `follow.Opens` теперь действительно значит «срок уже назначен».
+        // Прежний порядок (открыть → назначить) давал гонку: тест, двигающий часы сразу после
+        // `Opens`, мог опередить назначение `end` — и предел отодвигался на свои же 30 минут
+        // (флейк F1 ревью t9: 2330/2331 под нагрузкой).
+        var shown = 0;
+        var dropped = 0;
+        var trimmed = 0;
+        var end = _doors.Clock() + LiveLifetime;
+        var ping = _doors.Clock() + LivePing;
+
+        var link = follow.Open(sessionId, frame => frames.Writer.TryWrite(LivePiece.Transcript(frame)));
+
+        if (link is null)
+        {
+            await WriteSseAsync(
+                stream, "error",
+                PhoneSse.Error("engine", Loc.T(PanelStrings.PhoneEventNoEngine)), token).ConfigureAwait(false);
+
+            await FinishSseAsync(stream).ConfigureAwait(false);
+            return;
+        }
+
+
+        // ОЧЕРЕДЬ ЖИВЬЁМ — ВТОРОЙ ПОТОК ТОГО ЖЕ ЭКРАНА (S4a): session/control на ЭТУ сессию.
+        // Фильтр sessionId+key живёт в PhoneQueue.Live: чужие сессии и прочие проекции
+        // (workingDirectory — путь, turnOutline — тексты) отбрасываются ДО сборки JSON.
+        var control = ControlDoors;
+        IPhoneQueueLink? queue = null;
+        var queueDropped = 0;
+        var noLiveWords = Loc.TIn(language, nameof(PanelStrings.PhoneQueueNoLive));
+
+        if (!control.Present)
+        {
+            QueueSilent("no-door");
+        }
+        else
+        {
+            queue = control.Open(frame =>
+            {
+                // 64 КиБ — ПОТОЛОК ОДНОГО СОБЫТИЯ (DEF-071), и он относится и к очереди:
+                // запас под `data: ` и разделитель, чтобы уложиться в потолок ЦЕЛИКОМ.
+                var live = PhoneQueue.Live(frame, sessionId, noLiveWords, PhoneLiveFrames.MaxEventBytes - 1024);
+
+                if (live.View is null)
+                {
+                    if (live.Projection) Interlocked.Increment(ref queueDropped);
+                    return;
+                }
+
+                frames.Writer.TryWrite(LivePiece.QueueEvent(live.View.Json));
+            });
+
+            if (queue is null) QueueSilent("open");
+        }
+
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var now = _doors.Clock();
+
+                if (now >= end)
+                {
+                    await WriteSseAsync(stream, "end", "{\"reason\":\"lifetime\"}", token).ConfigureAwait(false);
+                    break;
+                }
+
+                var wait = now >= ping ? TimeSpan.Zero : ping - now;
+                if (end - now < wait) wait = end - now;
+
+                LivePiece piece;
+
+                using (var slice = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    slice.CancelAfter(wait <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : wait);
+
+                    try
+                    {
+                        piece = await frames.Reader.ReadAsync(slice.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        if (token.IsCancellationRequested) break;
+
+                        var after = _doors.Clock();
+
+                        if (after >= end)
+                        {
+                            await WriteSseAsync(stream, "end", "{\"reason\":\"lifetime\"}", token).ConfigureAwait(false);
+                            break;
+                        }
+
+                        if (after >= ping)
+                        {
+                            // `ping` — настоящее событие: комментарии `EventSource` не отдаёт,
+                            // и по ним не работает сторожевой таймер клиента.
+                            if (!await WriteSseAsync(
+                                    stream, "ping", PhoneSse.Ping(after.ToUnixTimeMilliseconds()), token)
+                                .ConfigureAwait(false))
+                                break;
+
+                            ping = after + LivePing;
+                        }
+
+                        continue;
+                    }
+                }
+
+                // СОБЫТИЕ ОЧЕРЕДИ — УЖЕ СОБРАНО ПО БЕЛОМУ СПИСКУ (PhoneQueue.Live): телефону
+                // уходит ровно `{ok,state,sessionId,total,shown,hasMore,items[…]}`, без сырых проекций.
+                if (piece.Queue)
+                {
+                    if (!await WriteSseAsync(stream, "queue", piece.Json, token).ConfigureAwait(false)) break;
+
+                    continue;
+                }
+
+                var translated = PhoneLiveFrames.Translate(piece.Json);
+
+                if (translated.Kind == PhoneLiveKind.Ignored)
+                {
+                    dropped += Math.Max(1, translated.Dropped);
+                    continue;
+                }
+
+                if (translated.Kind is PhoneLiveKind.Failed or PhoneLiveKind.Ended)
+                {
+                    await WriteSseAsync(
+                        stream, "error",
+                        PhoneSse.Error("lost", Loc.T(PanelStrings.PhoneWebLiveLost)), token).ConfigureAwait(false);
+
+                    break;
+                }
+
+                if (!await WriteSseAsync(stream, translated.Name, translated.Json, token).ConfigureAwait(false)) break;
+
+                shown++;
+                dropped += translated.Dropped;
+                trimmed += translated.Trimmed;
+
+                // ПОТОК ДВИЖКА КОНЧИЛСЯ БЕЗ КАДРА: телефону говорится «связь оборвалась»,
+                // и он переподключится сам — новый `snapshot` и есть догон.
+                if (!link.Alive)
+                {
+                    await WriteSseAsync(
+                        stream, "error",
+                        PhoneSse.Error("lost", Loc.T(PanelStrings.PhoneWebLiveLost)), token).ConfigureAwait(false);
+
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            // ЗАКРЫТИЕ ПОТОКА ДВИЖКА — ОБЯЗАННОСТЬ КАЛИТКИ: одно SSE — один `WS`, и он не должен
+            // переживать экран. Сначала ссылка, потом последний чанк: в обратном порядке телефон
+            // увидел бы конец и потерял место раньше, чем закрыт движок.
+            link.Dispose();
+
+            // ПОТОК ОЧЕРЕДИ ЗАКРЫВАЕТСЯ ВМЕСТЕ С ЛЕНТОЙ — он не переживает экран (S4a).
+            queue?.Dispose();
+
+            if (queueDropped > 0)
+            {
+                _doors.Log(string.Format(
+                    CultureInfo.CurrentCulture, PanelStrings.PhoneLiveQueueDroppedLogFormat, queueDropped));
+            }
+
+            // ОБРЕЗКА ТЕКСТА ДО ПОТОЛКА (DEF-071) — ТОЖЕ СТРОКА В ЖУРНАЛ: молча укорачивать
+            // сказанное человеком нельзя, иначе «потолок есть» держался бы только кодом.
+            if (trimmed > 0)
+            {
+                _doors.Log(string.Format(
+                    CultureInfo.CurrentCulture, PanelStrings.PhoneLiveTrimmedLogFormat, trimmed));
+            }
+
+            if (dropped > 0)
+            {
+                _doors.Log(string.Format(
+                    CultureInfo.CurrentCulture,
+                    PanelStrings.PhoneRecordsDroppedLogFormat,
+                    dropped,
+                    dropped + shown));
+            }
+
+            await FinishSseAsync(stream).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// САМА ПОДСКАЗКА: заголовки уже ушли, теперь только события. Голову пишет `ServeAsync`.
+    ///
+    /// **Что здесь есть и чего нет.** Есть одно <c>$events</c> НА ЭТО СОЕДИНЕНИЕ (как у живой
+    /// ленты — свой <c>WS</c>, который обязан умереть вместе с экраном), один бит из него и
+    /// <c>ping</c>/<c>end</c> теми же сроками, что у ленты. Нет ни сборки списка, ни чтения
+    /// <c>session/list</c>: на событие калитка движок не зовёт вовсе — список перечитывает телефон.
+    ///
+    /// **Склейка.** Первый бит уходит сразу (телефон не ждёт), всё, что пришло в окно
+    /// <see cref="ListLiveCoalesce"/>, — ОДНИМ кадром в конце окна. Потерять бит нельзя: он один.
+    ///
+    /// **Обрыв у клиента** узнаётся записью (кадр или `ping`), как у живой ленты: тогда <c>$events</c>
+    /// закрывается сразу — в `finally` и ДО последнего чанка.
+    /// </summary>
+    private async Task RunListLiveAsync(
+        NetworkStream stream,
+        CancellationToken token,
+        PhoneEventDoors events)
+    {
+        var feed = new PhoneListLiveFeed();
+
+        // СРОКИ СЧИТАЮТСЯ ДО ОТКРЫТИЯ $events — тот же порядок, что у живой ленты: предел
+        // полагается от ПРИНЯТОГО потока, а не от удачи рукопожатия с движком.
+        var end = _doors.Clock() + LiveLifetime;
+        var ping = _doors.Clock() + LivePing;
+        var lastStale = DateTimeOffset.MinValue;
+        var merged = false;
+
+        var link = events.Open(feed.Frame);
+
+        if (link is null)
+        {
+            // КАК У ЖИВОГО ЭКРАНА: после заголовков об отказе говорит событие, а не тело; ни одного
+            // байта содержимого движка наружу не уходит — только наши слова.
+            await WriteSseAsync(
+                    stream, "error",
+                    PhoneSse.Error("engine", Loc.T(PanelStrings.PhoneEventNoEngine)), token)
+                .ConfigureAwait(false);
+
+            await FinishSseAsync(stream).ConfigureAwait(false);
+            return;
+        }
+
+        var lost = false;
+
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                var now = _doors.Clock();
+
+                if (now >= end)
+                {
+                    await WriteSseAsync(stream, "end", "{\"reason\":\"lifetime\"}", token).ConfigureAwait(false);
+                    break;
+                }
+
+                // ОБРЫВ КАНАЛА — ДО ОЖИДАНИЯ: движок мог закрыть поток между кадрами.
+                if (feed.Broken || !link.Alive)
+                {
+                    lost = true;
+                    break;
+                }
+
+                // ОКНО СКЛЕЙКИ ИСТЕКЛО — отдать накопленный бит одним кадром.
+                if (merged && now - lastStale >= ListLiveCoalesce)
+                {
+                    if (!await WriteSseAsync(
+                            stream, PhoneListLive.StaleEvent, PhoneListLive.StaleJson, token)
+                        .ConfigureAwait(false))
+                        break;
+
+                    lastStale = now;
+                    merged = false;
+
+                    // ПАЧКА УЖЕ ПОКРЫТА ЭТИМ КАДРОМ: после него телефон перечитает список,
+                    // значит накопленное в окне второго кадра не заслуживает — бит один.
+                    while (feed.Hits.TryRead(out _)) { }
+
+                    continue;
+                }
+
+                if (now >= ping)
+                {
+                    if (!await WriteSseAsync(
+                            stream, "ping", PhoneSse.Ping(now.ToUnixTimeMilliseconds()), token)
+                        .ConfigureAwait(false))
+                        break;
+
+                    ping = now + LivePing;
+                    continue;
+                }
+
+                // БЛИЖАЙШИЙ СРОК: `ping`, конец жизни — и конец окна склейки, если бит ждёт.
+                var wakeAt = ping < end ? ping : end;
+
+                if (merged)
+                {
+                    var due = lastStale + ListLiveCoalesce;
+                    if (due < wakeAt) wakeAt = due;
+                }
+
+                var wait = wakeAt > now ? wakeAt - now : TimeSpan.FromMilliseconds(1);
+
+                using var slice = CancellationTokenSource.CreateLinkedTokenSource(token);
+                slice.CancelAfter(wait);
+
+                try
+                {
+                    if (!await feed.Hits.WaitToReadAsync(slice.Token).ConfigureAwait(false)) break;
+                }
+                catch (OperationCanceledException)
+                {
+                    if (token.IsCancellationRequested) break;
+
+                    // Срок вышел сам — разберёмся сверху: `ping`, конец жизни или конец окна.
+                    continue;
+                }
+
+                // БИТ ПРИШЁЛ. Канал на один элемент: забрать его — и решить, писать сразу или
+                // подождать конца окна (тогда кадр будет ОДИН на всю пачку).
+                feed.Hits.TryRead(out _);
+
+                if (_doors.Clock() - lastStale >= ListLiveCoalesce)
+                {
+                    if (!await WriteSseAsync(
+                            stream, PhoneListLive.StaleEvent, PhoneListLive.StaleJson, token)
+                        .ConfigureAwait(false))
+                        break;
+
+                    lastStale = _doors.Clock();
+                    merged = false;
+
+                    // ТО ЖЕ ПОКРЫТИЕ ДЛЯ ПАЧКИ, ЧТО УЖЕ ЛЕЖИТ В КАНАЛЕ: один кадр — одно окно.
+                    while (feed.Hits.TryRead(out _)) { }
+
+                    continue;
+                }
+                else
+                {
+                    merged = true;
+                }
+            }
+        }
+        finally
+        {
+            // ЗАКРЫТИЕ $events — ОБЯЗАННОСТЬ КАЛИТКИ; и оно ДО последнего чанка: в обратном
+            // порядке телефон увидел бы конец раньше, чем закрыт движок (тот же довод, что у ленты).
+            link.Dispose();
+
+            if (lost && !token.IsCancellationRequested)
+            {
+                await WriteSseAsync(
+                        stream, "error",
+                        PhoneSse.Error("lost", Loc.T(PanelStrings.PhoneWebLiveLost)), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+
+            await FinishSseAsync(stream).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>ЗАПИСАТЬ ОДНО СОБЫТИЕ. <c>false</c> — клиент ушёл (или сокет отказал): поток кончается.</summary>
+    private static async Task<bool> WriteSseAsync(
+        NetworkStream stream, string name, string json, CancellationToken token)
+    {
+        try
+        {
+            await stream.WriteAsync(PhoneSse.Chunk(name, json), token).ConfigureAwait(false);
+            await stream.FlushAsync(token).ConfigureAwait(false);
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Голова живого потока: без `Content-Length`, с чанками и теми же запретами, что у всех ответов.</summary>
+    private static async Task WriteSseHeadAsync(NetworkStream stream, CancellationToken token)
+    {
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(PhoneSse.Head), token).ConfigureAwait(false);
+        await stream.FlushAsync(token).ConfigureAwait(false);
+    }
+
+    /// <summary>КОНЕЦ CHUNKED-ПОТОКА: <c>0\r\n\r\n</c>. Не бросает: клиент мог уже уйти.</summary>
+    private static async Task FinishSseAsync(NetworkStream stream)
+    {
+        try
+        {
+            await stream.WriteAsync(PhoneSse.Done, CancellationToken.None).ConfigureAwait(false);
+            await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Клиент ушёл — ровно этого и добивались.
+        }
+    }
+
+    /// <summary>
+    /// МЕСТО ЖИВОГО ЭКРАНА ИЛИ ПОДСКАЗКИ: возвращается РОВНО ОДИН РАЗ, когда ответ (включая
+    /// поток) закончился. Освобождение — делегатом: счётчики у экранов и у подсказок разные,
+    /// а правило «одно место — один счёт» — общее.
+    /// </summary>
+    private sealed class ScreenLease : IDisposable
+    {
+        private Action? _release;
+
+        public ScreenLease(Action release) => _release = release;
+
+        public void Dispose() => Interlocked.Exchange(ref _release, null)?.Invoke();
+    }
+
+    /// <summary>
+    /// ЗНАЧЕНИЕ ДОВОДА ИЗ СТРОКИ ЗАПРОСА (`?a=1&amp;b=2`). Процентное кодирование раскрывается:
+    /// адрес сессии приходит от браузера, и `%3A` в нём — это двоеточие, а не три знака.
+    /// </summary>
+    internal static string QueryValue(string? query, string name)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return string.Empty;
+
+        foreach (var pair in query!.Split('&'))
+        {
+            var equals = pair.IndexOf('=');
+            var key = equals < 0 ? pair : pair[..equals];
+
+            if (!string.Equals(key, name, StringComparison.Ordinal)) continue;
+
+            var raw = equals < 0 ? string.Empty : pair[(equals + 1)..];
+
+            try
+            {
+                return Uri.UnescapeDataString(raw.Replace('+', ' ')).Trim();
+            }
+            catch
+            {
+                return raw.Trim();
+            }
+        }
+
+        return string.Empty;
     }
 
     // ---- пропуск устройства -----------------------------------------------------------------
@@ -3030,9 +4894,23 @@ public sealed class PhoneGate : IDisposable
         //   Второго заголовка не ставим — «оба на всякий случай» читается как «мы не выбрали».
         //   Директива говорит ТОЛЬКО о рамках и не запрещает наши же `<style>`/`<script>`, поэтому
         //   страница телефона (у неё свой скрипт живого обновления) не ломается.
-        head.Append("Cache-Control: no-store\r\n")
-            .Append("X-Content-Type-Options: nosniff\r\n")
-            .Append("Content-Security-Policy: frame-ancestors 'none'\r\n");
+        // ⚠️ СВОИ ЗАГОЛОВКИ — НЕ «ОТМЕНА БЕЗОПАСНОСТИ», а точечная замена: у ассетов пульта
+        // СВОЙ срок кэша (`immutable`: имя файла содержит хеш), а политика поверх них — та же,
+        // только вместо `frame-ancestors` — ПОЛНАЯ `PhoneWeb.Csp` (это же и есть новая поверхность).
+        // Дубля заголовков при этом нет: значение, названное в `Headers`, заменяет умолчание.
+        var extra = response.Headers ?? Array.Empty<(string Name, string Value)>();
+
+        bool Given(string name) => extra.Any(item =>
+            string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase));
+
+        if (!Given("Cache-Control")) head.Append("Cache-Control: no-store\r\n");
+
+        head.Append("X-Content-Type-Options: nosniff\r\n");
+
+        if (!Given("Content-Security-Policy"))
+            head.Append("Content-Security-Policy: frame-ancestors 'none'\r\n");
+
+        foreach (var (name, value) in extra) head.Append(name).Append(": ").Append(value).Append("\r\n");
 
         head.Append("\r\n");
 
@@ -3058,14 +4936,25 @@ public sealed class PhoneGate : IDisposable
         _ => "OK",
     };
 
-    /// <summary>Ответ калитки телефону. <see cref="Cookie"/> — только у удачного сопряжения,
-    /// <see cref="Location"/> — только у перенаправления (303) после формы.</summary>
+    /// <summary>
+    /// Ответ калитки телефону. <see cref="Cookie"/> — только у удачного сопряжения,
+    /// <see cref="Location"/> — только у перенаправления (303) после формы.
+    ///
+    /// <see cref="Sse"/> — ЖИВОЙ ПОТОК, А НЕ ГОТОВЫЙ ОТВЕТ: у такого ответа НЕТ <c>Content-Length</c>,
+    /// голову пишет <see cref="WriteSseHeadAsync"/>, а события — та же дверь (одна на поток).
+    /// <see cref="Lease"/> — место живого экрана: возвращается, когда ответ (включая поток) кончился.
+    /// </summary>
     private sealed record PhoneHttpResponse(
         int Status,
         string ContentType,
         string Body,
         string? Cookie,
-        string? Location = null)
+        string? Location = null,
+        Func<NetworkStream, CancellationToken, Task>? Sse = null,
+        IDisposable? Lease = null,
+        IReadOnlyList<(string Name, string Value)>? Headers = null,
+        TimeSpan? OwnTimeout = null,
+        Func<CancellationToken, Task<PhoneHttpResponse>>? Late = null)
     {
         public static PhoneHttpResponse Json(int status, string body) =>
             new(status, "application/json; charset=utf-8", body, null);
@@ -3097,3 +4986,12 @@ public sealed class PhoneGate : IDisposable
     /// <summary>Доводы в JSON одной строкой — тем же кодировщиком, что и слова человеку.</summary>
     private static string Quote(string text) => JsonSerializer.Serialize(text ?? string.Empty, Readable);
 }
+
+
+
+
+
+
+
+
+

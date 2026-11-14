@@ -65,7 +65,7 @@ public class PhoneBrowserTests
             + "\"request\":{\"questions\":[{\"id\":\"q1\",\"question\":\"Делать?\",\"options\":[{\"label\":\"Да\"},{\"label\":\"Нет\"}]}]}}}");
 
         // (1) РАЗБОР РАЗМЕТКИ БРАУЗЕРОМ, А НЕ СТРОКОЙ: страница отдаётся калиткой как есть.
-        var page = await stand.Http.GetStringAsync("/?x=1", TestContext.Current.CancellationToken);
+        var page = await stand.Http.GetStringAsync("/ask?x=1", TestContext.Current.CancellationToken);
 
         Assert.Contains("class=\"card\"", page, StringComparison.Ordinal);
 
@@ -533,7 +533,7 @@ public class PhoneBrowserTests
 
     internal static string? Browser() => BrowserPaths().FirstOrDefault(File.Exists);
 
-    internal static string Url(int port) => "http://" + Loop + ":" + port.ToString(CultureInfo.InvariantCulture) + "/";
+    internal static string Url(int port) => "http://" + Loop + ":" + port.ToString(CultureInfo.InvariantCulture) + "/ask";
 
     private static string AsJson(string value)
     {

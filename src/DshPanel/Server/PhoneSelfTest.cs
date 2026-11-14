@@ -99,6 +99,11 @@ public static class PhoneSelfTest
                 });
         }
 
+        // СЛОВА ДЛЯ ОТЧЁТА: у `--phone-selftest` нет окна, и `Loc.Init` до сюда не доходит.
+        // Без этого отчёт и проверки видели бы ИМЕНА КЛЮЧЕЙ, а не слова (и «номер порта в отказе»
+        // не находился бы вовсе: шаблон — это текст словаря).
+        if (Loc.KeyCount == 0) Loc.Init();
+
         var paths = context?.Paths ?? AppPaths.Under(runRoot!);
         var state = new RunState(paths, timeout, locateEngine ?? (() => DshEngine.Locate()));
 
@@ -155,6 +160,15 @@ public static class PhoneSelfTest
             _locateEngine = locateEngine;
             _rootExistedBefore = Directory.Exists(paths.Root);
         }
+
+        /// <summary>
+        /// ЧАСЫ ПОДСТАВНЫХ ДВЕРЕЙ: ими двигает проверка, а не календарь. Без этого «кэш на 30 с»
+        /// проверялся бы сном на полминуты, то есть не проверялся бы вовсе.
+        /// </summary>
+        public DateTimeOffset Now { get; private set; } = DateTimeOffset.Now;
+
+        /// <summary>Перевести часы вперёд — так истекает кэш архива в проверке.</summary>
+        public void Advance(TimeSpan step) => Now = Now.Add(step);
 
         /// <summary>
         /// СВОЙ КОРЕНЬ НА КАЖДЫЙ РАЗДЕЛ. Не украшение: файл пропуска — ОДИН на корень, и раздел,
@@ -219,19 +233,23 @@ public static class PhoneSelfTest
             var breaker = Breaker();
             var live = Live();
             var frames = Frames();
-
+            var tasks = Tasks();
+            var signals = Signals();
             _report.Add(string.Empty);
             Line($"проверок: {_checks}; прошло: {_passes}; провалилось: {_failed.Count}");
             Line($"разделов: открытие {gate}, страница и сопряжение {question}, рубильник {breaker}, "
-                 + $"живое рукопожатие {live}, вопрос на подставных кадрах {frames} (0 — прошёл, 1 — провал, 2 — неприменимо)");
+                 + $"живое рукопожатие {live}, вопрос на подставных кадрах {frames}, "
+                 + $"двери S3 {tasks}, S4a {signals} (0 — прошёл, 1 — провал, 2 — неприменимо)");
 
             if (_failed.Count > 0)
             {
                 Line($"провалившиеся проверки ({_failed.Count}), каждая из них и делает исход провалом:");
-                foreach (var item in _failed) Line("  ! " + item);
+                foreach (var item in _failed.ToArray()) Line("  ! " + item);
             }
 
-            var code = _failed.Count > 0 || gate == 1 || question == 1 || breaker == 1 ? 1 : 0;
+            var code = _failed.Count > 0 || gate == 1 || question == 1 || breaker == 1 || tasks == 1 || signals == 1
+                ? 1
+                : 0;
 
             // «Нет движка» — НЕ «зелено»: без живого рукопожатия главная часть F1 не прогонялась.
             // Но и «провал» это не: на чистой машине проверять нечего. Код 2 — как у соседей.
@@ -239,7 +257,7 @@ public static class PhoneSelfTest
 
             // ОТЧЁТ ЗАКАНЧИВАЕТСЯ ЖУРНАЛОМ — и он уходит в него ОБЕЗВРЕЖЕННЫМ (см. Mask):
             // строки журнала собраны панелью и полны путей, а отчёт читает человек.
-            foreach (var item in _log) _report.Add("ЖУРНАЛ| " + Mask(item));
+            foreach (var item in _log.ToArray()) _report.Add("ЖУРНАЛ| " + Mask(item));
 
             var title = code switch
             {
@@ -361,11 +379,19 @@ public static class PhoneSelfTest
             public PhoneEngineAnswer Answer { get; set; } =
                 new(200, "{\"type\":\"server-response\",\"rpcId\":\"stub\",\"result\":{\"ok\":true}}");
 
+            /// <summary>Ответы ПО ИМЕНИ вызова: у дверей S3 за один запрос бывает два вызова.</summary>
+            public Dictionary<string, PhoneEngineAnswer> Answers { get; } = new(StringComparer.Ordinal);
+
+            /// <summary>Задержка вызова: нажата — вызов «думает», пока проверка не отпустит (DEF-072).</summary>
+            public ManualResetEventSlim Hold { get; } = new(true);
+
             public Func<string, string, PhoneEngineAnswer> Door => (endpoint, args) =>
             {
                 lock (Calls) Calls.Add(new Call(endpoint, args));
 
-                return Answer;
+                Hold.Wait(TimeSpan.FromSeconds(10));
+
+                return Answers.TryGetValue(endpoint, out var answer) ? answer : Answer;
             };
 
             public Call? Last(string endpoint)
@@ -376,6 +402,12 @@ public static class PhoneSelfTest
             public bool Called(string endpoint, Func<string, bool>? args = null)
             {
                 lock (Calls) return Calls.Any(call => call.Endpoint == endpoint && (args is null || args(call.Args)));
+            }
+
+            /// <summary>Сколько раз позвали имя — число, по которому видно «второго вызова не было».</summary>
+            public int Count(string endpoint)
+            {
+                lock (Calls) return Calls.Count(call => call.Endpoint == endpoint);
             }
         }
 
@@ -393,6 +425,164 @@ public static class PhoneSelfTest
             public void Emit(string frame) => _onFrame(frame);
 
             public void Dispose() => Alive = false;
+        }
+
+        /// <summary>
+        /// ПОДСТАВНАЯ ДВЕРЬ ЖИВОГО ПОТОКА (S1): проверка подаёт кадры `session/follow` сама.
+        /// Нужна потому, что живой ход требует ключа модели: без него ни `snapshot`, ни `assistant-stream`
+        /// не увидеть, а дверь, её заголовки и порядок событий проверить можно и так.
+        /// </summary>
+        private sealed class StubFollow
+        {
+            private Action<string>? _onFrame;
+
+            public int Opens { get; private set; }
+
+            public string Session { get; private set; } = string.Empty;
+
+            public PhoneFollowDoors Doors => new(Open, _ => { }, () => true);
+
+            public void Emit(string frame) => _onFrame?.Invoke(frame);
+
+            private IPhoneFollowLink? Open(string sessionId, Action<string> onFrame)
+            {
+                Opens++;
+                Session = sessionId;
+                _onFrame = onFrame;
+
+                return new Link(this);
+            }
+
+            private sealed class Link : IPhoneFollowLink
+            {
+                private readonly StubFollow _owner;
+
+                public Link(StubFollow owner) => _owner = owner;
+
+                public bool Alive => true;
+
+                public void Dispose() => _owner._onFrame = null;
+            }
+        }
+
+        /// <summary>
+        /// ПОДСТАВНАЯ ДВЕРЬ ЧТЕНИЯ ОЧЕРЕДИ (<c>session/control</c>): кадры подаёт проверка — как
+        /// у живой ленты. Живой записи здесь нет ни одной: очередь собирается из baseline, а его
+        /// форма проверяется без движка.
+        /// </summary>
+        private sealed class StubControl
+        {
+            private readonly object _gate = new();
+            private readonly List<Action<string>> _subscribers = new();
+            private readonly List<Link> _links = new();
+
+            /// <summary>Сколько раз калитка открыла поток.</summary>
+            public int Opens
+            {
+                get
+                {
+                    lock (_gate) return _links.Count;
+                }
+            }
+
+            /// <summary>Сколько потоков ЖИВО СЕЙЧАС: после ответа обязано быть 0 (контракт §5.4).</summary>
+            public int Live
+            {
+                get
+                {
+                    lock (_gate) return _links.Count(link => link.Active);
+                }
+            }
+
+            public PhoneControlDoors Doors => new(Open, _ => { }, () => true);
+
+            public void Emit(string frame)
+            {
+                Action<string>[] subscribers;
+
+                lock (_gate) subscribers = _subscribers.ToArray();
+
+                foreach (var subscriber in subscribers) subscriber(frame);
+            }
+
+            private IPhoneQueueLink? Open(Action<string> onFrame)
+            {
+                lock (_gate)
+                {
+                    var link = new Link();
+
+                    _links.Add(link);
+                    _subscribers.Add(onFrame);
+
+                    return link;
+                }
+            }
+
+            private sealed class Link : IPhoneQueueLink
+            {
+                public bool Active { get; private set; } = true;
+
+                public bool Alive => Active;
+
+                public void Dispose() => Active = false;
+            }
+        }
+        /// <summary>
+        /// ПОДСТАВНАЯ ДВЕРЬ АРХИВА (<c>workspace/follow</c>): кадр подаёт проверка.
+        /// <see cref="Silent"/> — поток открылся, а baseline не пришёл: так проверяется правило
+        /// «не прочиталось — список как есть, причина в журнале».
+        /// </summary>
+        private sealed class StubWorkspace
+        {
+            private readonly object _gate = new();
+            private readonly List<Link> _links = new();
+
+            /// <summary>Что отдать первым кадром после открытия (обычно <c>baseline</c>).</summary>
+            public string? Reply { get; set; }
+
+            /// <summary>Открыть поток и промолчать: baseline не придёт.</summary>
+            public bool Silent { get; set; }
+
+            public int Opens
+            {
+                get
+                {
+                    lock (_gate) return _links.Count;
+                }
+            }
+
+            public int Live
+            {
+                get
+                {
+                    lock (_gate) return _links.Count(link => link.Active);
+                }
+            }
+
+            public PhoneWorkspaceDoors Doors => new(Open, _ => { }, () => true);
+
+            private IPhoneWorkspaceLink? Open(Action<string> onFrame)
+            {
+                lock (_gate)
+                {
+                    var link = new Link();
+
+                    _links.Add(link);
+
+                    if (!Silent && Reply is { } frame) onFrame(frame);
+
+                    return link;
+                }
+            }
+
+            private sealed class Link : IPhoneWorkspaceLink
+            {
+                public bool Active { get; private set; } = true;
+
+                public bool Alive => Active;
+
+                public void Dispose() => Active = false;
+            }
         }
 
         /// <summary>Свободный порт петли: система выдаёт его связыванием на <c>0</c>.</summary>
@@ -486,7 +676,10 @@ public static class PhoneSelfTest
             bool human,
             PhoneEventDoors events,
             StubEngine engine,
-            int? port = null)
+            int? port = null,
+            PhoneFollowDoors? follow = null,
+            PhoneControlDoors? control = null,
+            PhoneWorkspaceDoors? workspace = null)
         {
             var chosen = port ?? FreeLoopbackPort();
 
@@ -496,13 +689,16 @@ public static class PhoneSelfTest
                 engine.Door,
                 PhonePassFiles.Under(paths, Log),
                 events,
-                () => DateTimeOffset.Now,
+                () => Now,
                 Log,
-                Bound: _ => { });
+                Bound: _ => { },
+                Follow: follow,
+                Control: control,
+                Workspace: workspace);
 
             // ⚠️ Контекст здесь ИЗОЛИРОВАННЫЙ (свой корень): обычный запуск человеком его не даст,
             // и калитка откажет по праву прежде, чем дойдёт до порта. Право самотеста этой калитке
-            // НЕ выдаётся — им занимается <see cref="RunGate"/>, а здесь проверяется сам отказ.
+            // НЕ выдаётся — им занимается RunGate, а здесь проверяется сам отказ.
             var context = RunContext.Create(RunRequest.Parse(
                 new[] { RunRequest.RootSwitchArgument, paths.Root }, _ => null));
 
@@ -512,17 +708,20 @@ public static class PhoneSelfTest
         /// <summary>
         /// КАЛИТКА С ПРАВОМ САМОТЕСТА. Право выдаётся ровно здесь и ровно затем, чтобы калитку
         /// можно было проверить: изолированному прогону его не даёт никто
-        /// (<see cref="RunRights.MayOpenPhoneGate"/>). Сам отказ по праву при этом проверяется
-        /// ОТДЕЛЬНОЙ калиткой (<see cref="Build"/>) — и это первая проверка раздела «открытие».
+        /// (<see cref="RunRights.MayOpenPhoneGate"/>). Сам отказ по праву проверяется ОТДЕЛЬНОЙ
+        /// калиткой (<see cref="Build"/>) — и это первая проверка раздела «открытие».
         /// </summary>
         private Stand RunGate(
             AppPaths paths,
             bool enabled,
             PhoneEventDoors events,
             StubEngine engine,
-            int? port = null)
+            int? port = null,
+            PhoneFollowDoors? follow = null,
+            PhoneControlDoors? control = null,
+            PhoneWorkspaceDoors? workspace = null)
         {
-            var stand = Build(paths, enabled, human: true, events, engine, port);
+            var stand = Build(paths, enabled, human: true, events, engine, port, follow, control, workspace);
 
             stand.Gate.AllowForSelfTest = true;
 
@@ -531,7 +730,8 @@ public static class PhoneSelfTest
 
         /// <summary>Запрос: заголовок нашей cookie собирается ЗДЕСЬ, в одном месте.</summary>
         private static async Task<Reply> Send(
-            HttpClient http, HttpMethod method, string path, string? json = null, string? cookie = null)
+            HttpClient http, HttpMethod method, string path, string? json = null, string? cookie = null,
+            string? language = null, string? host = null)
         {
             using var request = new HttpRequestMessage(method, path);
 
@@ -539,6 +739,10 @@ public static class PhoneSelfTest
 
             if (!string.IsNullOrEmpty(cookie))
                 request.Headers.TryAddWithoutValidation("Cookie", PhoneGate.CookieName + "=" + cookie);
+
+            if (language is not null) request.Headers.TryAddWithoutValidation("Accept-Language", language);
+
+            if (host is not null) request.Headers.Host = host;
 
             using var response = await http.SendAsync(request);
             var text = await response.Content.ReadAsStringAsync();
@@ -558,6 +762,50 @@ public static class PhoneSelfTest
             var reply = await Send(stand.Http, HttpMethod.Post, "/pair", "{\"code\":\"" + code + "\"}");
 
             return reply.Status == 200 ? reply.Cookie : string.Empty;
+        }
+
+        /// <summary>
+        /// ОДИН ЖИВОЙ ПОТОК В ПРОВЕРКЕ: своё TCP-соединение (HttpClient незавершённый ответ
+        /// не отдаёт), запрос — вручную, чтение — ограниченное время. <paramref name="afterOpen"/> —
+        /// что подать в подставную дверь, когда калитка уже открыла поток.
+        /// </summary>
+        private static string SseOnce(
+            Stand stand, string path, string cookie, Action afterOpen, int readMs = 1500)
+        {
+            using var client = new TcpClient();
+            client.Connect(IPAddress.Loopback, stand.Port);
+
+            using var stream = client.GetStream();
+            stream.ReadTimeout = 250;
+
+            var head = "GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1:" + stand.Port + "\r\n"
+                       + "Cookie: " + PhoneGate.CookieName + "=" + cookie + "\r\n\r\n";
+            var bytes = Encoding.ASCII.GetBytes(head);
+            stream.Write(bytes, 0, bytes.Length);
+            stream.Flush();
+
+            Thread.Sleep(300);
+            afterOpen();
+
+            var seen = new StringBuilder();
+            var buffer = new byte[8192];
+            var deadline = Environment.TickCount64 + readMs;
+
+            while (Environment.TickCount64 < deadline)
+            {
+                try
+                {
+                    var read = stream.Read(buffer, 0, buffer.Length);
+
+                    if (read > 0) seen.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                }
+                catch (IOException)
+                {
+                    // Срок чтения: новых байт пока нет — это не ошибка проверки.
+                }
+            }
+
+            return seen.ToString();
         }
 
         /// <summary>Подождать состояния вопроса: кадры приходят фоном, и «сейчас же» — это гонка.</summary>
@@ -677,7 +925,7 @@ public static class PhoneSelfTest
 
             _started.Add(stand.Gate);
 
-            var page = Send(stand.Http, HttpMethod.Get, "/").GetAwaiter().GetResult();
+            var page = Send(stand.Http, HttpMethod.Get, "/ask").GetAwaiter().GetResult();
 
             Check("страница входа отдаётся кодом 200", page.Status == 200);
             Check("на странице есть поле для шести цифр",
@@ -746,7 +994,7 @@ public static class PhoneSelfTest
             Check("без cookie вопрос не отдаётся (401)", questionAnon.Status == 401);
 
             var answerAnon = Send(
-                    stand.Http, HttpMethod.Post, "/answer", "{\"eventId\":\"probe\",\"answers\":[]}")
+                    stand.Http, HttpMethod.Post, "/answer", "{\"eventId\":\"probe\",\"answers\":[{\"id\":\"q1\",\"selected\":[\"Да\"]}]}")
                 .GetAwaiter().GetResult();
 
             Check("без cookie ответ не принимается (401)", answerAnon.Status == 401);
@@ -774,8 +1022,12 @@ public static class PhoneSelfTest
 
             Check("разрешённый вызов уходит в движок",
                 sent is { } call && call.Args.Contains("_request", StringComparison.Ordinal));
-            Check("ответ движка уходит телефону КАК ЕСТЬ (200 и то же тело)",
-                allowed.Status == 200 && allowed.Carries("\"items\":[1,2,3]"));
+            // С t4 старый `/api/session/list` отдаёт НЕ тело движка, а строки по белому списку.
+            Check("ответ телефону — строки по белому списку (ok/total/shown/items)",
+                allowed.Status == 200
+                && allowed.Carries("\"ok\":true")
+                && allowed.Carries("\"total\":0")
+                && allowed.Carries("\"items\":[]"));
             Check("пропуск в движок не уехал (уезжает только конверт с доводами)",
                 sent is { } c2 && !c2.Args.Contains("phone-", StringComparison.OrdinalIgnoreCase));
 
@@ -918,7 +1170,7 @@ public static class PhoneSelfTest
             Check("после остановки калитка не слушает", !stand.Gate.Listening);
             Check("после остановки порт освободился (связывание тем же портом проходит)", CanBind(stand.Port));
             Check("об остановке сказано в журнале",
-                _log.Any(line => line.Contains("закрыт", StringComparison.OrdinalIgnoreCase)));
+                                _log.Any(line => line.Contains(Loc.T(PanelStrings.PhoneGateStoppedLog), StringComparison.Ordinal)));
 
             return 0;
         }
@@ -1029,8 +1281,20 @@ public static class PhoneSelfTest
                 .GetAwaiter().GetResult();
 
             Check("живой session/list принят движком (200)", list.Status == 200);
-            Check("ответ движка — его конверт без ошибки", EngineRpcClient.ErrorCode(list.Body).Length == 0);
-            Info($"  session/list: ответ {list.Body.Length} знаков (содержимое не печатаем: там имена разговоров человека)");
+
+            // ТЕЛЕФОНУ — СВОИ СТРОКИ: форма ответа — наша (`total/shown/items`), а путей в ней
+            // нет вовсе (с поправки §0.4 контракта дверь собирает строки по allowlist).
+            Check(
+                "список для телефона собран по белому списку (total/shown/items)",
+                list.Body.Contains("\"total\"", StringComparison.Ordinal)
+                && list.Body.Contains("\"shown\"", StringComparison.Ordinal)
+                && list.Body.Contains("\"items\"", StringComparison.Ordinal));
+            Check(
+                "в списке для телефона нет cwd/workingDirectory",
+                !list.Body.Contains("\"cwd\"", StringComparison.Ordinal)
+                && !list.Body.Contains("\"workingDirectory\"", StringComparison.Ordinal));
+
+            Info($"  session/list: ответ телефону {list.Body.Length} знаков (содержимое не печатаем: там имена разговоров человека)");
 
             // --- ФОРМА СПИСКА: ТО, ЧТО ПИШЕТ ДВИЖОК, ПРОТИВ ТОГО, ЧТО ЖДЁТ КАЛИТКА -----------
             //
@@ -1038,9 +1302,19 @@ public static class PhoneSelfTest
             // искал `result.value` — по аналогии с другим вызовом; потом `result.items` — по
             // ПОДСТАВНОМУ ответу самой панели, то есть проверка подтверждала мою же ошибку. Живой
             // прогон на копии профиля (198 сессий) показал правду: `result.value.items`. Теперь форму
-            // меряет ЖИВОЙ прогон и печатает ИМЕНА полей — а подставной ответ в этом же самотесте
-            // приведён к той же форме, чтобы заглушка больше не «подтверждала» неверное.
-            var shape = PhoneSessions.Examine(list.Body);
+            // меряет ЖИВОЙ прогон и печатает ИМЕНА полей.
+            //
+            // ⚠️ МЕРЯЕТСЯ ОТВЕТ ДВИЖКА, А НЕ ДВЕРЬ КАЛИТКИ: с t4 дверь уже собрана по allowlist,
+            // и «какой формы был ответ движка» по ней не видно. Поэтому здесь — прямой вызов
+            // движка тем же входом, каким ходит калитка.
+            var shapeLogin = EngineRpcLogin.Exchange(entry, TimeSpan.FromSeconds(20));
+            var shapeEngine = shapeLogin.Ok
+                ? new EngineRpcClient(
+                        EngineRpcLogin.BaseUrlOf(entry), shapeLogin.CookieHeader, TimeSpan.FromSeconds(10))
+                    .CallRaw("session/list", "{\"_request\":{}}")
+                : null;
+
+            var shape = PhoneSessions.Examine(shapeEngine?.Body);
 
             if (shape.Found)
             {
@@ -1155,7 +1429,7 @@ public static class PhoneSelfTest
             // это РАЗНЫЕ ответы, и по ним видно, что clientId у калитки есть.
             var broken = Send(
                     stand.Http, HttpMethod.Post, "/answer",
-                    "{\"eventId\":\"00000000-0000-0000-0000-000000000000\",\"answers\":[]}", cookie)
+                    "{\"eventId\":\"00000000-0000-0000-0000-000000000000\",\"answers\":[{\"id\":\"q1\",\"selected\":[\"Да\"]}]}", cookie)
                 .GetAwaiter().GetResult();
 
             Check("живой канал событий есть: ответ отвергнут как устаревший (403), а не как «связи нет» (503)",
@@ -1210,7 +1484,10 @@ public static class PhoneSelfTest
                 },
                 Log);
 
-            using var stand = RunGate(paths, enabled: true, events, engine);
+            // ПОДСТАВНАЯ ДВЕРЬ ЖИВОГО ПОТОКА (S1): ею проверяются заголовки SSE и порядок кадров.
+            var follow = new StubFollow();
+
+            using var stand = RunGate(paths, enabled: true, events, engine, follow: follow.Doors);
 
             if (!stand.Gate.Start().Opened)
             {
@@ -1314,7 +1591,766 @@ public static class PhoneSelfTest
             var kept = Send(stand.Http, HttpMethod.Get, "/question", cookie: cookie).GetAwaiter().GetResult();
             Check("чужой cancel наш вопрос не снимает", kept.Body.Contains("\"state\":\"question\"", StringComparison.Ordinal));
 
+            // ---- S1+S2: оболочка, ассеты, новый вопрос, JSON-отмена, SSE --------------------
+
+            var shell = Send(stand.Http, HttpMethod.Get, "/", cookie: cookie).GetAwaiter().GetResult();
+
+            Check("корень отдаёт оболочку пульта, а не старую страницу",
+                shell.Status == 200 && shell.Carries("id=\"root\"") && !shell.Carries("id=\"code\""));
+            Check("оболочка знает про вход и слова пульта",
+                shell.Carries("&quot;authed&quot;:true")
+                && shell.Carries(Loc.T(PanelStrings.PhoneWebListTitle))
+                && shell.Carries("/assets/"));
+            Check("у оболочки нет внешних адресов",
+                !shell.Carries("http://") && !shell.Carries("https://"));
+
+            var assetMatch = System.Text.RegularExpressions.Regex.Match(
+                shell.Body, "src=\"(/assets/[^\"]+\\.js)\"", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+            Check("в оболочке есть путь к скрипту пульта", assetMatch.Success);
+
+            if (assetMatch.Success)
+            {
+                var asset = Send(stand.Http, HttpMethod.Get, assetMatch.Groups[1].Value)
+                    .GetAwaiter().GetResult();
+
+                Check("файл пульта отдаётся из exe", asset.Status == 200 && asset.Body.Length > 0);
+            }
+
+            var oldPage = Send(stand.Http, HttpMethod.Get, "/ask").GetAwaiter().GetResult();
+
+            Check("запасной адрес /ask отдаёт прежнюю страницу",
+                oldPage.Status == 200 && oldPage.Carries("id=\"code\""));
+
+            var twice = stand.Gate.Start();
+
+            Check("второй Start при живой двери идемпотентен", twice.Opened);
+            Check("после второго Start корень отвечает",
+                Send(stand.Http, HttpMethod.Get, "/").GetAwaiter().GetResult().Status == 200);
+
+            // НОВАЯ ДВЕРЬ ВОПРОСА: карточка по белому списку (без clientId/agentId/intent).
+            links[0].Emit(waterfall);
+
+            WaitForQuestion(stand, cookie, "question").GetAwaiter().GetResult();
+            var fresh = Send(stand.Http, HttpMethod.Get, "/api/phone/question", cookie: cookie)
+                .GetAwaiter().GetResult();
+
+            Check("новый адрес вопроса отдаёт карточку по белому списку",
+                fresh.Status == 200
+                && fresh.Body.Contains("\"state\":\"question\"", StringComparison.Ordinal)
+                && fresh.Body.Contains("\"id\":\"q1\"", StringComparison.Ordinal)
+                && fresh.Body.Contains("\"expiresAt\":", StringComparison.Ordinal));
+            Check("карточка не отдаёт clientId, agentId и intent",
+                !fresh.Body.Contains(clientId, StringComparison.Ordinal)
+                && !fresh.Body.Contains("agentId", StringComparison.Ordinal)
+                && !fresh.Body.Contains("intent", StringComparison.Ordinal));
+
+            // JSON-ОТМЕНА: телефон получает JSON, а не HTML-страницу (поправка §0.6).
+            var jsonCancel = Send(
+                    stand.Http, HttpMethod.Post, "/cancel",
+                    "{\"eventId\":\"" + eventId + "\"}", cookie)
+                .GetAwaiter().GetResult();
+
+            Check("отмена по JSON отвечает JSON, а не страницей",
+                jsonCancel.Status == 200
+                && jsonCancel.Body.Contains("\"ok\":true", StringComparison.Ordinal)
+                && jsonCancel.Body.Contains(Loc.T(PanelStrings.PhonePageCancelled), StringComparison.Ordinal));
+
+            // ЖИВОЙ ПОТОК: заголовки, snapshot, запись и недописанный ответ — через подставную дверь.
+            var sse = SseOnce(
+                stand, "/api/phone/live?session=session-c16b-0000", cookie,
+                () =>
+                {
+                    follow.Emit(
+                        "{\"type\":\"item\",\"value\":{\"type\":\"snapshot\",\"header\":{\"id\":\"session-c16b-0000\"},"
+                        + "\"cursor\":5,\"hasMore\":false,\"records\":[{\"type\":\"event\",\"event\":{\"type\":\"user/message\","
+                        + "\"seq\":6,\"time\":1,\"data\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"привет\"}],"
+                        + "\"source\":{\"kind\":\"user\"}}}},{\"type\":\"event\",\"event\":{\"type\":\"system/message\","
+                        + "\"seq\":7,\"time\":2,\"data\":{\"turn\":1,\"step\":1,\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"системный\"}]}}}}]}}");
+                    follow.Emit(
+                        "{\"type\":\"item\",\"value\":{\"type\":\"assistant-stream\",\"frame\":{\"type\":\"chunk\","
+                        + "\"attemptId\":\"a1\",\"revision\":1,\"index\":1,\"time\":3,\"chunk\":{\"type\":\"text-delta\",\"text\":\"кусочек\"}}}}");
+                });
+
+            Check("живой поток открылся как SSE (200 и text/event-stream)",
+                sse.Contains("HTTP/1.1 200", StringComparison.Ordinal)
+                && sse.Contains("text/event-stream", StringComparison.Ordinal));
+            Check("поток отдал snapshot с нормализованной записью",
+                sse.Contains("event: snapshot", StringComparison.Ordinal)
+                && sse.Contains("\"type\":\"user\"", StringComparison.Ordinal));
+            Check("системное сообщение движка телефону не ушло",
+                !sse.Contains("system/message", StringComparison.Ordinal)
+                && !sse.Contains("системный", StringComparison.Ordinal));
+            Check("недописанный ответ пришёл кадром assistant",
+                sse.Contains("event: assistant", StringComparison.Ordinal)
+                && sse.Contains("кусочек", StringComparison.Ordinal));
+            Check("домашний каталог машины не виден и в потоке",
+                sse.IndexOf(domashny, StringComparison.OrdinalIgnoreCase) < 0);
             return 0;
         }
+
+        // ---- (6) двери S3: задача, новая задача, стоп, очередь, «убрать» ------------------------
+
+        /// <summary>
+        /// ДВЕРИ S3 НА ПОДСТАВНЫХ ДВЕРЯХ (контракт S3 §11.2, шаги 1–14) — без движка и без сети.
+        ///
+        /// Чем это доказано: подставной движок считает вызовы и отдаёт ответы ПО ИМЕНИ, подставная
+        /// дверь очереди подаёт кадр <c>baseline</c> и знает, закрыт ли поток. Ни одна живая запись
+        /// и ни одно живое значение сюда не входит: проверяются форма доводов, порядок отказов, сроки
+        /// и слова, а не чужой движок.
+        /// </summary>
+        private int Tasks()
+        {
+            Phase("двери S3: задача, новая задача, стоп, очередь, «убрать»");
+
+            var paths = Stage("tasks");
+            var engine = new StubEngine();
+            var control = new StubControl();
+
+            using var stand = RunGate(paths, enabled: true, PhoneEventDoors.None, engine, control: control.Doors);
+
+            if (!stand.Gate.Start().Opened)
+            {
+                Check("калитка открылась для проверки дверей S3", false);
+                return 1;
+            }
+
+            _started.Add(stand.Gate);
+
+            var cookie = Pair(stand).GetAwaiter().GetResult();
+
+            if (cookie.Length == 0)
+            {
+                Check("телефон сопрягся для проверки дверей S3", false);
+                return 1;
+            }
+
+            var promptBody = "{\"sessionId\":\"session-1\",\"requestId\":\"req-1\",\"text\":\"построй отчёт\"}";
+
+            // 1. БЕЗ ВХОДА И С ЧУЖОЙ ДВЕРЬЮ — ДО ДЕЙСТВИЯ.
+            var noCookie = Send(stand.Http, HttpMethod.Post, "/api/phone/prompt", promptBody)
+                .GetAwaiter().GetResult();
+
+            Check("D1: без cookie — 401 словами S3",
+                noCookie.Status == 401
+                && noCookie.Carries(Loc.T(nameof(PanelStrings.PhoneTaskUnauthorized))));
+
+            var foreign = Send(stand.Http, HttpMethod.Post, "/api/phone/prompt", promptBody, cookie,
+                host: "evil.example:80").GetAwaiter().GetResult();
+
+            Check("D1: чужой Host — 403 ДО действия и словами S3",
+                foreign.Status == 403
+                && foreign.Carries(Loc.T(nameof(PanelStrings.PhoneTaskForeignDoor)))
+                && !foreign.Carries("evil.example"));
+
+            Check("D1: отказы до действия НЕ зовут движок",
+                !engine.Called("session/prompt"));
+
+            // 2. МЕТОД: GET на дверь записи — 405 своими словами.
+            var wrongMethod = Send(stand.Http, HttpMethod.Get, "/api/phone/prompt", cookie: cookie)
+                .GetAwaiter().GetResult();
+
+            Check("D1: GET — 405 словами S3",
+                wrongMethod.Status == 405
+                && wrongMethod.Carries(Loc.T(nameof(PanelStrings.PhoneTaskNotAccepted))));
+
+            // 3. ПРИНЯТО, И ДОВОДЫ — РОВНО §2.2.
+            engine.Answers["session/prompt"] = new PhoneEngineAnswer(
+                200, "{\"result\":{\"ok\":true,\"value\":{\"accepted\":true}}}");
+
+            var accepted = Send(stand.Http, HttpMethod.Post, "/api/phone/prompt", promptBody, cookie)
+                .GetAwaiter().GetResult();
+
+            Check("D1: принято — 200 accepted с адресом и requestId",
+                accepted.Status == 200
+                && accepted.Carries("\"accepted\":true")
+                && accepted.Carries("session-1")
+                && accepted.Carries("req-1")
+                && accepted.Carries(Loc.T(nameof(PanelStrings.PhoneTaskAccepted))));
+
+            var sent = engine.Last("session/prompt");
+
+            Check("D1: доводы движку — mode=queue и тот же requestId",
+                sent is { } call
+                && call.Args.Contains("\"mode\":\"queue\"", StringComparison.Ordinal)
+                && call.Args.Contains("\"requestId\":\"req-1\"", StringComparison.Ordinal)
+                && call.Args.Contains("\"text\":\"построй отчёт\"", StringComparison.Ordinal));
+            Check("D1: лишнее поле телефона (`cwd`) в движок не ушло",
+                !engine.Called("session/prompt", args => args.Contains("cwd", StringComparison.Ordinal)));
+
+            // 4. ПОВТОР — ТОТ ЖЕ requestId (на нём держится идемпотентность движка).
+            var again = Send(stand.Http, HttpMethod.Post, "/api/phone/prompt", promptBody, cookie)
+                .GetAwaiter().GetResult();
+
+            Check("D1: повтор уходит с ТЕМ ЖЕ requestId",
+                again.Status == 200
+                && engine.Last("session/prompt") is { } repeat
+                && repeat.Args.Contains("\"requestId\":\"req-1\"", StringComparison.Ordinal));
+
+            // 5. ЗАЩЁЛКА: ВТОРАЯ ОТПРАВКА В ПОЛЁТЕ — 403 И БЕЗ ВЫЗОВА (DEF-072).
+            engine.Hold.Reset();
+
+            var inFlight = Send(stand.Http, HttpMethod.Post, "/api/phone/prompt", promptBody, cookie);
+
+            var callsBefore = engine.Count("session/prompt");
+
+            for (var attempt = 0; attempt < 400 && engine.Count("session/prompt") == callsBefore; attempt++)
+                Thread.Sleep(5);
+
+            var busy = Send(stand.Http, HttpMethod.Post, "/api/phone/prompt", promptBody, cookie)
+                .GetAwaiter().GetResult();
+
+            engine.Hold.Set();
+            inFlight.GetAwaiter().GetResult();
+
+            Check("DEF-072: вторая отправка в полёте — 403 словами и без второго вызова",
+                busy.Status == 403
+                && busy.Carries(Loc.T(nameof(PanelStrings.PhoneTaskBusy))));
+
+            // 6. D2 — ДВА ВЫЗОВА, ПОВТОР БЕЗ СОЗДАНИЯ.
+            engine.Answers["session/create"] = new PhoneEngineAnswer(
+                200, "{\"result\":{\"ok\":true,\"value\":{\"sessionId\":\"session-new-1\",\"cwd\":\"C:\\\\маркер\"}}}");
+
+
+            var newBody = "{\"requestId\":\"new-1\",\"text\":\"сделай сайт\"}";
+
+            var created = Send(stand.Http, HttpMethod.Post, "/api/phone/new", newBody, cookie)
+                .GetAwaiter().GetResult();
+
+            Check("D2: создан разговор и принята задача (repeated:false)",
+                created.Status == 200
+                && created.Carries("\"repeated\":false")
+                && created.Carries("session-new-1")
+                && created.Carries(Loc.T(nameof(PanelStrings.PhoneTaskNewAccepted))));
+
+            Check("D2: доводы создания ПУСТЫЕ — ни папки, ни пресета",
+                engine.Last("session/create") is { } create
+                && create.Args.Contains("\"request\":{}", StringComparison.Ordinal));
+
+            Check("D2: путь из ответа движка телефону не ушёл", !created.Carries("маркер"));
+
+            var createdAgain = Send(stand.Http, HttpMethod.Post, "/api/phone/new", newBody, cookie)
+                .GetAwaiter().GetResult();
+
+            Check("D2: повтор — тот же разговор и НИ ОДНОГО нового создания",
+                createdAgain.Status == 200
+                && createdAgain.Carries("\"repeated\":true")
+                && createdAgain.Carries("session-new-1")
+                && engine.Count("session/create") == 1);
+
+            // 7. D3 — ДВА ЧЕСТНЫХ ИСХОДА, И «НЕТ АГЕНТА» — НЕ 502.
+            engine.Answers["session/cancel"] = new PhoneEngineAnswer(
+                200, "{\"result\":{\"ok\":true,\"value\":{\"accepted\":true}}}");
+
+            var stopped = Send(stand.Http, HttpMethod.Post, "/api/phone/stop", "{\"sessionId\":\"session-1\"}", cookie)
+                .GetAwaiter().GetResult();
+
+            Check("D3: ход остановлен — 200 stopped словами S3",
+                stopped.Status == 200
+                && stopped.Carries("\"stopped\":true")
+                && stopped.Carries(Loc.T(nameof(PanelStrings.PhoneStopDone))));
+
+            engine.Answers["session/cancel"] = new PhoneEngineAnswer(
+                200, "{\"result\":{\"ok\":false,\"error\":{\"code\":\"session/not-found\"}}}");
+
+            var idle = Send(stand.Http, HttpMethod.Post, "/api/phone/stop", "{\"sessionId\":\"session-1\"}", cookie)
+                .GetAwaiter().GetResult();
+
+            Check("D3: нет живого агента — 200 idle, а НЕ 502",
+                idle.Status == 200
+                && idle.Carries("\"state\":\"idle\"")
+                && idle.Carries(Loc.T(nameof(PanelStrings.PhoneStopIdle))));
+
+            // 8. D5 — «УБРАНО» И «УЖЕ НЕТ» ОДИНАКОВО УСПЕШНЫ.
+            engine.Answers["session/updateQueue"] = new PhoneEngineAnswer(
+                200, "{\"result\":{\"ok\":true,\"value\":{\"accepted\":true}}}");
+
+            var removed = Send(stand.Http, HttpMethod.Post, "/api/phone/queue/remove",
+                "{\"sessionId\":\"session-1\",\"itemId\":\"m-1\"}", cookie).GetAwaiter().GetResult();
+
+            Check("D5: пункт убран — 200 removed",
+                removed.Status == 200
+                && removed.Carries("\"state\":\"removed\"")
+                && removed.Carries(Loc.T(nameof(PanelStrings.PhoneQueueRemoved))));
+
+            Check("D5: доводы — itemId и action.kind=remove",
+                engine.Last("session/updateQueue") is { } queueCall
+                && queueCall.Args.Contains("\"itemId\":\"m-1\"", StringComparison.Ordinal)
+                && queueCall.Args.Contains("\"action\":{\"kind\":\"remove\"}", StringComparison.Ordinal));
+
+            engine.Answers["session/updateQueue"] = new PhoneEngineAnswer(
+                200, "{\"result\":{\"ok\":false,\"error\":{\"code\":\"session/queue-item-not-found\"}}}");
+
+            var gone = Send(stand.Http, HttpMethod.Post, "/api/phone/queue/remove",
+                "{\"sessionId\":\"session-1\",\"itemId\":\"m-1\"}", cookie).GetAwaiter().GetResult();
+
+            Check("D5: повтор — 200 gone, а не ошибка и без кода",
+                gone.Status == 200
+                && gone.Carries("\"state\":\"gone\"")
+                && gone.Carries(Loc.T(nameof(PanelStrings.PhoneQueueAlreadyGone)))
+                && !gone.Carries("queue-item-not-found"));
+
+            // 9. D4 — ОЧЕРЕДЬ ИЗ ПРОЕКЦИИ inbox, ПОРЯДОК, ФИЛЬТР И ЗАКРЫТЫЙ ПОТОК.
+            var baseline = QueueBaseline(
+                "session-1",
+                "[" + QueueItem("m-1", "первое") + "," + QueueItem("m-2", "второе") + "]",
+                "[" + QueueItem("m-3", "в текущий ход") + ","
+                + QueueItem("srv-1", "служебное", "user-approval") + "]");
+
+            var queue = QueueOnce(stand, control, baseline, cookie);
+
+            Check("D4: очередь прочитана — 3 пункта, steering первой",
+                queue.Status == 200
+                && queue.Carries("\"total\":3")
+                && queue.Carries("\"shown\":3")
+                && queue.Body.IndexOf("m-3", StringComparison.Ordinal) < queue.Body.IndexOf("m-1", StringComparison.Ordinal));
+            Check("D4: место пункта вычислено (steering и queued)",
+                queue.Carries("\"placement\":\"steering\"") && queue.Carries("\"placement\":\"queued\""));
+            Check("D4: служебный пункт не показан и его id не ушёл",
+                !queue.Carries("srv-1") && !queue.Carries("служебное"));
+            Check("D4: запрещённых полей в ответе нет",
+                !queue.Carries("next-turn") && !queue.Carries("asOfSeq") && !queue.Carries("projections"));
+            Check("D4: поток session/control ЗАКРЫТ до ответа", control.Opens == 1 && control.Live == 0);
+
+            // 10. СОРОК ПЯТЬ ПУНКТОВ — ДВАДЦАТЬ В ОТВЕТЕ И ЧЕСТНЫЕ ЧИСЛА.
+            var many = string.Join(",", Enumerable.Range(1, 45).Select(index => QueueItem("m-" + index, "пункт " + index)));
+            var big = QueueBaseline("session-1", "[" + many + "]", "[]");
+
+            var limited = QueueOnce(stand, control, big, cookie);
+
+            Check("D4: 45 пунктов — показано 20, hasMore, total 45",
+                limited.Status == 200
+                && limited.Carries("\"total\":45")
+                && limited.Carries("\"shown\":20")
+                && limited.Carries("\"hasMore\":true"));
+
+            // 11. СЕССИЯ НЕ ОТКРЫТА — state no-live, а не «пусто».
+            var other = QueueOnce(stand, control, baseline.Replace("\"session-1\"", "\"session-9\"", StringComparison.Ordinal), cookie);
+
+            Check("D4: блока сессии нет — 200 no-live словами",
+                other.Status == 200
+                && other.Carries("\"state\":\"no-live\"")
+                && other.Carries(Loc.T(nameof(PanelStrings.PhoneQueueNoLive))));
+
+            // 12. BASELINE НЕ ПРИШЁЛ — 502 В СВОЙ СРОК, А НЕ МОЛЧАНИЕ.
+            var startedAt = Stopwatch.StartNew();
+            var silent = QueueOnce(stand, control, null, cookie);
+            startedAt.Stop();
+
+            Check("D4: baseline не пришёл — 502 словами в свой срок",
+                silent.Status == 502
+                && silent.Carries(Loc.T(nameof(PanelStrings.PhoneQueueUnreadable)))
+                && startedAt.Elapsed < TimeSpan.FromSeconds(6));
+
+            // 13. СЛОВА — ЯЗЫК ТЕЛЕФОНА (zh), А НЕ ПАНЕЛИ.
+            var chinese = Send(stand.Http, HttpMethod.Post, "/api/phone/prompt", "{}", language: "zh")
+                .GetAwaiter().GetResult();
+
+            Check("слова дверей S3 — на языке телефона (zh)",
+                chinese.Status == 401
+                && chinese.Carries(Loc.TIn("zh", nameof(PanelStrings.PhoneTaskUnauthorized)))
+                && !chinese.Carries(Loc.TIn("ru", nameof(PanelStrings.PhoneTaskUnauthorized))));
+
+            return 0;
+        }
+
+        /// <summary>Одно чтение очереди с поданным кадром: запрос идёт своей ниткой, кадр — когда поток открыт.</summary>
+        /// <summary>Строка JSON в читаемом виде (кириллица остаётся словами) — для подставных кадров.</summary>
+        private static string QueueQuote(string? text) =>
+            "\"" + (text ?? string.Empty)
+                .Replace("\\", "\\\\", StringComparison.Ordinal)
+                .Replace("\"", "\\\"", StringComparison.Ordinal)
+            + "\"";
+
+        /// <summary>Один пункт очереди в форме проекции <c>inbox</c> (контракт §5.2).</summary>
+        private static string QueueItem(string id, string text, string kind = "user") =>
+            "{\"id\":" + QueueQuote(id) + ",\"source\":{\"kind\":" + QueueQuote(kind)
+            + "},\"content\":[{\"type\":\"text\",\"text\":" + QueueQuote(text) + "}]}";
+
+        /// <summary>
+        /// КАДР BASELINE — РОВНО ТА ФОРМА, какую отдаёт 0.2.1: очередь лежит в
+        /// <c>value.projections[&lt;sessionId&gt;].values.inbox</c> (поправка §0.1). Ни <c>queues</c>,
+        /// ни <c>jobs</c> в этой форме нет — и это тоже часть проверки.
+        /// </summary>
+        private static string QueueBaseline(string sessionId, string nextTurn, string nextStep) =>
+            "{\"type\":\"item\",\"streamId\":\"phone-queue-1\",\"value\":{\"type\":\"baseline\",\"value\":{\"projections\":{"
+            + QueueQuote(sessionId)
+            + ":{\"asOfSeq\":3,\"values\":{\"inbox\":{\"next-turn\":" + nextTurn
+            + ",\"next-step\":" + nextStep + "}}}}}}}";
+
+        private static Reply QueueOnce(Stand stand, StubControl control, string? frame, string cookie)
+        {
+            var before = control.Opens;
+            var task = Send(stand.Http, HttpMethod.Get, "/api/phone/queue?session=session-1", cookie: cookie);
+
+            for (var attempt = 0; attempt < 600 && control.Opens == before; attempt++) Thread.Sleep(5);
+
+            if (frame is not null) control.Emit(frame);
+
+            return task.GetAwaiter().GetResult();
+        }
+        // ---- (7) S4a: 14-е имя, архив, живая очередь и признак «список мог измениться» ---------
+
+        /// <summary>
+        /// S4a НА ПОДСТАВНЫХ ДВЕРЯХ: 14-е имя, фильтр архива, событие <c>queue</c> в живом SSE и
+        /// признак <c>stale</c> от кадра <c>api-session/status</c>. Ни живого движка, ни сети —
+        /// только форма и правила; живое рукопожатие проверяет раздел (5).
+        /// </summary>
+        private int Signals()
+        {
+            Phase("S4a: 14-е имя архива, живая очередь и признак списка");
+
+            var paths = Stage("signals");
+            var engine = new StubEngine();
+            var links = new List<StubLink>();
+
+            var events = new PhoneEventDoors(
+                onFrame =>
+                {
+                    var made = new StubLink(onFrame);
+
+                    lock (links) links.Add(made);
+
+                    return made;
+                },
+                Log);
+
+            var follow = new StubFollow();
+            var control = new StubControl();
+            var workspace = new StubWorkspace();
+
+            using var stand = RunGate(
+                paths, enabled: true, events, engine,
+                follow: follow.Doors, control: control.Doors, workspace: workspace.Doors);
+
+            if (!stand.Gate.Start().Opened)
+            {
+                Check("калитка открылась для проверки S4a", false);
+                return 1;
+            }
+
+            _started.Add(stand.Gate);
+
+            var cookie = Pair(stand).GetAwaiter().GetResult();
+
+            if (cookie.Length == 0)
+            {
+                Check("телефон сопрягся для проверки S4a", false);
+                return 1;
+            }
+
+            // 1. 14-Е ИМЯ: В СПИСКЕ, ПОТОК, А СЫРЫМ POST — ОТКАЗ СЛОВАМИ.
+            var call = PhoneDecisions.Allowed
+                .FirstOrDefault(item => item.Endpoint == PhoneDecisions.WorkspaceFollowEndpoint);
+
+            Check("S4a: workspace/follow — 14-е имя белого списка и это ПОТОК",
+                call is not null && call.Mode == EngineRpcMode.Stream && PhoneDecisions.Allowed.Count == 14);
+
+            var posted = Send(
+                    stand.Http, HttpMethod.Post, "/api/workspace/follow", "{\"args\":{}}", cookie)
+                .GetAwaiter().GetResult();
+
+            Check("S4a: POST /api/workspace/follow — отказ словами и без вызова движка",
+                posted.Status == 403
+                && posted.Carries(string.Format(
+                    CultureInfo.CurrentCulture,
+                    Loc.T(nameof(PanelStrings.PhoneGateStreamRefusedFormat)),
+                    PhoneDecisions.WorkspaceFollowEndpoint))
+                && !engine.Called("workspace/follow"));
+
+            // 2. АРХИВ: СПИСОК БЕЗ АРХИВНЫХ, СЧЁТ В ЖУРНАЛЕ БЕЗ ИМЁН.
+            engine.Answers[PhoneDecisions.SessionListEndpoint] =
+                new PhoneEngineAnswer(200, SessionList("s-1", "s-arch", "s-2"));
+            workspace.Reply = WorkspaceBaseline("s-arch");
+
+            var first = Send(stand.Http, HttpMethod.Get, "/api/phone/sessions", cookie: cookie)
+                .GetAwaiter().GetResult();
+
+            Check("S4a: архивная сессия не показана, остальные на месте",
+                first.Status == 200
+                && !first.Carries("s-arch")
+                && first.Carries("s-1")
+                && first.Carries("s-2"));
+
+            Check("S4a: данные рабочего пространства (path/title/sessionIds) не уехали",
+                !first.Carries("маркер-путь")
+                && !first.Carries("маркер-название")
+                && !first.Carries("s-pin"));
+
+            var journal = Journal;
+
+            Check("S4a: в журнал — только счёт скрытых, без имён и путей",
+                journal.Contains("архивные сессии", StringComparison.Ordinal)
+                && !journal.Contains("s-arch", StringComparison.Ordinal)
+                && !journal.Contains("маркер-путь", StringComparison.Ordinal)
+                && !journal.Contains("маркер-название", StringComparison.Ordinal));
+
+            var again = Send(stand.Http, HttpMethod.Get, "/api/phone/sessions", cookie: cookie)
+                .GetAwaiter().GetResult();
+
+            Check("S4a: повторный запрос тоже без архивных и без ВТОРОГО потока",
+                again.Status == 200 && !again.Carries("s-arch") && workspace.Opens == 1);
+
+            // 3. НОЛЬ СКРЫТЫХ — СТРОКИ В ЖУРНАЛЕ НЕТ (кэш истекает: часы двигает проверка).
+            Advance(TimeSpan.FromSeconds(31));
+
+            engine.Answers[PhoneDecisions.SessionListEndpoint] =
+                new PhoneEngineAnswer(200, SessionList("s-1", "s-2"));
+            workspace.Reply = WorkspaceBaseline();
+
+            var hiddenBefore = JournalLines("архивные сессии");
+            var zero = Send(stand.Http, HttpMethod.Get, "/api/phone/sessions", cookie: cookie)
+                .GetAwaiter().GetResult();
+
+            Check("S4a: при 0 скрытых строки в журнале нет",
+                zero.Status == 200 && JournalLines("архивные сессии") == hiddenBefore);
+
+            // 4. АРХИВ НЕ ПРОЧИТАЛСЯ — СПИСОК КАК ЕСТЬ, ПРИЧИНА В ЖУРНАЛЕ.
+            Advance(TimeSpan.FromSeconds(31));
+
+            engine.Answers[PhoneDecisions.SessionListEndpoint] =
+                new PhoneEngineAnswer(200, SessionList("s-1", "s-arch"));
+            workspace.Silent = true;
+
+            var failure = Send(stand.Http, HttpMethod.Get, "/api/phone/sessions", cookie: cookie)
+                .GetAwaiter().GetResult();
+
+            workspace.Silent = false;
+
+            Check("S4a: архив не прочитался — список отдан как есть, причина в журнале",
+                failure.Status == 200
+                && failure.Carries("s-arch")
+                && Journal.Contains("архив сессий не прочитан", StringComparison.Ordinal));
+
+            // 5. ЖИВАЯ ОЧЕРЕДЬ В ТОМ ЖЕ SSE: СВОЁ — ЕСТЬ, ЧУЖОЕ — НЕТ.
+            // КАДРЫ ПОДАЁТ ФОНОВАЯ НИТКА: калитка открывает control не в тот же миг, что ленту,
+            // и «подать сразу после запроса» — гонка. Нитка ждёт открытия и шлёт кадры,
+            // а клиент в это время читает SSE.
+            var pump = new Thread(() =>
+            {
+                for (var attempt = 0; attempt < 500 && control.Opens == 0; attempt++) Thread.Sleep(10);
+
+                control.Emit(QueueBaseline("session-live", "[" + QueueItem("m-1", "первое") + "]", "[]"));
+                control.Emit(Projection(
+                    "session-live", "inbox",
+                    "{\"next-turn\":[" + QueueItem("m-2", "второе") + "],\"next-step\":[]}"));
+                control.Emit(Projection("session-live", "workingDirectory", "\"маркер-путь\""));
+                // ЧУЖАЯ ПРОЕКЦИЯ С ТЕКСТАМИ ХОДА — второй вид утечки (F-01): её тоже не должно быть в журнале.
+                control.Emit(Projection(
+                    "session-live", "turnOutline",
+                    "[{\"turn\":1,\"prompt\":\"маркер-текст\",\"response\":\"маркер-ответ\"}]"));
+                control.Emit(Projection(
+                    "session-other", "inbox",
+                    "{\"next-turn\":[" + QueueItem("x-1", "чужое") + "],\"next-step\":[]}"));
+            })
+            { IsBackground = true };
+
+            pump.Start();
+
+            var sse = SseOnce(
+                stand, "/api/phone/live?session=session-live", cookie, () => { }, readMs: 4000);
+
+            pump.Join(TimeSpan.FromSeconds(5));
+
+            Check("S4a: живой SSE отдал event: queue из baseline и из кадра inbox",
+                sse.Contains("event: queue", StringComparison.Ordinal)
+                && sse.Contains("первое", StringComparison.Ordinal)
+                && sse.Contains("второе", StringComparison.Ordinal));
+
+            Check("S4a: чужая сессия и чужая проекция телефону не уехали",
+                !sse.Contains("маркер-путь", StringComparison.Ordinal)
+                && !sse.Contains("workingDirectory", StringComparison.Ordinal)
+                && !sse.Contains("чужое", StringComparison.Ordinal)
+                && !sse.Contains("x-1", StringComparison.Ordinal));
+
+            // ЖУРНАЛ ПОСЛЕ ЖИВОЙ ЛЕНТЫ — ОБЯЗАТЕЛЬНАЯ ПРОВЕРКА (F-01): кадры управления — ЧУЖАЯ РАБОТА,
+            // и в журнал они не попадают ни сырыми, ни кусками (строка до фильтра уносила
+            // workingDirectory — путь владельца, turnOutline — тексты ходов, и чужие сессии).
+            // Проверяются МАРКЕРЫ, а не «похоже на кадр»: так улика не зависит от формы кадра.
+            var journalAfterLive = Journal;
+
+            Check("S4a: журнал после живой ленты чист — ни маркеров, ни сырых кадров, ни чужих сессий",
+                !journalAfterLive.Contains("маркер-путь", StringComparison.Ordinal)
+                && !journalAfterLive.Contains("маркер-текст", StringComparison.Ordinal)
+                && !journalAfterLive.Contains("session-other", StringComparison.Ordinal)
+                && !journalAfterLive.Contains("phone-queue-1", StringComparison.Ordinal)
+                && !journalAfterLive.Contains("asOfSeq", StringComparison.Ordinal));
+
+            // ПОТОК CONTROL ЖИВЁТ РОВНО СТОЛЬКО, СКОЛЬКО ЛЕНТА: после ухода клиента он обязан закрыться.
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+
+            while (control.Live > 0 && DateTime.UtcNow < deadline)
+            {
+                control.Emit(Projection("session-live", "title", "\"чужой ключ\""));
+                // КАДР, КОТОРЫЙ ТОЧНО ПИШЕТСЯ В СОКЕТ (`turn/start` разбор считает «мимо»), —
+                // нам нужна именно неудачная запись: по ней калитка узнаёт уход клиента.
+                follow.Emit(
+                    "{\"type\":\"item\",\"value\":{\"type\":\"assistant-stream\",\"frame\":{\"type\":\"chunk\","
+                    + "\"attemptId\":\"a1\",\"revision\":1,\"index\":1,\"time\":1,\"chunk\":{\"type\":\"text-delta\","
+                    + "\"text\":\"кусочек\"}}}}");
+                Thread.Sleep(50);
+            }
+
+            Check("S4a: поток control закрыт вместе с SSE и не переживает экран", control.Live == 0);
+
+            // 6. ПРИЗНАК «СПИСОК МОГ ИЗМЕНИТЬСЯ» — ИЗ УЖЕ ОТКРЫТОГО $events.
+            engine.Answers[PhoneDecisions.SessionListEndpoint] =
+                new PhoneEngineAnswer(200, SessionList("s-1"));
+
+            var staleBody = string.Empty;
+
+            for (var attempt = 0; attempt < 100 && !links.Any(link => link.Alive); attempt++) Thread.Sleep(10);
+
+            for (var attempt = 0; attempt < 100 && !staleBody.Contains("\"stale\":true", StringComparison.Ordinal); attempt++)
+            {
+                if (links.Count > 0)
+                {
+                    links[0].Emit(
+                        "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"emit\","
+                        + "\"event\":\"api-session/status\",\"sessionId\":\"s-hidden\",\"running\":false}}");
+                }
+
+                staleBody = Send(stand.Http, HttpMethod.Get, "/api/phone/sessions", cookie: cookie)
+                    .GetAwaiter().GetResult().Body;
+
+                Thread.Sleep(20);
+            }
+
+            Check("S4a: кадр api-session/status ставит признак stale без адреса сессии",
+                staleBody.Contains("\"stale\":true", StringComparison.Ordinal)
+                && !staleBody.Contains("s-hidden", StringComparison.Ordinal));
+
+            var cleared = Send(stand.Http, HttpMethod.Get, "/api/phone/sessions", cookie: cookie)
+                .GetAwaiter().GetResult();
+
+            Check("S4a: признак снимается при выдаче списка", !cleared.Carries("\"stale\""));
+
+            // 6б. ЖИВАЯ ПОДСКАЗКА СПИСКА (G1, слово владельца 11.11.2026): СВОЁ $events, ОДИН БИТ.
+            // Список на событие не читается вовсе; в кадре — только имя события и пустой объект.
+            StubLink? hintLink = null;
+
+            var hint = SseOnce(
+                stand, "/api/phone/list/live", cookie,
+                () =>
+                {
+                    // ЖДЁМ ОТКРЫТИЯ ВТОРОГО ПОТОКА: первый — своя подписка калитки (вопросы).
+                    for (var attempt = 0; attempt < 200 && hintLink is null; attempt++)
+                    {
+                        lock (links) hintLink = links.Count >= 2 ? links[^1] : null;
+
+                        if (hintLink is null) Thread.Sleep(10);
+                    }
+
+                    hintLink?.Emit(
+                        "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"emit\","
+                        + "\"event\":\"api-session/status\",\"sessionId\":\"s-g1-скрытая\",\"running\":true,"
+                        + "\"cwd\":\"маркер-путь\"}}");
+                });
+
+            Check("G1: по кадру api-session/status подсказка списка шлёт event: stale",
+                hint.Contains("event: stale", StringComparison.Ordinal));
+
+            Check("G1: в кадре подсказки — только имя события и пустой объект",
+                hint.Contains("data: {}", StringComparison.Ordinal)
+                && !hint.Contains("s-g1-скрытая", StringComparison.Ordinal)
+                && !hint.Contains("running", StringComparison.Ordinal)
+                && !hint.Contains("маркер-путь", StringComparison.Ordinal));
+
+            // УХОД ТЕЛЕФОНА: подписка подсказки обязана закрыться, а не пережить экран.
+            // Часы двигаем перед каждым кадром: на замороженных часах окно склейки не кончается.
+            var hintClosed = false;
+            var hintDeadline = DateTime.UtcNow.AddSeconds(8);
+
+            while (!hintClosed && DateTime.UtcNow < hintDeadline)
+            {
+                Advance(PhoneGate.ListLiveCoalesce);
+
+                hintLink?.Emit(
+                    "{\"type\":\"item\",\"streamId\":\"phone-events\",\"value\":{\"type\":\"emit\","
+                    + "\"event\":\"api-session/status\",\"sessionId\":\"s-g1-скрытая\",\"running\":false}}");
+
+                Thread.Sleep(50);
+
+                hintClosed = hintLink is null || !hintLink.Alive;
+            }
+
+            Check("G1: уход телефона закрывает $events подсказки", hintClosed);
+
+            // 7. БЕЗ session/control ЛЕНТА РАБОТАЕТ, А ОЧЕРЕДЬ МОЛЧИТ — И ПРИЧИНА НАЗВАНА.
+            var quietPaths = Stage("signals-quiet");
+            var quietFollow = new StubFollow();
+
+            using var quiet = RunGate(
+                quietPaths, enabled: true, PhoneEventDoors.None, new StubEngine(), follow: quietFollow.Doors);
+
+            if (!quiet.Gate.Start().Opened)
+            {
+                Check("калитка открылась для проверки молчащей очереди", false);
+                return 1;
+            }
+
+            _started.Add(quiet.Gate);
+
+            var quietCookie = Pair(quiet).GetAwaiter().GetResult();
+
+            var quietSse = SseOnce(
+                quiet, "/api/phone/live?session=session-quiet", quietCookie,
+                () => quietFollow.Emit(
+                    "{\"type\":\"item\",\"value\":{\"type\":\"snapshot\",\"header\":{\"id\":\"session-quiet\"},"
+                    + "\"cursor\":1,\"hasMore\":false,\"records\":[]}}"));
+
+            Check("S4a: без session/control лента работает, очередь молчит без ложных обещаний",
+                quietSse.Contains("event: snapshot", StringComparison.Ordinal)
+                && !quietSse.Contains("event: queue", StringComparison.Ordinal));
+
+            Check("S4a: причина молчания очереди названа в журнале",
+                Journal.Contains("живая очередь молчит", StringComparison.Ordinal));
+
+            return 0;
+        }
+
+        /// <summary>Снимок журнала — строкой: проверки читают его так же, как человек.</summary>
+        private string Journal => string.Join("\n", _log.ToArray());
+
+        /// <summary>Сколько строк журнала содержат слова — чтобы «строки нет» было проверяемо.</summary>
+        private int JournalLines(string words) =>
+            _log.ToArray().Count(line => line.Contains(words, StringComparison.Ordinal));
+
+        /// <summary>ОТВЕТ <c>session/list</c> РОВНО ТОЙ ФОРМЫ, какую отдаёт движок (result → value → items).</summary>
+        private static string SessionList(params string[] sessionIds) =>
+            "{\"result\":{\"ok\":true,\"value\":{\"items\":["
+            + string.Join(
+                ",",
+                sessionIds.Select(id =>
+                    "{\"sessionId\":" + QueueQuote(id) + ",\"updatedAt\":1761770000000,"
+                    + "\"running\":false,\"blank\":false}"))
+            + "]}}}";
+
+        /// <summary>
+        /// BASELINE <c>workspace/follow</c> — С МАРКЕРАМИ в тех полях, которые наружу не должны
+        /// уехать (<c>items[].path/title/sessionIds</c>, <c>pinnedSessionIds</c>): так утечка ловится
+        /// строкой, а не надеждой.
+        /// </summary>
+        private static string WorkspaceBaseline(params string[] archived) =>
+            "{\"type\":\"item\",\"streamId\":\"phone-workspace-1\",\"value\":{\"type\":\"baseline\",\"value\":{"
+            + "\"items\":[{\"workspaceId\":\"w-1\",\"path\":\"маркер-путь\",\"title\":\"маркер-название\","
+            + "\"sessionIds\":[\"s-1\"],\"createdAt\":1,\"updatedAt\":2}],"
+            + "\"archivedSessionIds\":[" + string.Join(",", archived.Select(QueueQuote)) + "],"
+            + "\"pinnedSessionIds\":[\"s-pin\"]}}}";
+
+        /// <summary>Кадр проекции <c>session/control</c> — ровно та форма, какую отдаёт 0.2.1.</summary>
+        private static string Projection(string sessionId, string key, string value) =>
+            "{\"type\":\"item\",\"streamId\":\"phone-queue-1\",\"value\":{\"type\":\"projection\","
+            + "\"sessionId\":" + QueueQuote(sessionId) + ",\"key\":" + QueueQuote(key)
+            + ",\"value\":" + value + ",\"seq\":9}}";
     }
 }
+
+
+
+
+
+
+
+
+

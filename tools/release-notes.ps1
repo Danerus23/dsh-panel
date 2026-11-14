@@ -83,8 +83,8 @@ $blocks = @(
 $sb = [System.Text.StringBuilder]::new()
 [void]$sb.AppendLine('# DSH Panel ' + $version)
 [void]$sb.AppendLine()
-[void]$sb.AppendLine('The panel speaks three languages. Russian is the original; **English and Chinese are')
-[void]$sb.AppendLine('machine translations** — the meaning is right, but some wording may not sound native.')
+[void]$sb.AppendLine('Russian is the original; **the English and Chinese sections are translated from it** —')
+[void]$sb.AppendLine('the meaning is right, but some wording may not sound native.')
 [void]$sb.AppendLine()
 [void]$sb.AppendLine('---')
 

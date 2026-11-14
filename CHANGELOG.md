@@ -2,6 +2,79 @@
 
 The history of **DSH Panel 2.0**. The history starts with the first release — **2.0.0**.
 
+## 2.5.0 - 2026-11-14
+
+**The phone now works as a remote control: it shows your sessions and a session itself, answers the
+agent's questions, sends a task and stops a run.** Until now the phone page held a single question;
+this release gives it the list, the session, the feed, the queue and the task field. The version is
+in "About": it says **2.5.0**.
+
+### What is new for you
+
+* **Answer a question from the phone.** The question arrives on the phone by itself: options are
+  tapped, your own answer is typed in words. "Answer" sends it once; "Cancel the agent's run" closes
+  the question without an answer — and says what that means before you tap it.
+* **Send a task and stop a run.** The task goes into the open session or into a new one — from the
+  list, on the same page. The queue is visible and every item has "Remove" with a question; "Stop"
+  stops the current run and says the queued tasks stay.
+* **Keep several sessions in view.** The list shows live sessions; a bell with a count says how many
+  questions wait for an answer, and a question with no open session sits as a card on top of the list.
+* **See the state without refreshing the page.** The session header moves to "Working" and "Waiting
+  for an answer" by itself, the feed and the queue arrive as a stream, and the list re-reads when you
+  open it or come back to the tab. There is nothing to press for it. While subordinate agents
+  work, the header says "Working".
+* **Read the agent's answer as formatted text.** Paragraphs, lists, bold and italic, inline code,
+  code blocks that scroll inside themselves, and quotes. Your own message, tools and errors stay plain
+  text.
+
+### What it looks like on the phone
+
+The list holds rows with a name, an arrow and a task counter. A session opens with a smooth
+transition and closes the same way; the header sticks and does not scroll away, and the feed reads
+like a messenger: your message on the right in a bubble, the agent's answer on the left without one.
+Older messages load themselves when you scroll up — there is no button for it.
+
+At the bottom there is a full-width handle: tap it or swipe up and a sheet with the task field opens. The field grows as you type,
+the sheet closes after sending, and the outcome line says it in words — "The task has been accepted.",
+"Removed from the queue.", "The run has been stopped.". Success passes as a line and fades: it no
+longer hangs in the sheet.
+
+The question is a surface of its own: "Question N of M" with arrows, the options, "Answer",
+"Cancel the agent's run" and the "Your own answer" field. At 320 points wide the question text is
+not cut at the edges. The "Jump to the latest message" button appears when the feed has scrolled
+up and shows the number of new messages.
+
+The layout reaches to a tablet and a foldable: up to 720 points wide the lines stay no longer than
+60 characters, and sizes are computed from the screen width, without steps.
+
+### What is not there yet
+
+* **No attachments and no tables.** A file cannot be sent from the phone; a picture in the agent's
+  answer is shown by its description, a table — as text.
+* **No panel data on the phone** — no balance, prices or server journal: the phone shows sessions,
+  questions, tasks and the feed.
+* **No HTTPS.** The phone opens over HTTP, unencrypted: on your own network the traffic can be read.
+  Entry is protected by a six-digit code and a device pass; the phone does not go outside.
+* **No notifications and no offline.** While the phone is in your pocket the panel does not ring;
+  without a network the list does not open.
+* **No code signing** — Windows shows the SmartScreen warning about an unknown publisher.
+* **This release brings no new engine versions.** The panel installs the DSH server from npm by a
+  verified set; the default version stays **0.2.1-rc.2** — the same as in 2.4.x. This is a stated
+  limit of the release.
+* **Subordinate sessions do not open from the phone** — they need the parent address; the panel
+  writes the number of hidden ones to its journal.
+
+### How to update
+
+Open the "Update" section and press "Check now". The panel finds 2.5.0, downloads `DshPanel.zip`
+from the release, checks its SHA-256 sum and replaces the files after the panel exits — a safety
+copy of the previous version is taken before the replacement. Nothing has to be unpacked or deleted
+by hand.
+
+The `dsh-panel-setup.exe` installer is for a closed panel: it stops a running one itself. So use
+"Exit" from the tray menu first, not "Stop": "Stop" stops the DSH server together with the agent's
+work.
+
 ## 2.4.5 - 2026-10-30
 
 **A patch: the panel no longer loses its own server, and the phone gate survives a repeated

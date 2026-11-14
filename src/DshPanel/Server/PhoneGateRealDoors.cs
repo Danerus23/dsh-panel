@@ -162,6 +162,35 @@ public static class PhoneGateRealDoors
             CurrentCookie,
             MuxTimeout,
             log);
+        // ЖИВОЙ ПОТОК (S1) — ТОЖЕ ДВЕРЬ, и по той же дисциплине: проверка подставляет свои кадры,
+        // а живой движок читается только самотестом. Вход спрашивается В МОМЕНТ ОТКРЫТИЯ — как
+        // у подписки на события: ссылка входа появляется у панели позже сборки дверей.
+        var follow = EngineFollow.Doors(
+            () => entryLink().Trim().Length > 0,
+            BaseUrl,
+            CurrentCookie,
+            MuxTimeout,
+            log);
+
+        // ЧТЕНИЕ ОЧЕРЕДИ (S3) — ТРЕТЬЯ ДВЕРЬ ПОТОКА: одна на чтение, своё имя <c>phone-queue-N</c>,
+        // вход — тоже В МОМЕНТ ОТКРЫТИЯ (после перезапуска движка старая cookie ничего не значит).
+        // ⚠️ Без этой строки дверь работает «вхолостую»: D4 отвечала бы 502 «очередь не прочиталась»,
+        // и только проверка с подставными дверями этого бы не заметила.
+        var control = EngineControl.Doors(
+            () => entryLink().Trim().Length > 0,
+            BaseUrl,
+            CurrentCookie,
+            MuxTimeout,
+            log);
+        // АРХИВ (S4a) — ЧЕТВЁРТАЯ ДВЕРЬ ПОТОКА и 14-е имя белого списка (слово владельца
+        // 11.11.2026). Одно чтение — один WS: раз в 30 с, в кэше калитки. Без этой строки имя
+        // осталось бы в списке «на бумаге»: тест с подставными дверями этого бы не увидел.
+        var workspace = EngineWorkspace.Doors(
+            () => entryLink().Trim().Length > 0,
+            BaseUrl,
+            CurrentCookie,
+            MuxTimeout,
+            log);
 
         return new PhoneGateDoors(
             address,
@@ -172,6 +201,9 @@ public static class PhoneGateRealDoors
             () => DateTimeOffset.Now,
             log,
             bound,
-            server);
+            server,
+            follow,
+            control,
+            workspace);
     }
 }
